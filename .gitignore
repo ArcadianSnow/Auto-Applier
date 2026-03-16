@@ -1,0 +1,26 @@
+# Credentials
+.env
+
+# Data files (contain personal info)
+data/browser_profile/
+data/*.csv
+data/*.json
+
+# Resumes (user uploads)
+data/resumes/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
