@@ -187,40 +187,29 @@ class ReadyStep(tk.Frame):
     def _run_live(self) -> None:
         self._save_config()
         self.status_label.configure(
-            text="Configuration saved! Starting job applications...",
+            text="Configuration saved! Launching dashboard...",
             fg="#10B981",
         )
-        self.wizard.root.after(500, self._launch_run, False)
+        self.wizard.root.after(300, self._launch_dashboard, False)
 
     def _run_dry(self) -> None:
         self._save_config()
         self.status_label.configure(
-            text="Configuration saved! Starting dry run...",
+            text="Configuration saved! Launching dashboard...",
             fg="#2563EB",
         )
-        self.wizard.root.after(500, self._launch_run, True)
+        self.wizard.root.after(300, self._launch_dashboard, True)
 
-    def _launch_run(self, dry_run: bool) -> None:
-        """Launch the main application loop in a new console that stays open."""
-        import subprocess
-        import sys
+    def _launch_dashboard(self, dry_run: bool) -> None:
+        """Open the live dashboard and start the run loop."""
+        from auto_applier.gui.dashboard import DashboardWindow
+        from auto_applier.main import load_user_config
 
-        py = sys.executable
-        run_cmd = f'"{py}" -m auto_applier --cli run'
-        if dry_run:
-            run_cmd += " --dry-run"
+        config = load_user_config()
+        enabled = config.get("enabled_platforms", ["linkedin"])
 
-        if os.name == "nt":
-            subprocess.Popen(
-                f'cmd /k "{run_cmd}"',
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
-                cwd=str(Path(__file__).parent.parent.parent.parent),
-            )
-        else:
-            subprocess.Popen(
-                ["bash", "-c", f'{run_cmd}; echo "\\nPress Enter to close..."; read'],
-                cwd=str(Path(__file__).parent.parent.parent.parent),
-            )
+        dashboard = DashboardWindow(self.wizard.root, enabled, dry_run=dry_run)
+        dashboard.start_run(config, dry_run)
 
     def _exit(self) -> None:
         self.wizard.root.destroy()
