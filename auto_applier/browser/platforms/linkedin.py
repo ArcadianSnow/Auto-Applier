@@ -1,4 +1,11 @@
-"""LinkedIn Easy Apply platform adapter."""
+"""LinkedIn Easy Apply platform adapter.
+
+Login strategy: manual login with persistent session. The automated login
+flow is one of LinkedIn's top detection triggers. Instead, we:
+1. Check if session cookies are still valid
+2. If not, open LinkedIn login page and let the user log in manually
+3. Persistent browser profile preserves the session for future runs
+"""
 
 import re
 
@@ -6,15 +13,17 @@ import click
 from playwright.async_api import Page
 
 from auto_applier.browser.anti_detect import (
+    human_click,
     human_scroll,
     human_type,
     random_delay,
     random_mouse_movement,
+    reading_pause,
+    simulate_organic_behavior,
 )
 from auto_applier.browser.base_platform import JobPlatform
 from auto_applier.storage.models import Job, SkillGap
 
-LOGIN_URL = "https://www.linkedin.com/login"
 FEED_URL = "https://www.linkedin.com/feed/"
 JOBS_SEARCH_URL = "https://www.linkedin.com/jobs/search/"
 
@@ -23,12 +32,7 @@ class LinkedInPlatform(JobPlatform):
     name = "LinkedIn"
     source_id = "linkedin"
 
-    def _get_credentials(self) -> tuple[str, str]:
-        platforms = self.config.get("platforms", {})
-        creds = platforms.get("linkedin", {})
-        return creds.get("email", ""), creds.get("password", "")
-
-    # ── Auth ─────────────────────────────────────────────────────
+    # ── Auth (manual login with session persistence) ─────────────
 
     async def ensure_logged_in(self) -> bool:
         page = await self.get_page()
@@ -36,42 +40,49 @@ class LinkedInPlatform(JobPlatform):
         await random_delay(2, 4)
 
         if "/feed" in page.url:
-            click.echo("  LinkedIn: already logged in.")
+            click.echo("  LinkedIn: session active (already logged in).")
+            # Simulate brief feed browsing before jumping to jobs
+            await simulate_organic_behavior(page)
             return True
 
-        return await self._login(page)
+        # Session expired — ask user to log in manually
+        return await self._manual_login(page)
 
-    async def _login(self, page: Page) -> bool:
-        email, password = self._get_credentials()
-        if not email or not password:
-            click.echo("  LinkedIn credentials not configured. Skipping.")
-            return False
+    async def _manual_login(self, page: Page) -> bool:
+        """Let the user log in manually — much safer than automated login.
 
-        click.echo("  Logging into LinkedIn...")
-        await page.goto(LOGIN_URL, wait_until="domcontentloaded")
+        The persistent browser profile will save the session for next time.
+        """
+        click.echo(
+            "\n  ╔══════════════════════════════════════════════╗\n"
+            "  ║  LinkedIn login required.                    ║\n"
+            "  ║                                              ║\n"
+            "  ║  A browser window is open to LinkedIn.       ║\n"
+            "  ║  Please log in manually — this is the safest ║\n"
+            "  ║  way to avoid triggering bot detection.      ║\n"
+            "  ║                                              ║\n"
+            "  ║  Your session will be saved for future runs. ║\n"
+            "  ╚══════════════════════════════════════════════╝\n"
+        )
+        click.echo("  Waiting for you to log in... (press Enter when done)")
+
+        # Navigate to LinkedIn home (which shows login if not authenticated)
+        await page.goto("https://www.linkedin.com/", wait_until="domcontentloaded")
+
+        input()  # Wait for user to finish logging in
         await random_delay(2, 4)
 
-        await human_type(page, "#username", email)
-        await random_delay(1, 2)
-        await human_type(page, "#password", password)
-        await random_delay(1, 2)
-        await page.click('[data-litms-control-urn="login-submit"]')
-        await random_delay(3, 6)
-
-        if "checkpoint" in page.url or "challenge" in page.url:
-            click.echo(
-                "\n  LinkedIn is requesting verification.\n"
-                "  Please complete it in the browser window.\n"
-                "  Press Enter here once done..."
-            )
-            input()
-            await random_delay(2, 4)
+        # Verify login succeeded
+        await page.goto(FEED_URL, wait_until="domcontentloaded")
+        await random_delay(2, 4)
 
         if "/feed" in page.url:
-            click.echo("  LinkedIn: logged in successfully.")
+            click.echo("  LinkedIn: logged in successfully. Session saved.")
+            # Browse the feed briefly to look natural
+            await reading_pause(page, 3, 6)
             return True
 
-        click.echo(f"  LinkedIn login may have failed. URL: {page.url}")
+        click.echo(f"  LinkedIn: login check failed. Current URL: {page.url}")
         return False
 
     # ── Search ───────────────────────────────────────────────────
@@ -86,7 +97,9 @@ class LinkedInPlatform(JobPlatform):
 
         await page.goto(JOBS_SEARCH_URL + params, wait_until="domcontentloaded")
         await random_delay(3, 6)
-        await human_scroll(page)
+
+        # Simulate reading the search results page
+        await reading_pause(page, 2, 5)
 
         job_cards = await page.query_selector_all(".job-card-container")
         if not job_cards:
@@ -142,7 +155,9 @@ class LinkedInPlatform(JobPlatform):
         page = await self.get_page()
         await page.goto(job.url, wait_until="domcontentloaded")
         await random_delay(2, 4)
-        await human_scroll(page)
+
+        # Simulate actually reading the job description
+        await reading_pause(page, 3, 8)
 
         for selector in [
             ".jobs-description__content",
@@ -162,6 +177,9 @@ class LinkedInPlatform(JobPlatform):
     ) -> tuple[bool, list[SkillGap]]:
         page = await self.get_page()
 
+        # Organic noise before applying — don't just click apply immediately
+        await simulate_organic_behavior(page)
+
         # Click Easy Apply button
         for selector in [
             "button.jobs-apply-button",
@@ -170,8 +188,8 @@ class LinkedInPlatform(JobPlatform):
         ]:
             button = await page.query_selector(selector)
             if button:
-                await random_delay(1, 2)
-                await button.click()
+                await random_delay(1, 3)
+                await human_click(page, selector)
                 await random_delay(2, 4)
                 break
         else:
@@ -196,7 +214,7 @@ class LinkedInPlatform(JobPlatform):
             if submit:
                 label = await submit.get_attribute("aria-label") or ""
                 if "Review" in label:
-                    await submit.click()
+                    await human_click(page, 'button[aria-label="Review your application"]')
                     await random_delay(1, 3)
                     continue
 
@@ -205,7 +223,7 @@ class LinkedInPlatform(JobPlatform):
                     await self._close_modal(page)
                     return True, gaps
 
-                await submit.click()
+                await human_click(page, 'button[aria-label="Submit application"]')
                 await random_delay(2, 4)
                 click.echo("    Application submitted!")
                 return True, gaps
@@ -219,7 +237,7 @@ class LinkedInPlatform(JobPlatform):
                 'button[data-easy-apply-next-button]'
             )
             if next_btn:
-                await next_btn.click()
+                await human_click(page, 'button[aria-label="Continue to next step"]')
                 await random_delay(1, 3)
             else:
                 click.echo("    No Next or Submit button. Aborting.")
@@ -289,7 +307,7 @@ class LinkedInPlatform(JobPlatform):
             'button[aria-label="Dismiss"], button[data-test-modal-close-btn]'
         )
         if close:
-            await close.click()
+            await human_click(page, 'button[aria-label="Dismiss"]')
             await random_delay(1, 2)
 
         discard = await page.query_selector(
