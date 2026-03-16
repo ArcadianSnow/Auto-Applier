@@ -206,9 +206,16 @@ class WizardApp:
 
     def fill_dummy_data(self) -> None:
         """Populate all fields with dummy data for dry-run testing."""
+        from auto_applier.config import RESUMES_DIR
+
+        # Create a real dummy resume file on disk
+        dummy_resume = RESUMES_DIR / "dummy_resume.docx"
+        if not dummy_resume.exists():
+            self._create_dummy_resume(dummy_resume)
+
         self.data["email"].set("jane.doe@example.com")
         self.data["password"].set("DummyPassword123!")
-        self.data["resume_path"].set("(dummy) sample_resume.pdf")
+        self.data["resume_path"].set(str(dummy_resume))
         self.data["first_name"].set("Jane")
         self.data["last_name"].set("Doe")
         self.data["phone"].set("+1 (555) 123-4567")
@@ -217,6 +224,38 @@ class WizardApp:
         self.data["website"].set("https://janedoe.dev")
         self.data["keywords"].set("Software Engineer, Backend Developer, Python Developer")
         self.data["location"].set("Remote")
+
+    @staticmethod
+    def _create_dummy_resume(path) -> None:
+        """Create a minimal dummy PDF resume for testing."""
+        # Minimal valid PDF with resume-like text content
+        content = (
+            "Jane Doe\n"
+            "Software Engineer\n"
+            "jane.doe@example.com | +1 (555) 123-4567 | San Francisco, CA\n"
+            "linkedin.com/in/janedoe | janedoe.dev\n\n"
+            "SKILLS\n"
+            "Python, JavaScript, TypeScript, React, Node.js, Django, Flask,\n"
+            "PostgreSQL, MongoDB, Docker, AWS, Git, Agile, CI/CD\n\n"
+            "EXPERIENCE\n"
+            "Senior Software Engineer — Acme Corp (2020-Present)\n"
+            "- Built scalable REST APIs serving 1M+ requests/day\n"
+            "- Led migration from monolith to microservices architecture\n\n"
+            "Software Engineer — StartupCo (2017-2020)\n"
+            "- Developed full-stack web applications with React and Django\n"
+            "- Implemented automated testing pipeline reducing bugs by 40%\n\n"
+            "EDUCATION\n"
+            "B.S. Computer Science — University of California, Berkeley (2017)\n"
+        )
+        # Write as a .docx since python-docx is already a dependency
+        # and it's trivial to create a valid one
+        from docx import Document
+        doc = Document()
+        for line in content.strip().split("\n"):
+            doc.add_paragraph(line)
+        # Change extension to .docx
+        path = path.with_suffix(".docx")
+        doc.save(str(path))
 
     def run(self) -> None:
         self.root.mainloop()

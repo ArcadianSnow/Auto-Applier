@@ -19,12 +19,13 @@ class ReadyStep(tk.Frame):
         super().__init__(parent, bg="#F5F7FA")
         self.wizard = wizard
 
-        content = tk.Frame(self, bg="#F5F7FA")
-        content.pack(padx=40, pady=20, fill="both", expand=True)
+        # Use grid so we can control vertical distribution
+        self.grid_rowconfigure(1, weight=1)  # card area gets extra space
+        self.grid_columnconfigure(0, weight=1)
 
-        # Header row with edit button
-        header_row = tk.Frame(content, bg="#F5F7FA")
-        header_row.pack(fill="x", pady=(0, 4))
+        # ── Header row ──────────────────────────────────────────
+        header_row = tk.Frame(self, bg="#F5F7FA")
+        header_row.grid(row=0, column=0, sticky="ew", padx=40, pady=(20, 4))
 
         tk.Label(
             header_row, text="You're All Set!",
@@ -37,20 +38,20 @@ class ReadyStep(tk.Frame):
         ).pack(side="right")
 
         tk.Label(
-            content,
+            self,
             text="Review your configuration below, then choose how to proceed.",
             font=("Segoe UI", 10), fg="#64748B", bg="#F5F7FA",
-        ).pack(anchor="w", pady=(0, 12))
+            anchor="w",
+        ).grid(row=1, column=0, sticky="nw", padx=40, pady=(0, 8))
 
-        # Summary card
+        # ── Summary card ────────────────────────────────────────
         self.card = tk.Frame(
-            content, bg="#FFFFFF",
+            self, bg="#FFFFFF",
             highlightbackground="#E2E8F0", highlightthickness=1,
-            padx=20, pady=14,
+            padx=16, pady=10,
         )
-        self.card.pack(fill="x", pady=(0, 16))
+        self.card.grid(row=2, column=0, sticky="ew", padx=40, pady=(0, 12))
 
-        # Will be populated in on_show()
         self.summary_labels: list[tuple[tk.Label, tk.Label]] = []
         fields = [
             "Email", "Resume", "Name", "Phone",
@@ -59,26 +60,28 @@ class ReadyStep(tk.Frame):
         for i, field in enumerate(fields):
             key_lbl = tk.Label(
                 self.card, text=field + ":",
-                font=("Segoe UI", 10, "bold"), fg="#374151", bg="#FFFFFF",
-                anchor="e", width=14,
+                font=("Segoe UI", 9, "bold"), fg="#374151", bg="#FFFFFF",
+                anchor="e", width=12,
             )
-            key_lbl.grid(row=i, column=0, sticky="e", padx=(0, 10), pady=2)
+            key_lbl.grid(row=i, column=0, sticky="e", padx=(0, 8), pady=1)
 
             val_lbl = tk.Label(
                 self.card, text="—",
-                font=("Segoe UI", 10), fg="#1E293B", bg="#FFFFFF",
-                anchor="w", wraplength=360,
+                font=("Segoe UI", 9), fg="#1E293B", bg="#FFFFFF",
+                anchor="w", wraplength=380,
             )
-            val_lbl.grid(row=i, column=1, sticky="w", pady=2)
+            val_lbl.grid(row=i, column=1, sticky="w", pady=1)
 
             self.summary_labels.append((key_lbl, val_lbl))
 
-        # Separator
-        ttk.Separator(content, orient="horizontal").pack(fill="x", pady=(0, 16))
+        # ── Separator ───────────────────────────────────────────
+        ttk.Separator(self, orient="horizontal").grid(
+            row=3, column=0, sticky="ew", padx=40, pady=(0, 12),
+        )
 
-        # Action buttons
-        btn_row = tk.Frame(content, bg="#F5F7FA")
-        btn_row.pack()
+        # ── Action buttons ──────────────────────────────────────
+        btn_row = tk.Frame(self, bg="#F5F7FA")
+        btn_row.grid(row=4, column=0, pady=(0, 4))
 
         ttk.Button(
             btn_row, text="Run (Apply to Jobs)",
@@ -95,12 +98,12 @@ class ReadyStep(tk.Frame):
             style="Danger.TButton", command=self._exit,
         ).pack(side="left")
 
-        # Status label
+        # ── Status label ────────────────────────────────────────
         self.status_label = tk.Label(
-            content, text="",
+            self, text="",
             font=("Segoe UI", 10), fg="#64748B", bg="#F5F7FA",
         )
-        self.status_label.pack(pady=(12, 0))
+        self.status_label.grid(row=5, column=0, pady=(4, 8))
 
     def on_show(self) -> None:
         """Refresh summary values from wizard data."""
@@ -128,7 +131,7 @@ class ReadyStep(tk.Frame):
         ]
 
         for (_, val_lbl), val in zip(self.summary_labels, values):
-            display = val if len(val) <= 50 else val[:47] + "..."
+            display = val if len(val) <= 55 else val[:52] + "..."
             val_lbl.configure(text=display)
 
     def _save_config(self) -> None:
@@ -143,12 +146,14 @@ class ReadyStep(tk.Frame):
             f.write(f"LINKEDIN_EMAIL={d['email'].get()}\n")
             f.write(f"LINKEDIN_PASSWORD={d['password'].get()}\n")
 
-        # Copy resume if it's a real path
+        # Copy resume to data/resumes/ if it's not already there
         resume_src = d["resume_path"].get()
         config = {}
-        if resume_src and not resume_src.startswith("(dummy)") and os.path.exists(resume_src):
-            dest = RESUMES_DIR / os.path.basename(resume_src)
-            shutil.copy2(resume_src, dest)
+        if resume_src and os.path.exists(resume_src):
+            src_path = Path(resume_src).resolve()
+            dest = RESUMES_DIR / src_path.name
+            if src_path != dest.resolve():
+                shutil.copy2(resume_src, dest)
             config["resume_path"] = str(dest)
         else:
             config["resume_path"] = resume_src
@@ -186,20 +191,27 @@ class ReadyStep(tk.Frame):
         self.wizard.root.after(500, self._launch_run, True)
 
     def _launch_run(self, dry_run: bool) -> None:
-        """Launch the main application loop."""
+        """Launch the main application loop in a new console that stays open."""
         import subprocess
         import sys
 
-        cmd = [sys.executable, "-m", "auto_applier", "run"]
+        py = sys.executable
+        run_cmd = f'"{py}" -m auto_applier --cli run'
         if dry_run:
-            cmd.append("--dry-run")
+            run_cmd += " --dry-run"
 
-        # Open in a new console window so user can see progress
-        subprocess.Popen(
-            cmd,
-            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0,
-            cwd=str(Path(__file__).parent.parent.parent.parent),
-        )
+        # Wrap in cmd /k so the console stays open after the script finishes
+        if os.name == "nt":
+            subprocess.Popen(
+                f'cmd /k "{run_cmd}"',
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                cwd=str(Path(__file__).parent.parent.parent.parent),
+            )
+        else:
+            subprocess.Popen(
+                ["bash", "-c", f'{run_cmd}; echo "\\nPress Enter to close..."; read'],
+                cwd=str(Path(__file__).parent.parent.parent.parent),
+            )
 
     def _exit(self) -> None:
         self.wizard.root.destroy()
