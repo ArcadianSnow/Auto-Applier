@@ -22,9 +22,18 @@ KNOWN_SKILLS = {
     # AI/ML
     "machine learning", "deep learning", "pytorch", "tensorflow",
     "natural language processing", "computer vision", "llm",
+    # Sales / Business
+    "salesforce", "hubspot", "crm", "b2b sales", "b2c sales", "enterprise sales",
+    "account management", "pipeline management", "lead generation", "cold calling",
+    "prospecting", "negotiation", "closing", "contract management",
+    "revenue forecasting", "territory management", "consultative selling",
+    "solution selling", "upselling", "cross-selling", "sales analytics",
+    "client relationship management",
     # General
     "git", "agile", "scrum", "jira", "project management",
     "communication", "leadership", "problem solving",
+    "excel", "powerpoint", "microsoft office", "google analytics",
+    "strategic planning",
 }
 
 

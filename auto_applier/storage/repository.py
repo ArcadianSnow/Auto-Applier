@@ -46,16 +46,21 @@ def load_all(model_type: Type[T]) -> list[T]:
     _ensure_csv(path, model_type)
 
     records = []
+    model_field_names = {f.name for f in fields(model_type)}
     with open(path, "r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            records.append(model_type(**row))
+            # Filter to known fields only (forward/backward CSV compatibility)
+            filtered = {k: v for k, v in row.items() if k in model_field_names}
+            records.append(model_type(**filtered))
     return records
 
 
-def job_already_applied(job_id: str) -> bool:
+def job_already_applied(job_id: str, source: str = "") -> bool:
     """Check if we've already applied to (or attempted) a job."""
     applications = load_all(Application)
+    if source:
+        return any(a.job_id == job_id and a.source == source for a in applications)
     return any(a.job_id == job_id for a in applications)
 
 

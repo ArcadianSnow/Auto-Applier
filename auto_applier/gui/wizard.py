@@ -5,7 +5,7 @@ from tkinter import ttk
 
 from auto_applier.gui.styles import apply_styles
 from auto_applier.gui.steps.welcome import WelcomeStep
-from auto_applier.gui.steps.credentials import CredentialsStep
+from auto_applier.gui.steps.sites import SitesStep
 from auto_applier.gui.steps.resume import ResumeStep
 from auto_applier.gui.steps.personal import PersonalInfoStep
 from auto_applier.gui.steps.preferences import PreferencesStep
@@ -13,12 +13,14 @@ from auto_applier.gui.steps.ready import ReadyStep
 
 STEPS = [
     ("Welcome", WelcomeStep),
-    ("Credentials", CredentialsStep),
+    ("Platforms", SitesStep),
     ("Resume", ResumeStep),
     ("Personal Info", PersonalInfoStep),
     ("Job Prefs", PreferencesStep),
     ("Ready", ReadyStep),
 ]
+
+PLATFORM_KEYS = ["linkedin", "indeed", "dice", "ziprecruiter"]
 
 
 class WizardApp:
@@ -27,7 +29,7 @@ class WizardApp:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("Auto Applier Setup")
-        self.root.geometry("700x580")
+        self.root.geometry("700x600")
         self.root.resizable(False, False)
         self.root.configure(bg="#F5F7FA")
 
@@ -35,8 +37,7 @@ class WizardApp:
 
         # Shared state across all steps
         self.data: dict[str, tk.Variable] = {
-            "email": tk.StringVar(),
-            "password": tk.StringVar(),
+            # Personal info
             "resume_path": tk.StringVar(),
             "first_name": tk.StringVar(),
             "last_name": tk.StringVar(),
@@ -44,9 +45,16 @@ class WizardApp:
             "city": tk.StringVar(),
             "linkedin": tk.StringVar(),
             "website": tk.StringVar(),
+            # Job search
             "keywords": tk.StringVar(),
             "location": tk.StringVar(),
         }
+
+        # Per-platform enabled flag + credentials
+        for key in PLATFORM_KEYS:
+            self.data[f"{key}_enabled"] = tk.BooleanVar(value=(key == "linkedin"))
+            self.data[f"{key}_email"] = tk.StringVar()
+            self.data[f"{key}_password"] = tk.StringVar()
 
         self.current_step = 0
 
@@ -110,17 +118,14 @@ class WizardApp:
         for i, dot in enumerate(self.dots):
             dot.delete("all")
             if i < self.current_step:
-                # Completed
                 dot.create_oval(2, 2, 22, 22, fill="#10B981", outline="")
                 dot.create_text(12, 12, text="✓", fill="white", font=("Segoe UI", 9, "bold"))
                 self.dot_labels[i].configure(fg="#10B981")
             elif i == self.current_step:
-                # Active
                 dot.create_oval(2, 2, 22, 22, fill="#2563EB", outline="")
                 dot.create_text(12, 12, text=str(i + 1), fill="white", font=("Segoe UI", 9, "bold"))
                 self.dot_labels[i].configure(fg="#2563EB")
             else:
-                # Upcoming
                 dot.create_oval(2, 2, 22, 22, fill="#CBD5E1", outline="")
                 dot.create_text(12, 12, text=str(i + 1), fill="#94A3B8", font=("Segoe UI", 9))
                 self.dot_labels[i].configure(fg="#94A3B8")
@@ -174,7 +179,6 @@ class WizardApp:
         self.step_frames[index].tkraise()
         self._update_dots()
 
-        # Hide back/next on welcome (0) and ready (last)
         if index == 0 or index == len(STEPS) - 1:
             self.back_btn.grid_remove()
             self.next_btn.grid_remove()
@@ -188,7 +192,6 @@ class WizardApp:
             return
         if self.current_step < len(STEPS) - 1:
             self._show_step(self.current_step + 1)
-            # Let the new step refresh if needed
             new_step = self.step_frames[self.current_step]
             if hasattr(new_step, "on_show"):
                 new_step.on_show()
@@ -204,17 +207,25 @@ class WizardApp:
         if hasattr(new_step, "on_show"):
             new_step.on_show()
 
+    # ── Helpers ──────────────────────────────────────────────────
+
+    def get_enabled_platforms(self) -> list[str]:
+        """Return list of enabled platform keys."""
+        return [k for k in PLATFORM_KEYS if self.data[f"{k}_enabled"].get()]
+
     def fill_dummy_data(self) -> None:
         """Populate all fields with dummy data for dry-run testing."""
         from auto_applier.config import RESUMES_DIR
 
-        # Create a real dummy resume file on disk
         dummy_resume = RESUMES_DIR / "dummy_resume.docx"
         if not dummy_resume.exists():
             self._create_dummy_resume(dummy_resume)
 
-        self.data["email"].set("jane.doe@example.com")
-        self.data["password"].set("DummyPassword123!")
+        # Enable LinkedIn only for dummy
+        self.data["linkedin_enabled"].set(True)
+        self.data["linkedin_email"].set("jane.doe@example.com")
+        self.data["linkedin_password"].set("DummyPassword123!")
+
         self.data["resume_path"].set(str(dummy_resume))
         self.data["first_name"].set("Jane")
         self.data["last_name"].set("Doe")
@@ -227,8 +238,7 @@ class WizardApp:
 
     @staticmethod
     def _create_dummy_resume(path) -> None:
-        """Create a minimal dummy PDF resume for testing."""
-        # Minimal valid PDF with resume-like text content
+        """Create a minimal dummy DOCX resume for testing."""
         content = (
             "Jane Doe\n"
             "Software Engineer\n"
@@ -247,13 +257,10 @@ class WizardApp:
             "EDUCATION\n"
             "B.S. Computer Science — University of California, Berkeley (2017)\n"
         )
-        # Write as a .docx since python-docx is already a dependency
-        # and it's trivial to create a valid one
         from docx import Document
         doc = Document()
         for line in content.strip().split("\n"):
             doc.add_paragraph(line)
-        # Change extension to .docx
         path = path.with_suffix(".docx")
         doc.save(str(path))
 

@@ -6,12 +6,13 @@ from datetime import datetime
 
 @dataclass
 class Job:
-    job_id: str  # LinkedIn job ID
+    job_id: str  # Platform-specific job ID
     title: str
     company: str
     url: str
     description: str = ""
     search_keyword: str = ""
+    source: str = "linkedin"  # Platform source_id
     found_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
 
@@ -20,6 +21,7 @@ class Application:
     job_id: str
     status: str  # 'applied', 'failed', 'skipped', 'dry_run'
     failure_reason: str = ""
+    source: str = "linkedin"  # Platform source_id
     applied_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
 

@@ -19,13 +19,12 @@ class ReadyStep(tk.Frame):
         super().__init__(parent, bg="#F5F7FA")
         self.wizard = wizard
 
-        # Use grid so we can control vertical distribution
-        self.grid_rowconfigure(1, weight=1)  # card area gets extra space
+        self.grid_rowconfigure(2, weight=0)
         self.grid_columnconfigure(0, weight=1)
 
         # ── Header row ──────────────────────────────────────────
         header_row = tk.Frame(self, bg="#F5F7FA")
-        header_row.grid(row=0, column=0, sticky="ew", padx=40, pady=(20, 4))
+        header_row.grid(row=0, column=0, sticky="ew", padx=40, pady=(16, 4))
 
         tk.Label(
             header_row, text="You're All Set!",
@@ -42,19 +41,19 @@ class ReadyStep(tk.Frame):
             text="Review your configuration below, then choose how to proceed.",
             font=("Segoe UI", 10), fg="#64748B", bg="#F5F7FA",
             anchor="w",
-        ).grid(row=1, column=0, sticky="nw", padx=40, pady=(0, 8))
+        ).grid(row=1, column=0, sticky="nw", padx=40, pady=(0, 6))
 
         # ── Summary card ────────────────────────────────────────
         self.card = tk.Frame(
             self, bg="#FFFFFF",
             highlightbackground="#E2E8F0", highlightthickness=1,
-            padx=16, pady=10,
+            padx=16, pady=8,
         )
-        self.card.grid(row=2, column=0, sticky="ew", padx=40, pady=(0, 12))
+        self.card.grid(row=2, column=0, sticky="ew", padx=40, pady=(0, 10))
 
         self.summary_labels: list[tuple[tk.Label, tk.Label]] = []
         fields = [
-            "Email", "Resume", "Name", "Phone",
+            "Platforms", "Resume", "Name", "Phone",
             "City", "LinkedIn", "Keywords", "Job Location",
         ]
         for i, field in enumerate(fields):
@@ -76,7 +75,7 @@ class ReadyStep(tk.Frame):
 
         # ── Separator ───────────────────────────────────────────
         ttk.Separator(self, orient="horizontal").grid(
-            row=3, column=0, sticky="ew", padx=40, pady=(0, 12),
+            row=3, column=0, sticky="ew", padx=40, pady=(0, 10),
         )
 
         # ── Action buttons ──────────────────────────────────────
@@ -109,18 +108,19 @@ class ReadyStep(tk.Frame):
         """Refresh summary values from wizard data."""
         d = self.wizard.data
 
-        email = d["email"].get()
-        if "@" in email:
-            parts = email.split("@")
-            masked = parts[0][:3] + "***@" + parts[1]
-        else:
-            masked = email
+        # Build platform list
+        platform_names = {
+            "linkedin": "LinkedIn", "indeed": "Indeed",
+            "dice": "Dice", "ziprecruiter": "ZipRecruiter",
+        }
+        enabled = self.wizard.get_enabled_platforms()
+        platforms_str = ", ".join(platform_names.get(k, k) for k in enabled) or "None"
 
         resume = os.path.basename(d["resume_path"].get()) or "—"
         name = f"{d['first_name'].get()} {d['last_name'].get()}".strip() or "—"
 
         values = [
-            masked,
+            platforms_str,
             resume,
             name,
             d["phone"].get() or "—",
@@ -136,15 +136,20 @@ class ReadyStep(tk.Frame):
 
     def _save_config(self) -> None:
         """Save all wizard data to disk."""
-        from auto_applier.config import DATA_DIR, PROJECT_ROOT, RESUMES_DIR, USER_CONFIG_FILE
+        from auto_applier.config import PROJECT_ROOT, RESUMES_DIR, USER_CONFIG_FILE
 
         d = self.wizard.data
+        enabled = self.wizard.get_enabled_platforms()
 
-        # Save .env
+        # Save credentials to .env (one pair per enabled platform)
         env_path = PROJECT_ROOT / ".env"
         with open(env_path, "w") as f:
-            f.write(f"LINKEDIN_EMAIL={d['email'].get()}\n")
-            f.write(f"LINKEDIN_PASSWORD={d['password'].get()}\n")
+            for key in enabled:
+                email = d[f"{key}_email"].get()
+                password = d[f"{key}_password"].get()
+                prefix = key.upper()
+                f.write(f"{prefix}_EMAIL={email}\n")
+                f.write(f"{prefix}_PASSWORD={password}\n")
 
         # Copy resume to data/resumes/ if it's not already there
         resume_src = d["resume_path"].get()
@@ -158,9 +163,14 @@ class ReadyStep(tk.Frame):
         else:
             config["resume_path"] = resume_src
 
-        # Build config
+        # Build platform-specific config (emails only, passwords in .env)
+        platforms_config = {}
+        for key in enabled:
+            platforms_config[key] = {"email": d[f"{key}_email"].get()}
+
         config.update({
-            "email": d["email"].get(),
+            "enabled_platforms": enabled,
+            "platforms": platforms_config,
             "first_name": d["first_name"].get(),
             "last_name": d["last_name"].get(),
             "phone": d["phone"].get(),
@@ -200,7 +210,6 @@ class ReadyStep(tk.Frame):
         if dry_run:
             run_cmd += " --dry-run"
 
-        # Wrap in cmd /k so the console stays open after the script finishes
         if os.name == "nt":
             subprocess.Popen(
                 f'cmd /k "{run_cmd}"',

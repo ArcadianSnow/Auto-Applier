@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -30,75 +31,99 @@ def save_user_config(config: dict) -> None:
         json.dump(config, f, indent=2)
 
 
+def _build_platform_config(config: dict) -> dict:
+    """Merge user config with .env credentials into platform-ready config.
+
+    The run loop passes this merged dict to each platform adapter.
+    Platform adapters read credentials from config['platforms'][source_id].
+    """
+    from dotenv import load_dotenv
+    load_dotenv(PROJECT_ROOT / ".env", override=True)
+
+    merged = dict(config)
+    platforms = merged.setdefault("platforms", {})
+
+    for key in merged.get("enabled_platforms", ["linkedin"]):
+        prefix = key.upper()
+        entry = platforms.setdefault(key, {})
+        # .env overrides config for passwords (passwords are never in config JSON)
+        entry["email"] = os.getenv(f"{prefix}_EMAIL", entry.get("email", ""))
+        entry["password"] = os.getenv(f"{prefix}_PASSWORD", "")
+
+    return merged
+
+
 @click.group()
 def cli():
-    """Auto Applier - Automated LinkedIn job application tool."""
+    """Auto Applier - Automated job application tool."""
     pass
 
 
 @cli.command()
 def configure():
-    """Set up LinkedIn credentials, resume, and personal info."""
+    """Set up credentials, resume, and personal info."""
     config = load_user_config()
 
     click.echo("=== Auto Applier Setup ===\n")
 
-    # LinkedIn credentials → .env file
-    click.echo("LinkedIn Credentials:")
-    click.echo("(These are saved to .env and never committed to git)\n")
+    # Platform selection
+    click.echo("Available platforms: linkedin, indeed, dice, ziprecruiter")
+    platforms_input = click.prompt(
+        "Enable platforms (comma-separated)",
+        default=",".join(config.get("enabled_platforms", ["linkedin"])),
+    )
+    enabled = [p.strip().lower() for p in platforms_input.split(",") if p.strip()]
+    config["enabled_platforms"] = enabled
 
-    email = click.prompt("LinkedIn email", default=config.get("email", ""))
-    password = click.prompt("LinkedIn password", hide_input=True)
+    platforms_config = config.setdefault("platforms", {})
+    env_lines = []
+
+    for key in enabled:
+        click.echo(f"\n--- {key.title()} Credentials ---")
+        existing = platforms_config.get(key, {})
+        email = click.prompt(f"{key.title()} email", default=existing.get("email", ""))
+        password = click.prompt(f"{key.title()} password", hide_input=True)
+        platforms_config[key] = {"email": email}
+        env_lines.append(f"{key.upper()}_EMAIL={email}")
+        env_lines.append(f"{key.upper()}_PASSWORD={password}")
 
     env_path = PROJECT_ROOT / ".env"
     with open(env_path, "w") as f:
-        f.write(f"LINKEDIN_EMAIL={email}\n")
-        f.write(f"LINKEDIN_PASSWORD={password}\n")
-    click.echo(f"Credentials saved to {env_path}\n")
+        f.write("\n".join(env_lines) + "\n")
+    click.echo(f"\nCredentials saved to {env_path}")
 
     # Resume upload
-    click.echo("Resume:")
+    click.echo("\nResume:")
     resume_path = click.prompt(
         "Path to your resume (PDF or DOCX)",
         default=config.get("resume_path", ""),
     )
     resume_path = Path(resume_path).expanduser().resolve()
-
     if resume_path.exists():
         dest = RESUMES_DIR / resume_path.name
         shutil.copy2(resume_path, dest)
         config["resume_path"] = str(dest)
-        click.echo(f"Resume copied to {dest}\n")
+        click.echo(f"Resume copied to {dest}")
     else:
-        click.echo(f"Warning: File not found at {resume_path}. Skipping.\n")
+        click.echo(f"Warning: File not found at {resume_path}")
 
-    # Personal info for form filling
-    click.echo("Personal Info (used to fill Easy Apply forms):")
-    config["email"] = email
+    # Personal info
+    click.echo("\nPersonal Info:")
     config["first_name"] = click.prompt("First name", default=config.get("first_name", ""))
     config["last_name"] = click.prompt("Last name", default=config.get("last_name", ""))
     config["phone"] = click.prompt("Phone number", default=config.get("phone", ""))
     config["city"] = click.prompt("City", default=config.get("city", ""))
-    config["linkedin"] = click.prompt(
-        "LinkedIn profile URL", default=config.get("linkedin", "")
-    )
-    config["website"] = click.prompt(
-        "Website/Portfolio URL (optional)",
-        default=config.get("website", ""),
-    )
+    config["linkedin"] = click.prompt("LinkedIn URL", default=config.get("linkedin", ""))
+    config["website"] = click.prompt("Website (optional)", default=config.get("website", ""))
 
-    # Job search preferences
+    # Search preferences
     click.echo("\nJob Search Preferences:")
     keywords_input = click.prompt(
         "Job titles/keywords (comma-separated)",
         default=",".join(config.get("search_keywords", [])),
     )
     config["search_keywords"] = [k.strip() for k in keywords_input.split(",") if k.strip()]
-
-    config["location"] = click.prompt(
-        "Preferred location (or 'remote')",
-        default=config.get("location", ""),
-    )
+    config["location"] = click.prompt("Preferred location", default=config.get("location", ""))
 
     save_user_config(config)
     click.echo(f"\nConfiguration saved to {USER_CONFIG_FILE}")
@@ -106,10 +131,11 @@ def configure():
 
 
 @cli.command()
-@click.option("--dry-run", is_flag=True, help="Walk through the flow without submitting applications.")
-@click.option("--limit", default=0, help="Max applications this session (0 = use daily limit).")
-def run(dry_run: bool, limit: int):
-    """Search for jobs and auto-apply on LinkedIn."""
+@click.option("--dry-run", is_flag=True, help="Walk through without submitting.")
+@click.option("--limit", default=0, help="Max applications this session (0 = daily limit).")
+@click.option("--platform", default="", help="Run only a specific platform (e.g. 'linkedin').")
+def run(dry_run: bool, limit: int, platform: str):
+    """Search for jobs and auto-apply across all enabled platforms."""
     config = load_user_config()
 
     if not config.get("search_keywords"):
@@ -121,6 +147,9 @@ def run(dry_run: bool, limit: int):
         click.echo("No resume found. Run 'auto-applier configure' first.")
         return
 
+    if platform:
+        config["enabled_platforms"] = [platform]
+
     if dry_run:
         click.echo("[DRY RUN MODE] Will not submit any applications.\n")
 
@@ -128,18 +157,18 @@ def run(dry_run: bool, limit: int):
 
 
 async def _run_applications(config: dict, dry_run: bool, limit: int):
-    """Core application loop."""
+    """Core application loop — iterates over enabled platforms."""
     from auto_applier.analysis.gap_tracker import record_gaps, record_skills_gaps_from_description
     from auto_applier.browser.anti_detect import random_delay
-    from auto_applier.browser.easy_apply import click_easy_apply, fill_application_modal
-    from auto_applier.browser.job_search import get_job_description, search_jobs
-    from auto_applier.browser.linkedin_auth import ensure_logged_in
+    from auto_applier.browser.platforms import PLATFORM_REGISTRY
     from auto_applier.browser.session import BrowserSession
     from auto_applier.config import MIN_DELAY_BETWEEN_APPLICATIONS, MAX_DELAY_BETWEEN_APPLICATIONS
     from auto_applier.resume.parser import extract_text
     from auto_applier.resume.skills import extract_skills
     from auto_applier.storage import repository
-    from auto_applier.storage.models import Application, Job
+    from auto_applier.storage.models import Application
+
+    merged_config = _build_platform_config(config)
 
     # Parse resume
     resume_text = extract_text(Path(config["resume_path"]))
@@ -152,64 +181,82 @@ async def _run_applications(config: dict, dry_run: bool, limit: int):
     remaining = max_today - todays_count
 
     if remaining <= 0:
-        click.echo(f"Already applied to {todays_count} jobs today (limit: {max_today}). Try again tomorrow.")
+        click.echo(f"Already applied to {todays_count} jobs today (limit: {max_today}).")
         return
 
-    click.echo(f"Daily budget: {remaining} applications remaining ({todays_count} done today).\n")
+    click.echo(f"Daily budget: {remaining} applications remaining ({todays_count} done today).")
 
-    # Start browser
+    enabled = merged_config.get("enabled_platforms", ["linkedin"])
+    click.echo(f"Platforms: {', '.join(enabled)}\n")
+
     session = BrowserSession()
     try:
         context = await session.start()
-        page = await ensure_logged_in(context)
-
         applied_count = 0
 
-        for keyword in config.get("search_keywords", []):
+        for platform_key in enabled:
             if applied_count >= remaining:
-                click.echo("Reached daily application limit. Stopping.")
+                click.echo("Reached daily application limit.")
                 break
 
-            jobs = await search_jobs(page, keyword, config.get("location", ""))
+            PlatformClass = PLATFORM_REGISTRY.get(platform_key)
+            if not PlatformClass:
+                click.echo(f"Unknown platform '{platform_key}', skipping.")
+                continue
 
-            for job in jobs:
+            platform = PlatformClass(context, merged_config)
+            click.echo(f"\n{'='*50}")
+            click.echo(f" {platform.name}")
+            click.echo(f"{'='*50}")
+
+            if not await platform.ensure_logged_in():
+                click.echo(f"  Could not log in to {platform.name}. Skipping.")
+                continue
+
+            for keyword in config.get("search_keywords", []):
                 if applied_count >= remaining:
                     break
 
-                if repository.job_already_applied(job.job_id):
-                    continue
+                jobs = await platform.search_jobs(keyword, config.get("location", ""))
 
-                click.echo(f"\n--- {job.title} at {job.company} ---")
+                for job in jobs:
+                    if applied_count >= remaining:
+                        break
+                    if repository.job_already_applied(job.job_id, platform.source_id):
+                        continue
 
-                # Get full job description for gap analysis
-                description = await get_job_description(page, job.url)
-                job.description = description
-                repository.save(job)
+                    click.echo(f"\n  --- {job.title} at {job.company} ---")
 
-                # Record skills gaps from description
-                record_skills_gaps_from_description(job.job_id, description, resume_skills)
+                    description = await platform.get_job_description(job)
+                    job.description = description
+                    repository.save(job)
 
-                # Try Easy Apply
-                if not await click_easy_apply(page):
-                    repository.save(Application(job_id=job.job_id, status="skipped", failure_reason="No Easy Apply button"))
-                    continue
+                    record_skills_gaps_from_description(
+                        job.job_id, description, resume_skills,
+                    )
 
-                success, form_gaps = await fill_application_modal(page, config, dry_run=dry_run)
+                    success, form_gaps = await platform.apply_to_job(job, dry_run=dry_run)
 
-                if form_gaps:
-                    record_gaps(job.job_id, form_gaps)
+                    if form_gaps:
+                        record_gaps(job.job_id, form_gaps)
 
-                status = "dry_run" if dry_run else ("applied" if success else "failed")
-                failure_reason = "" if success else "Modal completion failed"
-                repository.save(Application(job_id=job.job_id, status=status, failure_reason=failure_reason))
+                    status = "dry_run" if dry_run else ("applied" if success else "failed")
+                    repository.save(Application(
+                        job_id=job.job_id,
+                        status=status,
+                        source=platform.source_id,
+                        failure_reason="" if success else "Application failed",
+                    ))
 
-                applied_count += 1
-                click.echo(f"  Status: {status} ({applied_count}/{remaining})")
+                    applied_count += 1
+                    click.echo(f"    Status: {status} ({applied_count}/{remaining})")
 
-                # Wait between applications
-                await random_delay(MIN_DELAY_BETWEEN_APPLICATIONS, MAX_DELAY_BETWEEN_APPLICATIONS)
+                    await random_delay(
+                        MIN_DELAY_BETWEEN_APPLICATIONS,
+                        MAX_DELAY_BETWEEN_APPLICATIONS,
+                    )
 
-        click.echo(f"\nSession complete. Applied to {applied_count} jobs.")
+        click.echo(f"\nSession complete. Applied to {applied_count} jobs across {len(enabled)} platform(s).")
         click.echo("Run 'auto-applier gaps' to see skills gap report.")
 
     except Exception as e:
@@ -228,7 +275,7 @@ def status():
 
 @cli.command()
 def gaps():
-    """Show skills gap report — what jobs are asking for that you might be missing."""
+    """Show skills gap report."""
     from auto_applier.analysis.report import print_gaps_report
     print_gaps_report()
 
