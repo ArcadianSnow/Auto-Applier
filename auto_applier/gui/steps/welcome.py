@@ -6,49 +6,51 @@ import tkinter as tk
 from tkinter import ttk
 from typing import TYPE_CHECKING
 
+from auto_applier.gui.styles import (
+    SANDY_SHORE, SOIL_BROWN, DRIFTWOOD_GRAY, NOOK_GREEN, LEAF_GOLD, WARM_WHITE,
+    HEADING_FONT, BODY_FONT,
+)
+
 if TYPE_CHECKING:
     from auto_applier.gui.wizard import WizardApp
 
 
 class WelcomeStep(tk.Frame):
     def __init__(self, parent: tk.Widget, wizard: WizardApp) -> None:
-        super().__init__(parent, bg="#F5F7FA")
+        super().__init__(parent, bg=SANDY_SHORE)
         self.wizard = wizard
 
-        # Center everything
-        inner = tk.Frame(self, bg="#F5F7FA")
+        inner = tk.Frame(self, bg=SANDY_SHORE)
         inner.place(relx=0.5, rely=0.45, anchor="center")
 
-        # Logo circle
-        logo = tk.Canvas(inner, width=64, height=64, bg="#F5F7FA", highlightthickness=0)
-        logo.create_oval(2, 2, 62, 62, fill="#2563EB", outline="")
-        logo.create_text(32, 32, text="A", fill="white", font=("Segoe UI", 24, "bold"))
+        # Leaf logo
+        logo = tk.Canvas(inner, width=68, height=68, bg=SANDY_SHORE, highlightthickness=0)
+        logo.create_oval(2, 2, 66, 66, fill=NOOK_GREEN, outline="#2E7D52", width=2)
+        logo.create_text(34, 28, text="🍃", font=(BODY_FONT, 18))
+        logo.create_text(34, 50, text="A", fill=WARM_WHITE, font=(HEADING_FONT, 14, "bold"))
         logo.pack(pady=(0, 16))
 
-        # Title
         tk.Label(
             inner,
             text="Welcome to Auto Applier",
-            font=("Segoe UI", 16, "bold"),
-            fg="#1E293B",
-            bg="#F5F7FA",
+            font=(HEADING_FONT, 18, "bold"),
+            fg=SOIL_BROWN,
+            bg=SANDY_SHORE,
         ).pack(pady=(0, 8))
 
-        # Description
         tk.Label(
             inner,
             text=(
-                "Auto Applier searches LinkedIn for jobs matching your criteria\n"
-                "and automatically applies using Easy Apply. It also tracks what\n"
-                "skills and info employers are asking for to help improve your resume."
+                "Auto Applier searches job sites for positions matching\n"
+                "your criteria and applies automatically. It also tracks\n"
+                "what skills employers are asking for to improve your resume."
             ),
-            font=("Segoe UI", 10),
-            fg="#64748B",
-            bg="#F5F7FA",
+            font=(BODY_FONT, 10),
+            fg=DRIFTWOOD_GRAY,
+            bg=SANDY_SHORE,
             justify="center",
         ).pack(pady=(0, 28))
 
-        # Buttons
         ttk.Button(
             inner,
             text="Get Started",

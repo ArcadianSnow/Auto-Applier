@@ -1,9 +1,15 @@
-"""Main wizard window and step controller."""
+"""Main wizard window and step controller — Animal Crossing theme."""
 
 import tkinter as tk
 from tkinter import ttk
 
-from auto_applier.gui.styles import apply_styles
+from auto_applier.gui.styles import (
+    apply_styles,
+    SANDY_SHORE, CREAM, DRIFTWOOD, WARM_WHITE, BORDER_LIGHT, NOOK_TAN,
+    SOIL_BROWN, DRIFTWOOD_GRAY, FOGGY,
+    STEP_DONE, STEP_ACTIVE, STEP_UPCOMING, NOOK_GREEN_DARK,
+    HEADING_FONT, BODY_FONT,
+)
 from auto_applier.gui.steps.welcome import WelcomeStep
 from auto_applier.gui.steps.sites import SitesStep
 from auto_applier.gui.steps.resume import ResumeStep
@@ -28,16 +34,15 @@ class WizardApp:
 
     def __init__(self) -> None:
         self.root = tk.Tk()
-        self.root.title("Auto Applier Setup")
+        self.root.title("Auto Applier — Tom Nook's Job Agency")
         self.root.geometry("700x600")
         self.root.resizable(False, False)
-        self.root.configure(bg="#F5F7FA")
+        self.root.configure(bg=SANDY_SHORE)
 
         apply_styles(self.root)
 
-        # Shared state across all steps
+        # Shared state
         self.data: dict[str, tk.Variable] = {
-            # Personal info
             "resume_path": tk.StringVar(),
             "first_name": tk.StringVar(),
             "last_name": tk.StringVar(),
@@ -45,12 +50,10 @@ class WizardApp:
             "city": tk.StringVar(),
             "linkedin": tk.StringVar(),
             "website": tk.StringVar(),
-            # Job search
             "keywords": tk.StringVar(),
             "location": tk.StringVar(),
         }
 
-        # Per-platform enabled flag + credentials
         for key in PLATFORM_KEYS:
             self.data[f"{key}_enabled"] = tk.BooleanVar(value=(key == "linkedin"))
             self.data[f"{key}_email"] = tk.StringVar()
@@ -58,7 +61,6 @@ class WizardApp:
 
         self.current_step = 0
 
-        # Layout: header, content, footer
         self.root.grid_rowconfigure(1, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
 
@@ -69,25 +71,30 @@ class WizardApp:
         self._show_step(0)
         self.root.bind("<Return>", lambda e: self._on_next())
 
-    # ── Header with step dots ────────────────────────────────────
+    # ── Header ───────────────────────────────────────────────────
 
     def _build_header(self) -> None:
-        self.header = tk.Frame(self.root, bg="#FFFFFF", height=90)
-        self.header.grid(row=0, column=0, sticky="ew")
+        # Accent strip (gradient-like with three colors)
+        accent = tk.Frame(self.root, bg=DRIFTWOOD, height=4)
+        accent.grid(row=0, column=0, sticky="ew")
+        accent.grid_propagate(False)
+        # Simple three-color bar
+        for i, color in enumerate(["#4CAF7D", "#7BB8D4", "#E8B84B"]):
+            seg = tk.Frame(accent, bg=color, height=4)
+            seg.place(relx=i/3, rely=0, relwidth=1/3, relheight=1)
+
+        self.header = tk.Frame(self.root, bg=DRIFTWOOD, height=86)
+        self.header.grid(row=1, column=0, sticky="ew")
         self.header.grid_propagate(False)
 
         self.step_label = tk.Label(
-            self.header,
-            text="",
-            font=("Segoe UI", 10),
-            fg="#64748B",
-            bg="#FFFFFF",
+            self.header, text="",
+            font=(BODY_FONT, 10), fg=DRIFTWOOD_GRAY, bg=DRIFTWOOD,
         )
-        self.step_label.pack(pady=(12, 4))
+        self.step_label.pack(pady=(10, 4))
 
-        # Dot row
-        self.dot_frame = tk.Frame(self.header, bg="#FFFFFF")
-        self.dot_frame.pack(pady=(0, 8))
+        self.dot_frame = tk.Frame(self.header, bg=DRIFTWOOD)
+        self.dot_frame.pack(pady=(0, 6))
 
         self.dots: list[tk.Canvas] = []
         self.dot_labels: list[tk.Label] = []
@@ -95,54 +102,54 @@ class WizardApp:
 
         for i, (name, _) in enumerate(STEPS):
             if i > 0:
-                line = tk.Canvas(self.dot_frame, width=50, height=4, bg="#FFFFFF", highlightthickness=0)
-                line.create_rectangle(0, 1, 50, 3, fill="#CBD5E1", outline="", tags="line")
+                line = tk.Canvas(self.dot_frame, width=50, height=4, bg=DRIFTWOOD, highlightthickness=0)
+                line.create_rectangle(0, 1, 50, 3, fill=STEP_UPCOMING, outline="", tags="line")
                 line.grid(row=0, column=i * 2 - 1, padx=0, pady=(0, 14))
                 self.lines.append(line)
 
-            dot = tk.Canvas(self.dot_frame, width=24, height=24, bg="#FFFFFF", highlightthickness=0)
+            dot = tk.Canvas(self.dot_frame, width=24, height=24, bg=DRIFTWOOD, highlightthickness=0)
             dot.grid(row=0, column=i * 2, padx=2, pady=(0, 14))
             self.dots.append(dot)
 
             lbl = tk.Label(
-                self.dot_frame, text=name, font=("Segoe UI", 7),
-                fg="#94A3B8", bg="#FFFFFF",
+                self.dot_frame, text=name, font=(BODY_FONT, 7),
+                fg=FOGGY, bg=DRIFTWOOD,
             )
             lbl.grid(row=1, column=i * 2, padx=0)
             self.dot_labels.append(lbl)
 
-        # Divider line
-        tk.Frame(self.header, bg="#E2E8F0", height=1).pack(fill="x", side="bottom")
+        tk.Frame(self.header, bg=NOOK_TAN, height=2).pack(fill="x", side="bottom")
 
     def _update_dots(self) -> None:
         for i, dot in enumerate(self.dots):
             dot.delete("all")
             if i < self.current_step:
-                dot.create_oval(2, 2, 22, 22, fill="#10B981", outline="")
-                dot.create_text(12, 12, text="✓", fill="white", font=("Segoe UI", 9, "bold"))
-                self.dot_labels[i].configure(fg="#10B981")
+                dot.create_oval(2, 2, 22, 22, fill=STEP_DONE, outline=NOOK_GREEN_DARK)
+                dot.create_text(12, 12, text="✓", fill="white", font=(BODY_FONT, 9, "bold"))
+                self.dot_labels[i].configure(fg=NOOK_GREEN_DARK)
             elif i == self.current_step:
-                dot.create_oval(2, 2, 22, 22, fill="#2563EB", outline="")
-                dot.create_text(12, 12, text=str(i + 1), fill="white", font=("Segoe UI", 9, "bold"))
-                self.dot_labels[i].configure(fg="#2563EB")
+                dot.create_oval(2, 2, 22, 22, fill=STEP_ACTIVE, outline="#C89030")
+                dot.create_text(12, 12, text=str(i + 1), fill="white", font=(BODY_FONT, 9, "bold"))
+                self.dot_labels[i].configure(fg=SOIL_BROWN)
             else:
-                dot.create_oval(2, 2, 22, 22, fill="#CBD5E1", outline="")
-                dot.create_text(12, 12, text=str(i + 1), fill="#94A3B8", font=("Segoe UI", 9))
-                self.dot_labels[i].configure(fg="#94A3B8")
+                dot.create_oval(2, 2, 22, 22, fill=STEP_UPCOMING, outline=FOGGY)
+                dot.create_text(12, 12, text=str(i + 1), fill=FOGGY, font=(BODY_FONT, 9))
+                self.dot_labels[i].configure(fg=FOGGY)
 
         for i, line in enumerate(self.lines):
             line.delete("line")
-            color = "#10B981" if i < self.current_step else "#CBD5E1"
+            color = STEP_DONE if i < self.current_step else STEP_UPCOMING
             line.create_rectangle(0, 1, 50, 3, fill=color, outline="", tags="line")
 
         name = STEPS[self.current_step][0]
         self.step_label.configure(text=f"Step {self.current_step + 1} of {len(STEPS)} — {name}")
 
-    # ── Content area ─────────────────────────────────────────────
+    # ── Content ──────────────────────────────────────────────────
 
     def _build_content(self) -> None:
-        self.content = tk.Frame(self.root, bg="#F5F7FA")
-        self.content.grid(row=1, column=0, sticky="nsew")
+        self.content = tk.Frame(self.root, bg=SANDY_SHORE)
+        self.content.grid(row=2, column=0, sticky="nsew")
+        self.root.grid_rowconfigure(2, weight=1)
         self.content.grid_rowconfigure(0, weight=1)
         self.content.grid_columnconfigure(0, weight=1)
 
@@ -152,13 +159,13 @@ class WizardApp:
             frame.grid(row=0, column=0, sticky="nsew")
             self.step_frames.append(frame)
 
-    # ── Footer with Back / Next ──────────────────────────────────
+    # ── Footer ───────────────────────────────────────────────────
 
     def _build_footer(self) -> None:
-        tk.Frame(self.root, bg="#E2E8F0", height=1).grid(row=2, column=0, sticky="ew")
+        tk.Frame(self.root, bg=NOOK_TAN, height=1).grid(row=3, column=0, sticky="ew")
 
-        self.footer = tk.Frame(self.root, bg="#FFFFFF", height=60)
-        self.footer.grid(row=3, column=0, sticky="ew")
+        self.footer = tk.Frame(self.root, bg=DRIFTWOOD, height=60)
+        self.footer.grid(row=4, column=0, sticky="ew")
         self.footer.grid_propagate(False)
         self.footer.grid_columnconfigure(1, weight=1)
 
@@ -201,31 +208,24 @@ class WizardApp:
             self._show_step(self.current_step - 1)
 
     def go_to_step(self, index: int) -> None:
-        """Jump to a specific step (used by welcome and ready screens)."""
         self._show_step(index)
         new_step = self.step_frames[index]
         if hasattr(new_step, "on_show"):
             new_step.on_show()
 
-    # ── Helpers ──────────────────────────────────────────────────
-
     def get_enabled_platforms(self) -> list[str]:
-        """Return list of enabled platform keys."""
         return [k for k in PLATFORM_KEYS if self.data[f"{k}_enabled"].get()]
 
     def fill_dummy_data(self) -> None:
-        """Populate all fields with dummy data for dry-run testing."""
         from auto_applier.config import RESUMES_DIR
 
         dummy_resume = RESUMES_DIR / "dummy_resume.docx"
         if not dummy_resume.exists():
             self._create_dummy_resume(dummy_resume)
 
-        # Enable LinkedIn only for dummy
         self.data["linkedin_enabled"].set(True)
         self.data["linkedin_email"].set("jane.doe@example.com")
         self.data["linkedin_password"].set("DummyPassword123!")
-
         self.data["resume_path"].set(str(dummy_resume))
         self.data["first_name"].set("Jane")
         self.data["last_name"].set("Doe")
@@ -238,24 +238,15 @@ class WizardApp:
 
     @staticmethod
     def _create_dummy_resume(path) -> None:
-        """Create a minimal dummy DOCX resume for testing."""
         content = (
-            "Jane Doe\n"
-            "Software Engineer\n"
+            "Jane Doe\nSoftware Engineer\n"
             "jane.doe@example.com | +1 (555) 123-4567 | San Francisco, CA\n"
-            "linkedin.com/in/janedoe | janedoe.dev\n\n"
-            "SKILLS\n"
+            "linkedin.com/in/janedoe | janedoe.dev\n\nSKILLS\n"
             "Python, JavaScript, TypeScript, React, Node.js, Django, Flask,\n"
-            "PostgreSQL, MongoDB, Docker, AWS, Git, Agile, CI/CD\n\n"
-            "EXPERIENCE\n"
+            "PostgreSQL, MongoDB, Docker, AWS, Git, Agile, CI/CD\n\nEXPERIENCE\n"
             "Senior Software Engineer — Acme Corp (2020-Present)\n"
-            "- Built scalable REST APIs serving 1M+ requests/day\n"
-            "- Led migration from monolith to microservices architecture\n\n"
-            "Software Engineer — StartupCo (2017-2020)\n"
-            "- Developed full-stack web applications with React and Django\n"
-            "- Implemented automated testing pipeline reducing bugs by 40%\n\n"
-            "EDUCATION\n"
-            "B.S. Computer Science — University of California, Berkeley (2017)\n"
+            "- Built scalable REST APIs serving 1M+ requests/day\n\n"
+            "EDUCATION\nB.S. Computer Science — UC Berkeley (2017)\n"
         )
         from docx import Document
         doc = Document()
