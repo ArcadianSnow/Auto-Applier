@@ -31,18 +31,10 @@ class BrowserSession:
 
         # Apply stealth patches to avoid detection
         try:
-            from playwright_stealth import stealth_async
+            from playwright_stealth import Stealth
 
-            for page in self._context.pages:
-                await stealth_async(page)
-
-            # Apply stealth to any new pages that open
-            self._context.on(
-                "page",
-                lambda page: page.evaluate("void(0)").then(
-                    lambda _: None
-                ),
-            )
+            stealth = Stealth()
+            await stealth.apply_stealth_async(self._context)
         except ImportError:
             pass  # playwright-stealth not installed, continue without it
 

@@ -9,6 +9,11 @@ data/*.json
 # Resumes (user uploads)
 data/resumes/
 
+# PyInstaller
+dist/
+build/
+*.spec
+
 # Python
 __pycache__/
 *.py[cod]

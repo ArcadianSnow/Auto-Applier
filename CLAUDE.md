@@ -4,18 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Auto Applier** is a Python CLI tool that automates job searching and applying on LinkedIn. It collects the user's credentials and resume, searches for jobs matching specified titles/keywords, and auto-applies via LinkedIn Easy Apply using browser automation. It also tracks skills gaps (questions/fields jobs asked that the resume didn't cover) and helps users improve their resume over time.
+**Auto Applier** is a Python desktop app that automates job searching and applying on LinkedIn. It features a GUI setup wizard (tkinter) that walks users through configuration, then uses Playwright browser automation to search for jobs and auto-apply via Easy Apply. It also tracks skills gaps (questions/fields jobs asked that the resume didn't cover) and helps users improve their resume over time.
 
 This is a personal/small-group project (shared repo among friends). **Everything must run locally and cost nothing.** No paid APIs, no cloud services, no external databases.
 
 ## Tech Stack
 
-- **Python 3.11+** with `click` for CLI
-- **Playwright** with `playwright-stealth` for browser automation (not Selenium — less detectable)
-- **CSV files** for all data storage (openable in Excel, no database setup required)
-- **JSON** for user config (`data/user_config.json`)
-- **pdfplumber** / **python-docx** for resume parsing
-- **python-dotenv** for credential management
+- **Python 3.11+** — core language
+- **tkinter/ttk** — GUI wizard (built into Python, zero dependencies)
+- **click** — CLI interface (alternative to the GUI)
+- **Playwright** with `playwright-stealth` — browser automation (not Selenium — less detectable)
+- **CSV files** — all data storage (openable in Excel, no database setup)
+- **JSON** — user config (`data/user_config.json`)
+- **pdfplumber** / **python-docx** — resume parsing
+- **python-dotenv** — credential management
+- **PyInstaller** — builds standalone `.exe` (dev dependency)
 
 ## Build & Run Commands
 
@@ -26,13 +29,21 @@ pip install -e .
 # Install Playwright browsers (required first time)
 playwright install chromium
 
-# Run the CLI
-python -m auto_applier configure      # Set up credentials + resume
-python -m auto_applier run            # Search and apply to jobs
-python -m auto_applier run --dry-run  # Walk through flow without submitting
-python -m auto_applier run --limit 5  # Cap applications this session
-python -m auto_applier status         # Show applied jobs
-python -m auto_applier gaps           # Show skills gap report
+# Launch the GUI wizard (default)
+python run.py
+python -m auto_applier
+
+# CLI mode (alternative)
+python -m auto_applier --cli configure
+python -m auto_applier --cli run
+python -m auto_applier --cli run --dry-run
+python -m auto_applier --cli status
+python -m auto_applier --cli gaps
+
+# Build standalone .exe
+pip install pyinstaller
+python build.py
+# Output: dist/AutoApplier.exe
 ```
 
 ## Architecture
@@ -41,8 +52,20 @@ python -m auto_applier gaps           # Show skills gap report
 
 ```
 auto_applier/
-  main.py              # CLI entry point (click commands), orchestrates the workflow
+  __main__.py          # Entry point — launches GUI by default, CLI with --cli flag
+  main.py              # CLI commands (click), orchestrates the application workflow
   config.py            # Loads .env, app settings, path constants
+
+  gui/                 # Desktop wizard UI (tkinter)
+    wizard.py          # Main window, step controller, shared state
+    styles.py          # ttk theme and style definitions
+    steps/             # One frame class per wizard step
+      welcome.py       # Step 1: intro + "Create Dummy Data" button
+      credentials.py   # Step 2: LinkedIn email/password
+      resume.py        # Step 3: file picker for PDF/DOCX
+      personal.py      # Step 4: name, phone, city, LinkedIn URL
+      preferences.py   # Step 5: job keywords + location
+      ready.py         # Step 6: config summary + Run / Dry Run / Exit
 
   browser/             # LinkedIn-specific — knows about Playwright and DOM
     session.py         # Browser lifecycle, persistent context (reuses browser_profile/)
@@ -64,7 +87,21 @@ auto_applier/
     report.py          # Generate skills gap and status reports for CLI
 ```
 
-**Key separation:** `browser/` is LinkedIn-specific. `storage/`, `analysis/`, and `resume/` are platform-agnostic. Adding support for Indeed/Glassdoor later means adding new browser modules without touching the rest.
+**Key separations:**
+- `gui/` is the desktop wizard — knows about tkinter, nothing else
+- `browser/` is LinkedIn-specific — knows about Playwright and DOM selectors
+- `storage/`, `analysis/`, and `resume/` are platform-agnostic
+- Adding Indeed/Glassdoor later means adding new browser modules without touching the rest
+
+### GUI Wizard Architecture
+
+The wizard (`gui/wizard.py`) manages:
+- **Shared state** via `dict[str, tk.Variable]` — all steps read/write the same StringVars
+- **Step frames** — all 6 built at startup, swapped via `tkraise()` (no destroy/recreate)
+- **Navigation** — Back/Next in footer (hidden on Welcome and Ready steps)
+- **Dummy data** — fills all fields with realistic fake values and jumps to the summary step
+- **Config save** — `ready.py` writes `.env` + `user_config.json` + copies resume to `data/resumes/`
+- **Launch** — spawns `python -m auto_applier --cli run` in a new console window
 
 ### Data Storage (CSV files in `data/`)
 
@@ -116,6 +153,7 @@ The `gaps` command aggregates these by frequency: "15 jobs asked about AWS certi
 - `data/user_config.json` — Personal info and preferences
 - `data/browser_profile/` — Persistent Playwright browser context
 - `data/resumes/` — Uploaded resume files
+- `dist/`, `build/`, `*.spec` — PyInstaller build artifacts
 
 ## Design Principles
 
@@ -130,9 +168,8 @@ LinkedIn prohibits automated access. The `--dry-run` flag exists for testing wit
 
 ## Evolution Roadmap
 
-The MVP is CLI + LinkedIn + keyword-based gap matching. Planned phases:
+The MVP is GUI wizard + LinkedIn + keyword-based gap matching. Planned phases:
 - Better error recovery and `--dry-run` polish
 - Local LLM-powered gap analysis (e.g., Ollama — replacing keyword matching, still free)
-- Web UI (FastAPI + HTMX) if CLI proves limiting
 - Indeed/Glassdoor support (new `browser_*` modules)
 - Resume auto-rewriting based on accumulated gap data
