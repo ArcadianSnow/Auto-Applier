@@ -16,8 +16,28 @@ class PersonalInfoStep(tk.Frame):
         self.wizard = wizard
         self.errors: dict[str, tk.Label] = {}
 
-        content = tk.Frame(self, bg="#F5F7FA")
-        content.pack(padx=40, pady=24, fill="both")
+        # Scrollable canvas
+        canvas = tk.Canvas(self, bg="#F5F7FA", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        self.scroll_frame = tk.Frame(canvas, bg="#F5F7FA")
+
+        self.scroll_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw", width=600)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True, padx=(40, 0), pady=16)
+        scrollbar.pack(side="right", fill="y", pady=16)
+
+        # Mousewheel scrolling
+        def _on_mousewheel(event):
+            canvas.yview_scroll(-1 * (event.delta // 120), "units")
+
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        content = self.scroll_frame
 
         tk.Label(
             content, text="Personal Information",
@@ -27,11 +47,11 @@ class PersonalInfoStep(tk.Frame):
         tk.Label(
             content, text="Used to fill out application forms automatically.",
             font=("Segoe UI", 10), fg="#64748B", bg="#F5F7FA",
-        ).pack(anchor="w", pady=(0, 18))
+        ).pack(anchor="w", pady=(0, 14))
 
         # Name row (two columns)
         name_row = tk.Frame(content, bg="#F5F7FA")
-        name_row.pack(fill="x", pady=(0, 4))
+        name_row.pack(fill="x", pady=(0, 2))
 
         left = tk.Frame(name_row, bg="#F5F7FA")
         left.pack(side="left", fill="x", expand=True, padx=(0, 8))
@@ -58,7 +78,7 @@ class PersonalInfoStep(tk.Frame):
         tk.Label(
             parent, text=label,
             font=("Segoe UI", 10, "bold"), fg="#374151", bg="#F5F7FA",
-        ).pack(anchor="w", pady=(6, 2))
+        ).pack(anchor="w", pady=(4, 2))
 
         entry = ttk.Entry(parent, textvariable=self.wizard.data[key], width=width)
         entry.pack(anchor="w")
