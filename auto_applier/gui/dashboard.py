@@ -1,357 +1,556 @@
-"""Live dashboard — Animal Crossing 'Nook Miles' inspired theme."""
-
-from __future__ import annotations
-
+"""Live dashboard -- real-time monitoring during application runs."""
 import asyncio
 import threading
+import time
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
 
 from auto_applier.gui.styles import (
-    SANDY_SHORE, CREAM, DRIFTWOOD, WARM_WHITE, MORNING_SKY,
-    SOIL_BROWN, BARK_BROWN, DRIFTWOOD_GRAY, FOGGY,
-    NOOK_GREEN, NOOK_GREEN_DARK, NOOK_TAN, LEAF_GOLD,
-    BLUEBELL, PEACH, LAVENDER, ERROR_RED, ERROR_DOT,
-    BORDER_LIGHT, BORDER_MED, INFO_BLUE, WARNING_GOLD,
-    HEADING_FONT, BODY_FONT, MONO_FONT,
+    BG, BG_CARD, PRIMARY, PRIMARY_LIGHT, ACCENT, DANGER, WARNING,
+    TEXT, TEXT_LIGHT, TEXT_MUTED, BORDER,
+    STATUS_IDLE, STATUS_RUNNING, STATUS_SUCCESS, STATUS_ERROR,
+    FONT_HEADING, FONT_SUBHEADING, FONT_BODY, FONT_SMALL, FONT_MONO,
+    FONT_BUTTON,
+    PAD_X, PAD_Y,
+)
+from auto_applier.orchestrator.events import (
+    EventEmitter,
+    RUN_STARTED,
+    RESUME_PARSED,
+    PLATFORM_STARTED,
+    PLATFORM_LOGIN_NEEDED,
+    PLATFORM_LOGIN_FAILED,
+    SEARCH_STARTED,
+    JOBS_FOUND,
+    JOB_SCORED,
+    USER_REVIEW_NEEDED,
+    APPLICATION_STARTED,
+    APPLICATION_COMPLETE,
+    PLATFORM_ERROR,
+    PLATFORM_FINISHED,
+    EVOLUTION_TRIGGERS,
+    RUN_FINISHED,
+    CAPTCHA_DETECTED,
 )
 
 
-class DashboardWindow:
-    """Real-time monitoring dashboard — warm AC theme."""
+class DashboardWindow(tk.Toplevel):
+    """Live monitoring window displayed during application runs."""
 
-    PLATFORM_NAMES = {
-        "linkedin": "LinkedIn", "indeed": "Indeed",
-        "dice": "Dice", "ziprecruiter": "ZipRecruiter",
-    }
-
-    def __init__(self, root: tk.Tk, enabled_platforms: list[str], dry_run: bool = False) -> None:
-        self.window = tk.Toplevel(root)
-        self.window.title("Auto Applier — Dashboard")
-        self.window.geometry("820x640")
-        self.window.configure(bg=SANDY_SHORE)
-        self.window.resizable(False, False)
-
-        self.dry_run = dry_run
-        self.enabled_platforms = enabled_platforms
+    def __init__(self, parent: tk.Tk, config: dict) -> None:
+        super().__init__(parent)
+        self.parent_wizard = parent
+        self.config = config
+        self.events = EventEmitter()
         self._running = False
-        self._thread: threading.Thread | None = None
+        self._start_time: float | None = None
+        self._timer_id: str | None = None
 
-        self.stats = {"applied": 0, "failed": 0, "skipped": 0, "gaps": 0, "total_found": 0}
-        self.platform_stats: dict[str, dict] = {}
-        for key in enabled_platforms:
-            self.platform_stats[key] = {"status": "waiting", "applied": 0, "failed": 0, "skipped": 0}
+        # Stats
+        self._applied = 0
+        self._failed = 0
+        self._skipped = 0
+        self._score_sum = 0
+        self._score_count = 0
+        self._gaps_found = 0
 
+        # Platform states
+        self._platform_cards: dict[str, dict] = {}
+
+        self._setup_window()
         self._build_ui()
+        self._subscribe_events()
+
+    # ------------------------------------------------------------------
+    # Window setup
+    # ------------------------------------------------------------------
+
+    def _setup_window(self) -> None:
+        self.title("Auto Applier -- Running")
+        self.configure(bg=BG)
+        self.geometry("900x650")
+        self.resizable(True, True)
+        self.minsize(700, 500)
+
+        # Center on screen
+        self.update_idletasks()
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        x = (sw - 900) // 2
+        y = (sh - 650) // 2
+        self.geometry(f"+{x}+{y}")
+
+        # Handle close
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        w = self.window
+        # --- Header ---
+        header = tk.Frame(self, bg=BG_CARD, height=50)
+        header.pack(fill="x")
+        header.pack_propagate(False)
 
-        # ── Accent strip ─────────────────────────────────────────
-        accent = tk.Frame(w, bg=DRIFTWOOD, height=4)
-        accent.pack(fill="x")
-        accent.pack_propagate(False)
-        for i, color in enumerate([NOOK_GREEN, BLUEBELL, LEAF_GOLD]):
-            tk.Frame(accent, bg=color, height=4).place(relx=i/3, rely=0, relwidth=1/3, relheight=1)
+        self._title_label = tk.Label(
+            header, text="Auto Applier -- Running",
+            font=FONT_HEADING, fg=PRIMARY, bg=BG_CARD,
+        )
+        self._title_label.pack(side="left", padx=PAD_X, pady=8)
 
-        # ── Top bar ──────────────────────────────────────────────
-        top = tk.Frame(w, bg=DRIFTWOOD, height=50)
-        top.pack(fill="x")
-        top.pack_propagate(False)
+        self._timer_label = tk.Label(
+            header, text="00:00", font=FONT_MONO,
+            fg=TEXT_LIGHT, bg=BG_CARD,
+        )
+        self._timer_label.pack(side="right", padx=PAD_X, pady=8)
 
-        mode_text = "DRY RUN" if self.dry_run else "LIVE"
-        mode_color = BLUEBELL if self.dry_run else NOOK_GREEN
+        dry_run = self.config.get("dry_run", False)
+        if dry_run:
+            tk.Label(
+                header, text="DRY RUN", font=FONT_BUTTON,
+                fg=WARNING, bg=BG_CARD,
+            ).pack(side="right", padx=(0, 12))
 
-        tk.Label(top, text="🍃 Auto Applier", font=(HEADING_FONT, 14, "bold"), fg=SOIL_BROWN, bg=DRIFTWOOD).pack(side="left", padx=16, pady=10)
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
-        tk.Label(top, text=mode_text, font=(HEADING_FONT, 9, "bold"), fg=WARM_WHITE, bg=mode_color, padx=8, pady=2).pack(side="left", padx=(0, 16), pady=14)
+        # --- Stats row ---
+        stats_frame = tk.Frame(self, bg=BG)
+        stats_frame.pack(fill="x", padx=PAD_X, pady=(12, 8))
 
-        self.elapsed_label = tk.Label(top, text="Elapsed: 0:00", font=(MONO_FONT, 10), fg=DRIFTWOOD_GRAY, bg=DRIFTWOOD)
-        self.elapsed_label.pack(side="right", padx=16, pady=14)
-
-        self.status_label = tk.Label(top, text="Initializing...", font=(BODY_FONT, 10), fg=DRIFTWOOD_GRAY, bg=DRIFTWOOD)
-        self.status_label.pack(side="right", padx=16, pady=14)
-
-        tk.Frame(w, bg=NOOK_TAN, height=2).pack(fill="x")
-
-        # ── Stats row ────────────────────────────────────────────
-        stats_frame = tk.Frame(w, bg=SANDY_SHORE)
-        stats_frame.pack(fill="x", padx=16, pady=(12, 8))
-
-        self.stat_labels: dict[str, tk.Label] = {}
-        stat_defs = [
-            ("applied", "Applied", NOOK_GREEN),
-            ("failed", "Failed", ERROR_DOT),
-            ("skipped", "Skipped", LEAF_GOLD),
-            ("gaps", "Gaps Found", LAVENDER),
-            ("total_found", "Jobs Found", BLUEBELL),
+        self._stat_labels: dict[str, tk.Label] = {}
+        stats = [
+            ("Applied", "applied", ACCENT),
+            ("Failed", "failed", DANGER),
+            ("Skipped", "skipped", TEXT_MUTED),
+            ("Avg Score", "score_avg", PRIMARY),
+            ("Gaps Found", "gaps", WARNING),
         ]
 
-        for key, label, color in stat_defs:
-            card = tk.Frame(stats_frame, bg=CREAM, highlightbackground=BORDER_LIGHT, highlightthickness=1, padx=14, pady=8)
-            card.pack(side="left", fill="x", expand=True, padx=4)
-            val = tk.Label(card, text="0", font=(HEADING_FONT, 20, "bold"), fg=color, bg=CREAM)
-            val.pack()
-            tk.Label(card, text=label, font=(BODY_FONT, 9), fg=DRIFTWOOD_GRAY, bg=CREAM).pack()
-            self.stat_labels[key] = val
+        for label_text, key, color in stats:
+            col = tk.Frame(stats_frame, bg=BG_CARD, highlightbackground=BORDER,
+                           highlightthickness=1, padx=16, pady=8)
+            col.pack(side="left", expand=True, fill="x", padx=4)
 
-        # ── Platform cards ───────────────────────────────────────
-        plat_frame = tk.Frame(w, bg=SANDY_SHORE)
-        plat_frame.pack(fill="x", padx=16, pady=(4, 8))
+            tk.Label(
+                col, text="0", font=("Segoe UI", 20, "bold"),
+                fg=color, bg=BG_CARD,
+            ).pack()
+            self._stat_labels[key] = col.winfo_children()[0]  # the number label
 
-        self.platform_cards: dict[str, dict] = {}
-        for key in self.enabled_platforms:
-            name = self.PLATFORM_NAMES.get(key, key)
-            card = tk.Frame(plat_frame, bg=CREAM, highlightbackground=BORDER_LIGHT, highlightthickness=1, padx=12, pady=8)
-            card.pack(side="left", fill="x", expand=True, padx=4)
+            tk.Label(
+                col, text=label_text, font=FONT_SMALL,
+                fg=TEXT_LIGHT, bg=BG_CARD,
+            ).pack()
 
-            header = tk.Frame(card, bg=CREAM)
-            header.pack(fill="x")
-            dot = tk.Canvas(header, width=10, height=10, bg=CREAM, highlightthickness=0)
-            dot.create_oval(1, 1, 9, 9, fill=FOGGY, outline="", tags="dot")
+        # --- Platform cards ---
+        platforms_frame = tk.Frame(self, bg=BG)
+        platforms_frame.pack(fill="x", padx=PAD_X, pady=(4, 8))
+
+        enabled = self.config.get("enabled_platforms", [])
+        for key in enabled:
+            card = tk.Frame(
+                platforms_frame, bg=BG_CARD, highlightbackground=BORDER,
+                highlightthickness=1, padx=12, pady=8,
+            )
+            card.pack(side="left", expand=True, fill="x", padx=4)
+
+            dot = tk.Canvas(
+                card, width=10, height=10, bg=BG_CARD,
+                highlightthickness=0, bd=0,
+            )
             dot.pack(side="left", padx=(0, 6))
-            tk.Label(header, text=name, font=(HEADING_FONT, 10, "bold"), fg=SOIL_BROWN, bg=CREAM).pack(side="left")
+            dot.create_oval(1, 1, 9, 9, fill=STATUS_IDLE, outline=STATUS_IDLE)
 
-            status_text = tk.Label(card, text="Waiting", font=(BODY_FONT, 8), fg=FOGGY, bg=CREAM)
-            status_text.pack(anchor="w", pady=(4, 2))
-            counts_text = tk.Label(card, text="✓ 0   ✗ 0   ⊘ 0", font=(MONO_FONT, 8), fg=DRIFTWOOD_GRAY, bg=CREAM)
-            counts_text.pack(anchor="w")
+            name_lbl = tk.Label(
+                card, text=key.title(), font=FONT_BODY,
+                fg=TEXT, bg=BG_CARD,
+            )
+            name_lbl.pack(side="left")
 
-            self.platform_cards[key] = {"dot": dot, "status": status_text, "counts": counts_text}
+            status_lbl = tk.Label(
+                card, text="Waiting", font=FONT_SMALL,
+                fg=TEXT_MUTED, bg=BG_CARD,
+            )
+            status_lbl.pack(side="right")
 
-        # ── Activity log ─────────────────────────────────────────
-        tk.Label(w, text="Activity Log", font=(HEADING_FONT, 10, "bold"), fg=BARK_BROWN, bg=SANDY_SHORE, anchor="w").pack(fill="x", padx=20, pady=(4, 2))
+            self._platform_cards[key] = {
+                "dot": dot,
+                "name": name_lbl,
+                "status": status_lbl,
+            }
 
-        log_frame = tk.Frame(w, bg=CREAM, highlightbackground=BORDER_LIGHT, highlightthickness=1)
-        log_frame.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+        # --- Activity log ---
+        log_frame = tk.Frame(self, bg=BG)
+        log_frame.pack(fill="both", expand=True, padx=PAD_X, pady=(4, 8))
 
-        self.log_text = tk.Text(
-            log_frame, bg=CREAM, fg=BARK_BROWN, font=(MONO_FONT, 9),
-            wrap="word", borderwidth=0, highlightthickness=0,
-            insertbackground=BARK_BROWN, state="disabled", padx=12, pady=8,
+        tk.Label(
+            log_frame, text="Activity Log", font=FONT_SUBHEADING,
+            fg=PRIMARY, bg=BG,
+        ).pack(anchor="w", pady=(0, 4))
+
+        text_frame = tk.Frame(log_frame, bg=BG)
+        text_frame.pack(fill="both", expand=True)
+
+        scrollbar = ttk.Scrollbar(text_frame, orient="vertical")
+        self._log_text = tk.Text(
+            text_frame,
+            font=FONT_MONO,
+            bg=BG_CARD,
+            fg=TEXT,
+            wrap="word",
+            state="disabled",
+            height=12,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=BORDER,
+            yscrollcommand=scrollbar.set,
         )
-        scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=scrollbar.set)
-        self.log_text.pack(side="left", fill="both", expand=True)
+        scrollbar.configure(command=self._log_text.yview)
+        self._log_text.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        self.log_text.tag_configure("time", foreground=FOGGY)
-        self.log_text.tag_configure("success", foreground=NOOK_GREEN_DARK)
-        self.log_text.tag_configure("error", foreground=ERROR_RED)
-        self.log_text.tag_configure("warning", foreground=WARNING_GOLD)
-        self.log_text.tag_configure("info", foreground=INFO_BLUE)
-        self.log_text.tag_configure("platform", foreground="#8B5DAD", font=(MONO_FONT, 9, "bold"))
+        # Configure text tags for colored log entries
+        self._log_text.tag_configure("info", foreground=TEXT)
+        self._log_text.tag_configure("success", foreground=ACCENT)
+        self._log_text.tag_configure("warning", foreground=WARNING)
+        self._log_text.tag_configure("error", foreground=DANGER)
+        self._log_text.tag_configure("score", foreground=PRIMARY)
+        self._log_text.tag_configure("timestamp", foreground=TEXT_MUTED)
 
-        # ── Bottom bar ───────────────────────────────────────────
-        tk.Frame(w, bg=NOOK_TAN, height=1).pack(fill="x")
-        bottom = tk.Frame(w, bg=DRIFTWOOD, height=40)
-        bottom.pack(fill="x")
-        bottom.pack_propagate(False)
+        # --- Footer buttons ---
+        footer = tk.Frame(self, bg=BG)
+        footer.pack(fill="x", padx=PAD_X, pady=(0, 12))
 
-        self.stop_btn = ttk.Button(bottom, text="Stop", style="Danger.TButton", command=self._on_stop)
-        self.stop_btn.pack(side="right", padx=16, pady=6)
-        self.close_btn = ttk.Button(bottom, text="Close", style="Ghost.TButton", command=self.window.destroy)
-        self.close_btn.pack(side="right", padx=(0, 8), pady=6)
-        self.close_btn.pack_forget()
+        self._stop_btn = ttk.Button(
+            footer, text="Stop", style="Danger.TButton",
+            command=self._on_stop,
+        )
+        self._stop_btn.pack(side="left")
 
-    # ── Public API ───────────────────────────────────────────────
+        self._close_btn = ttk.Button(
+            footer, text="Close",
+            command=self._on_close, state="disabled",
+        )
+        self._close_btn.pack(side="right")
+
+    # ------------------------------------------------------------------
+    # Event subscriptions
+    # ------------------------------------------------------------------
+
+    def _subscribe_events(self) -> None:
+        """Wire up event handlers."""
+        self.events.on(RUN_STARTED, self._on_run_started)
+        self.events.on(PLATFORM_STARTED, self._on_platform_started)
+        self.events.on(PLATFORM_LOGIN_NEEDED, self._on_platform_login)
+        self.events.on(PLATFORM_LOGIN_FAILED, self._on_platform_login_failed)
+        self.events.on(SEARCH_STARTED, self._on_search_started)
+        self.events.on(JOBS_FOUND, self._on_jobs_found)
+        self.events.on(JOB_SCORED, self._on_job_scored)
+        self.events.on(USER_REVIEW_NEEDED, self._on_user_review)
+        self.events.on(APPLICATION_STARTED, self._on_application_started)
+        self.events.on(APPLICATION_COMPLETE, self._on_application_complete)
+        self.events.on(PLATFORM_ERROR, self._on_platform_error)
+        self.events.on(PLATFORM_FINISHED, self._on_platform_finished)
+        self.events.on(CAPTCHA_DETECTED, self._on_captcha)
+        self.events.on(EVOLUTION_TRIGGERS, self._on_evolution_triggers)
+        self.events.on(RUN_FINISHED, self._on_run_finished_event)
+
+    # ------------------------------------------------------------------
+    # Event handlers (called from worker thread -- must use self.after)
+    # ------------------------------------------------------------------
+
+    def _on_run_started(self, **kw):
+        dry = kw.get("dry_run", False)
+        mode = "DRY RUN" if dry else "LIVE"
+        self.after(0, lambda: self.log(f"Run started ({mode})", "info"))
+
+    def _on_platform_started(self, **kw):
+        key = kw.get("platform", "")
+        self.after(0, lambda: self._update_platform(key, "Running", STATUS_RUNNING))
+        self.after(0, lambda: self.log(f"[{key.title()}] Starting...", "info"))
+
+    def _on_platform_login(self, **kw):
+        key = kw.get("platform", "")
+        self.after(0, lambda: self.log(
+            f"[{key.title()}] Checking login -- please log in if browser opens.", "warning"
+        ))
+
+    def _on_platform_login_failed(self, **kw):
+        key = kw.get("platform", "")
+        self.after(0, lambda: self._update_platform(key, "Login failed", STATUS_ERROR))
+        self.after(0, lambda: self.log(f"[{key.title()}] Login failed -- skipping.", "error"))
+
+    def _on_search_started(self, **kw):
+        key = kw.get("platform", "")
+        keyword = kw.get("keyword", "")
+        self.after(0, lambda: self.log(
+            f"[{key.title()}] Searching: {keyword}", "info"
+        ))
+
+    def _on_jobs_found(self, **kw):
+        key = kw.get("platform", "")
+        count = kw.get("count", 0)
+        keyword = kw.get("keyword", "")
+        self.after(0, lambda: self.log(
+            f"[{key.title()}] Found {count} jobs for '{keyword}'", "success"
+        ))
+
+    def _on_job_scored(self, **kw):
+        job = kw.get("job")
+        score = kw.get("score")
+        if job and score:
+            title = getattr(job, "title", "Unknown")
+            s = getattr(score, "score", 0)
+            decision = getattr(score, "decision", None)
+            d_name = decision.value if decision else "?"
+            self.after(0, lambda: self.log(
+                f"  Scored: {title} -- {s}/10 ({d_name})", "score"
+            ))
+            self.after(0, lambda: self._update_score(s))
+
+    def _on_user_review(self, **kw):
+        """Open the review panel for the user to decide."""
+        job = kw.get("job")
+        score = kw.get("score")
+        self.after(0, lambda: self._open_review_panel(job, score))
+
+    def _on_application_started(self, **kw):
+        job = kw.get("job")
+        resume = kw.get("resume", "")
+        title = getattr(job, "title", "Unknown") if job else "Unknown"
+        self.after(0, lambda: self.log(
+            f"  Applying: {title} (resume: {resume})", "info"
+        ))
+
+    def _on_application_complete(self, **kw):
+        app = kw.get("application")
+        job = kw.get("job")
+        if app:
+            status = getattr(app, "status", "unknown")
+            title = getattr(job, "title", "Unknown") if job else "Unknown"
+            if status in ("applied", "dry_run"):
+                self.after(0, lambda: self._increment_applied())
+                self.after(0, lambda: self.log(
+                    f"  Applied: {title} ({status})", "success"
+                ))
+            else:
+                self.after(0, lambda: self._increment_failed())
+                self.after(0, lambda: self.log(
+                    f"  Failed: {title} ({status})", "error"
+                ))
+
+    def _on_platform_error(self, **kw):
+        key = kw.get("platform", "")
+        error = kw.get("error", "Unknown error")
+        self.after(0, lambda: self._update_platform(key, "Error", STATUS_ERROR))
+        self.after(0, lambda: self.log(f"[{key.title()}] Error: {error}", "error"))
+
+    def _on_platform_finished(self, **kw):
+        key = kw.get("platform", "")
+        self.after(0, lambda: self._update_platform(key, "Done", STATUS_SUCCESS))
+        self.after(0, lambda: self.log(f"[{key.title()}] Finished.", "info"))
+
+    def _on_captcha(self, **kw):
+        key = kw.get("platform", "")
+        self.after(0, lambda: self.log(
+            f"[{key.title()}] CAPTCHA detected -- stopping platform.", "error"
+        ))
+
+    def _on_evolution_triggers(self, **kw):
+        triggers = kw.get("triggers", [])
+        count = len(triggers) if isinstance(triggers, list) else 0
+        self._gaps_found += count
+        self.after(0, lambda: self._update_stat("gaps", str(self._gaps_found)))
+        self.after(0, lambda: self.log(
+            f"Evolution: {count} skill gap trigger(s) detected.", "warning"
+        ))
+
+    def _on_run_finished_event(self, **kw):
+        reason = kw.get("reason", "Complete")
+        applied = kw.get("applied", self._applied)
+        self.after(0, lambda: self.log(
+            f"Run finished: {reason} ({applied} applied)", "info"
+        ))
+        self.after(0, self._on_run_finished)
+
+    # ------------------------------------------------------------------
+    # UI update helpers (must be called on main thread)
+    # ------------------------------------------------------------------
 
     def log(self, message: str, tag: str = "info") -> None:
-        def _u():
-            self.log_text.configure(state="normal")
-            ts = datetime.now().strftime("%H:%M:%S")
-            self.log_text.insert("end", f"[{ts}] ", "time")
-            self.log_text.insert("end", f"{message}\n", tag)
-            self.log_text.see("end")
-            self.log_text.configure(state="disabled")
-        self.window.after(0, _u)
+        """Append a timestamped message to the activity log."""
+        self._log_text.configure(state="normal")
+        ts = datetime.now().strftime("%H:%M:%S")
+        self._log_text.insert("end", f"[{ts}] ", "timestamp")
+        self._log_text.insert("end", f"{message}\n", tag)
+        self._log_text.see("end")
+        self._log_text.configure(state="disabled")
 
-    def set_status(self, text: str) -> None:
-        self.window.after(0, lambda: self.status_label.configure(text=text))
+    def _update_platform(self, key: str, status: str, color: str) -> None:
+        """Update a platform card's status dot and label."""
+        card = self._platform_cards.get(key)
+        if not card:
+            return
+        dot: tk.Canvas = card["dot"]
+        dot.delete("all")
+        dot.create_oval(1, 1, 9, 9, fill=color, outline=color)
+        card["status"].configure(text=status, fg=color)
 
-    def update_platform(self, key: str, status: str) -> None:
-        status_map = {
-            "waiting": (FOGGY, "Waiting"),
-            "logging_in": (LEAF_GOLD, "Logging in..."),
-            "searching": (BLUEBELL, "Searching..."),
-            "applying": (LAVENDER, "Applying..."),
-            "done": (NOOK_GREEN, "Done"),
-            "error": (ERROR_DOT, "Error"),
-            "skipped": (FOGGY, "Skipped"),
-        }
-        color, label = status_map.get(status, (FOGGY, status))
+    def _update_stat(self, key: str, value: str) -> None:
+        """Update a stat counter label."""
+        lbl = self._stat_labels.get(key)
+        if lbl:
+            lbl.configure(text=value)
 
-        def _u():
-            if key not in self.platform_cards:
-                return
-            c = self.platform_cards[key]
-            c["dot"].delete("dot")
-            c["dot"].create_oval(1, 1, 9, 9, fill=color, outline="", tags="dot")
-            c["status"].configure(text=label, fg=color)
-            self._refresh_platform_counts(key)
-        self.platform_stats[key]["status"] = status
-        self.window.after(0, _u)
+    def _update_score(self, score: int) -> None:
+        """Update the running average score."""
+        self._score_sum += score
+        self._score_count += 1
+        avg = self._score_sum / self._score_count
+        self._update_stat("score_avg", f"{avg:.1f}")
 
-    def record_application(self, platform_key: str, status: str, gaps_count: int = 0) -> None:
-        p = self.platform_stats[platform_key]
-        if status in ("applied", "dry_run"):
-            self.stats["applied"] += 1; p["applied"] += 1
-        elif status == "failed":
-            self.stats["failed"] += 1; p["failed"] += 1
-        elif status == "skipped":
-            self.stats["skipped"] += 1; p["skipped"] += 1
-        self.stats["gaps"] += gaps_count
-        self.window.after(0, self._refresh_stats)
-        self.window.after(0, lambda: self._refresh_platform_counts(platform_key))
+    def _increment_applied(self) -> None:
+        self._applied += 1
+        self._update_stat("applied", str(self._applied))
 
-    def add_jobs_found(self, count: int) -> None:
-        self.stats["total_found"] += count
-        self.window.after(0, self._refresh_stats)
+    def _increment_failed(self) -> None:
+        self._failed += 1
+        self._update_stat("failed", str(self._failed))
 
-    def mark_finished(self) -> None:
-        self._running = False
-        self.set_status("Finished")
-        self.log("Run complete.", "success")
-        def _u():
-            self.stop_btn.pack_forget()
-            self.close_btn.pack(side="right", padx=16, pady=6)
-        self.window.after(0, _u)
+    def _increment_skipped(self) -> None:
+        self._skipped += 1
+        self._update_stat("skipped", str(self._skipped))
 
-    def mark_error(self, error: str) -> None:
-        self._running = False
-        self.set_status("Error")
-        self.log(f"Error: {error}", "error")
-        def _u():
-            self.stop_btn.pack_forget()
-            self.close_btn.pack(side="right", padx=16, pady=6)
-        self.window.after(0, _u)
+    # ------------------------------------------------------------------
+    # Timer
+    # ------------------------------------------------------------------
 
-    # ── Run management ───────────────────────────────────────────
+    def _start_timer(self) -> None:
+        """Start the elapsed time display."""
+        self._start_time = time.monotonic()
+        self._tick()
+
+    def _tick(self) -> None:
+        """Update the timer label every second."""
+        if self._start_time is None:
+            return
+        elapsed = int(time.monotonic() - self._start_time)
+        minutes, seconds = divmod(elapsed, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            self._timer_label.configure(text=f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+        else:
+            self._timer_label.configure(text=f"{minutes:02d}:{seconds:02d}")
+        self._timer_id = self.after(1000, self._tick)
+
+    def _stop_timer(self) -> None:
+        """Stop the elapsed time display."""
+        if self._timer_id:
+            self.after_cancel(self._timer_id)
+            self._timer_id = None
+
+    # ------------------------------------------------------------------
+    # Run management
+    # ------------------------------------------------------------------
 
     def start_run(self, config: dict, dry_run: bool) -> None:
-        self._running = True
-        self._start_time = datetime.now()
-        self._tick_elapsed()
-        self.log(f"Starting {'dry run' if dry_run else 'live run'} on {len(self.enabled_platforms)} platform(s)...", "info")
-        self._thread = threading.Thread(target=self._run_in_thread, args=(config, dry_run), daemon=True)
-        self._thread.start()
-
-    def _run_in_thread(self, config, dry_run):
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self._run_applications(config, dry_run))
-        except Exception as e:
-            self.mark_error(str(e))
-        finally:
-            self.mark_finished()
-
-    async def _run_applications(self, config, dry_run):
-        from auto_applier.analysis.gap_tracker import record_gaps, record_skills_gaps_from_description
-        from auto_applier.browser.anti_detect import random_delay
-        from auto_applier.browser.platforms import PLATFORM_REGISTRY
-        from auto_applier.browser.session import BrowserSession
-        from auto_applier.config import MAX_APPLICATIONS_PER_DAY, MIN_DELAY_BETWEEN_APPLICATIONS, MAX_DELAY_BETWEEN_APPLICATIONS
-        from auto_applier.main import _build_platform_config
-        from auto_applier.resume.parser import extract_text
-        from auto_applier.resume.skills import extract_skills
-        from auto_applier.storage import repository
-        from auto_applier.storage.models import Application
-        from pathlib import Path
-
-        merged = _build_platform_config(config)
-        resume_text = extract_text(Path(config["resume_path"]))
-        resume_skills = extract_skills(resume_text)
-        self.log(f"Parsed resume: {len(resume_skills)} skills found.", "info")
-
-        todays_count = repository.get_todays_application_count()
-        remaining = MAX_APPLICATIONS_PER_DAY - todays_count
-        if remaining <= 0:
-            self.log(f"Daily limit reached ({todays_count}/{MAX_APPLICATIONS_PER_DAY}).", "warning")
-            return
-        self.log(f"Daily budget: {remaining} remaining ({todays_count} done today).", "info")
-        self.set_status("Running")
-
-        session = BrowserSession()
-        try:
-            context = await session.start()
-            applied_count = 0
-
-            for platform_key in self.enabled_platforms:
-                if not self._running or applied_count >= remaining:
-                    break
-                PlatformClass = PLATFORM_REGISTRY.get(platform_key)
-                if not PlatformClass:
-                    self.update_platform(platform_key, "error")
-                    continue
-
-                platform = PlatformClass(context, merged)
-
-                self.update_platform(platform_key, "logging_in")
-                self.log(f"Logging into {platform.name}...", "platform")
-                if not await platform.ensure_logged_in():
-                    self.update_platform(platform_key, "error")
-                    self.log(f"{platform.name}: login failed.", "error")
-                    continue
-                self.log(f"{platform.name}: logged in.", "success")
-
-                for keyword in config.get("search_keywords", []):
-                    if not self._running or applied_count >= remaining:
-                        break
-                    self.update_platform(platform_key, "searching")
-                    self.log(f'{platform.name}: searching for "{keyword}"...', "info")
-                    jobs = await platform.search_jobs(keyword, config.get("location", ""))
-                    self.add_jobs_found(len(jobs))
-                    self.log(f"{platform.name}: found {len(jobs)} listings.", "info")
-
-                    self.update_platform(platform_key, "applying")
-                    for job in jobs:
-                        if not self._running or applied_count >= remaining:
-                            break
-                        if repository.job_already_applied(job.job_id, platform.source_id):
-                            continue
-                        self.log(f"{platform.name}: {job.title} at {job.company}", "info")
-                        description = await platform.get_job_description(job)
-                        job.description = description
-                        repository.save(job)
-                        record_skills_gaps_from_description(job.job_id, description, resume_skills)
-                        success, form_gaps = await platform.apply_to_job(job, dry_run=dry_run)
-                        if form_gaps:
-                            record_gaps(job.job_id, form_gaps)
-                        status = "dry_run" if dry_run else ("applied" if success else "failed")
-                        repository.save(Application(job_id=job.job_id, status=status, source=platform.source_id, failure_reason="" if success else "Failed"))
-                        self.log(f"  → {status.upper()}", "success" if success else "error")
-                        self.record_application(platform_key, status, len(form_gaps))
-                        applied_count += 1
-                        self.set_status(f"Applied: {applied_count}/{remaining}")
-                        await random_delay(MIN_DELAY_BETWEEN_APPLICATIONS, MAX_DELAY_BETWEEN_APPLICATIONS)
-
-                self.update_platform(platform_key, "done")
-            self.log(f"Session complete: {applied_count} applications.", "success")
-        finally:
-            await session.close()
-
-    def _tick_elapsed(self):
-        if not hasattr(self, '_start_time'):
-            return
-        elapsed = datetime.now() - self._start_time
-        m, s = int(elapsed.total_seconds()) // 60, int(elapsed.total_seconds()) % 60
-        self.elapsed_label.configure(text=f"Elapsed: {m}:{s:02d}")
+        """Begin the application run in a background thread."""
         if self._running:
-            self.window.after(1000, self._tick_elapsed)
-
-    def _on_stop(self):
-        self._running = False
-        self.set_status("Stopping...")
-        self.log("Stop requested — finishing current action...", "warning")
-
-    def _refresh_stats(self):
-        for key, label in self.stat_labels.items():
-            label.configure(text=str(self.stats[key]))
-
-    def _refresh_platform_counts(self, key):
-        if key not in self.platform_cards:
             return
-        p = self.platform_stats[key]
-        self.platform_cards[key]["counts"].configure(text=f"✓ {p['applied']}   ✗ {p['failed']}   ⊘ {p['skipped']}")
+        self._running = True
+        config["dry_run"] = dry_run
+        self._start_timer()
+        self.log(f"Preparing to run ({'dry run' if dry_run else 'live'})...", "info")
+
+        thread = threading.Thread(
+            target=self._run_in_thread,
+            args=(config, dry_run),
+            daemon=True,
+        )
+        thread.start()
+
+    def _run_in_thread(self, config: dict, dry_run: bool) -> None:
+        """Worker thread: create event loop and run the engine."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            # Process resumes first
+            self.after(0, lambda: self.log("Processing resumes...", "info"))
+            loop.run_until_complete(self._process_resumes(config))
+
+            # Run the engine
+            from auto_applier.orchestrator.engine import ApplicationEngine
+            engine = ApplicationEngine(config, self.events, cli_mode=False)
+            loop.run_until_complete(engine.run())
+        except Exception as e:
+            self.after(0, lambda: self.log(f"Error: {e}", "error"))
+        finally:
+            loop.close()
+            self.after(0, self._on_run_finished)
+
+    async def _process_resumes(self, config: dict) -> None:
+        """Add resumes to the ResumeManager (requires LLM for skill extraction)."""
+        from auto_applier.llm.router import LLMRouter
+        from auto_applier.resume.manager import ResumeManager
+
+        router = LLMRouter()
+        await router.initialize()
+        manager = ResumeManager(router)
+
+        for resume_info in config.get("resumes", []):
+            label = resume_info["label"]
+            path = resume_info["path"]
+            self.after(0, lambda l=label: self.log(f"Processing resume: {l}...", "info"))
+            try:
+                await manager.add_resume(path, label)
+                self.after(0, lambda l=label: self.log(
+                    f"Resume '{l}' processed successfully.", "success"
+                ))
+            except Exception as e:
+                self.after(0, lambda l=label, err=e: self.log(
+                    f"Failed to process resume '{l}': {err}", "error"
+                ))
+
+    def _on_run_finished(self) -> None:
+        """Called when the run completes (on main thread)."""
+        self._running = False
+        self._stop_timer()
+        self._title_label.configure(text="Auto Applier -- Complete")
+        self.title("Auto Applier -- Complete")
+        self._stop_btn.configure(state="disabled")
+        self._close_btn.configure(state="normal")
+        self.log("Run complete.", "info")
+
+    # ------------------------------------------------------------------
+    # Review panel bridge
+    # ------------------------------------------------------------------
+
+    def _open_review_panel(self, job, score) -> None:
+        """Open the job review panel and resolve the event with the decision."""
+        from auto_applier.gui.panels.job_review import JobReviewPanel
+
+        def on_decision(decision: str):
+            if decision == "skip":
+                self._increment_skipped()
+            self.events.resolve_event(USER_REVIEW_NEEDED, decision)
+
+        JobReviewPanel(self, job, score, on_decision)
+
+    # ------------------------------------------------------------------
+    # Close / Stop
+    # ------------------------------------------------------------------
+
+    def _on_stop(self) -> None:
+        """Request the run to stop."""
+        if self._running:
+            self.log("Stop requested -- finishing current action...", "warning")
+            # The engine will stop after current operation due to event loop
+            self._running = False
+            self._stop_btn.configure(state="disabled")
+
+    def _on_close(self) -> None:
+        """Close the dashboard window."""
+        self._stop_timer()
+        self.destroy()

@@ -4,21 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Auto Applier** is a Python desktop app that automates job searching and applying on LinkedIn. It features a GUI setup wizard (tkinter) that walks users through configuration, then uses Playwright browser automation to search for jobs and auto-apply via Easy Apply. It also tracks skills gaps (questions/fields jobs asked that the resume didn't cover) and helps users improve their resume over time.
+**Auto Applier v2** is a Python desktop app that automates job applications across multiple platforms (LinkedIn, Indeed, Dice, ZipRecruiter, and more). It uses AI (local Ollama or free Gemini API) to score jobs against multiple resumes, pick the best resume per job, fill application forms intelligently, generate tailored cover letters, and evolve resumes over time based on skill gap patterns.
 
-This is a personal/small-group project (shared repo among friends). **Everything must run locally and cost nothing.** No paid APIs, no cloud services, no external databases.
-
-## Tech Stack
-
-- **Python 3.11+** — core language
-- **tkinter/ttk** — GUI wizard (built into Python, zero dependencies)
-- **click** — CLI interface (alternative to the GUI)
-- **Playwright** with `playwright-stealth` — browser automation (not Selenium — less detectable)
-- **CSV files** — all data storage (openable in Excel, no database setup)
-- **JSON** — user config (`data/user_config.json`)
-- **pdfplumber** / **python-docx** — resume parsing
-- **python-dotenv** — credential management
-- **PyInstaller** — builds standalone `.exe` (dev dependency)
+This is a personal/small-group project (3-4 people). **Everything must run locally and cost nothing.** No paid APIs, no cloud services, no external databases. Requires **Python 3.11+**.
 
 ## Build & Run Commands
 
@@ -33,143 +21,122 @@ playwright install chromium
 python run.py
 python -m auto_applier
 
-# CLI mode (alternative)
-python -m auto_applier --cli configure
+# CLI mode
 python -m auto_applier --cli run
 python -m auto_applier --cli run --dry-run
+python -m auto_applier --cli run --platform linkedin
+python -m auto_applier --cli run --limit 5
 python -m auto_applier --cli status
 python -m auto_applier --cli gaps
+python -m auto_applier --cli resumes
 
-# Build standalone .exe
-pip install pyinstaller
-python build.py
-# Output: dist/AutoApplier.exe
+# Tests (asyncio_mode = "auto" in pyproject.toml)
+pip install -e ".[dev]"
+pytest
+pytest tests/test_foo.py
+pytest -k test_name
 ```
 
 ## Architecture
 
 ### Module Boundaries
 
-```
-auto_applier/
-  __main__.py          # Entry point — launches GUI by default, CLI with --cli flag
-  main.py              # CLI commands (click), orchestrates the application workflow
-  config.py            # Loads .env, app settings, path constants
+- **`llm/`** — LLM abstraction layer. Fallback chain: Ollama (local) -> Gemini (free API) -> Rule-based (answers.json). Knows nothing about browsers or GUI.
+- **`resume/`** — Multi-resume management, parsing, skill extraction, cover letter generation, evolution. Uses LLM for intelligence.
+- **`scoring/`** — Job scoring pipeline. Scores every resume against each JD, picks the best match, decides auto-apply vs review vs skip.
+- **`browser/`** — Browser automation with platform adapters. Uses FormFiller for AI-powered form filling.
+- **`orchestrator/`** — Pipeline engine with event system. Ties everything together. Decoupled from GUI via EventEmitter.
+- **`storage/`** — CSV-backed persistence (Excel-compatible). Dataclass models.
+- **`analysis/`** — Gap tracking and reporting.
+- **`gui/`** — Tkinter wizard + dashboard + panels. Knows about tkinter, nothing else.
 
-  gui/                 # Desktop wizard UI (tkinter)
-    wizard.py          # Main window, step controller, shared state
-    styles.py          # ttk theme and style definitions
-    steps/             # One frame class per wizard step
-      welcome.py       # Step 1: intro + "Create Dummy Data" button
-      credentials.py   # Step 2: LinkedIn email/password
-      resume.py        # Step 3: file picker for PDF/DOCX
-      personal.py      # Step 4: name, phone, city, LinkedIn URL
-      preferences.py   # Step 5: job keywords + location
-      ready.py         # Step 6: config summary + Run / Dry Run / Exit
+### LLM Fallback Chain (`llm/router.py`)
 
-  browser/             # LinkedIn-specific — knows about Playwright and DOM
-    session.py         # Browser lifecycle, persistent context (reuses browser_profile/)
-    linkedin_auth.py   # Login flow, session validation, re-auth
-    job_search.py      # Search LinkedIn, parse job listings
-    easy_apply.py      # Walk through Easy Apply modal steps
-    anti_detect.py     # Stealth config, human-like delays, jitter
+1. **Ollama** (localhost:11434) — local inference, zero cost, needs 8-16GB RAM
+2. **Gemini** (free API) — 1,000 req/day free tier, no credit card needed
+3. **Rule-based** — fuzzy match against `data/answers.json`, always available
 
-  resume/              # Platform-agnostic document parsing
-    parser.py          # Extract text from PDF/DOCX
-    skills.py          # Normalize and match skills keywords
+All LLM calls go through `LLMRouter.complete()` or `complete_json()`. Cache layer (72h TTL, SHA-256 keyed) sits in front. Seven prompt templates in `llm/prompts.py`.
 
-  storage/             # Platform-agnostic data layer (CSV-backed)
-    models.py          # Dataclasses: Job, Application, SkillGap
-    repository.py      # CSV read/write operations
+### Multi-Resume System (`resume/manager.py`)
 
-  analysis/            # Platform-agnostic gap analysis
-    gap_tracker.py     # Compare job requirements vs resume, record gaps
-    report.py          # Generate skills gap and status reports for CLI
-```
+Users load multiple resumes (e.g., "Data Analyst", "Data Engineer"). Each gets a profile in `data/profiles/<label>.json` with LLM-extracted skills. For each job, `ResumeManager.score_all()` scores EVERY resume against the JD and picks the best match — based on skills/experience, not job title. The best resume is used for form filling, file upload, and cover letter generation.
 
-**Key separations:**
-- `gui/` is the desktop wizard — knows about tkinter, nothing else
-- `browser/` is LinkedIn-specific — knows about Playwright and DOM selectors
-- `storage/`, `analysis/`, and `resume/` are platform-agnostic
-- Adding Indeed/Glassdoor later means adding new browser modules without touching the rest
+### Job Scoring Pipeline (`scoring/scorer.py`)
 
-### GUI Wizard Architecture
+- Score >= `auto_apply_min` (default 7) -> AUTO_APPLY
+- Score >= `review_min` (default 4) -> USER_REVIEW (GUI shows review panel; CLI uses `cli_auto_apply_min`)
+- Score < `review_min` -> SKIP
 
-The wizard (`gui/wizard.py`) manages:
-- **Shared state** via `dict[str, tk.Variable]` — all steps read/write the same StringVars
-- **Step frames** — all 6 built at startup, swapped via `tkraise()` (no destroy/recreate)
-- **Navigation** — Back/Next in footer (hidden on Welcome and Ready steps)
-- **Dummy data** — fills all fields with realistic fake values and jumps to the summary step
-- **Config save** — `ready.py` writes `.env` + `user_config.json` + copies resume to `data/resumes/`
-- **Launch** — spawns `python -m auto_applier --cli run` in a new console window
+### Multi-Platform Adapter Pattern (`browser/`)
 
-### Data Storage (CSV files in `data/`)
+- **`base_platform.py`** — `JobPlatform` ABC: `ensure_logged_in()`, `search_jobs()`, `get_job_description()`, `apply_to_job()`. Shared helpers: `safe_query()`, `safe_click()`, `detect_captcha()`, `wait_for_manual_login()`.
+- **`platforms/`** — One module per site, each subclassing `JobPlatform`.
+- **`platforms/__init__.py`** — `PLATFORM_REGISTRY` dict.
+- **`form_filler.py`** — Shared AI form filling: personal info -> answers.json -> LLM -> record gap. Handles cover letters and resume uploads.
 
-All data is stored as CSV files that can be opened directly in Excel or any spreadsheet tool:
+Adding a new job site: create `browser/platforms/newsite.py` subclassing `JobPlatform`, register in `PLATFORM_REGISTRY`.
 
-- **`data/jobs.csv`** — job_id, title, company, url, description, search_keyword, found_at
-- **`data/applications.csv`** — job_id, status (`applied`/`failed`/`skipped`/`dry_run`), failure_reason, applied_at
-- **`data/skill_gaps.csv`** — job_id, field_label (the question asked), category, first_seen
-- **`data/user_config.json`** — personal info (name, phone, city, search keywords, resume path)
+### Orchestrator (`orchestrator/engine.py`)
 
-### Core Workflow (`run` command)
+`ApplicationEngine` runs the full pipeline with **per-platform error isolation** (one platform crashing doesn't stop others). Event-driven via `EventEmitter` pub/sub — GUI subscribes to events, CLI uses print handlers.
 
-1. Parse resume and extract known skills
-2. Check daily application limit (default 10/day)
-3. Launch Playwright with persistent browser context (preserves cookies/session)
-4. Ensure logged into LinkedIn (re-auth if session expired; pause for CAPTCHA if needed)
-5. For each search keyword: search jobs → filter to Easy Apply → for each unseen job:
-   - Get full job description, save to `jobs.csv`
-   - Compare description to resume skills, log gaps to `skill_gaps.csv`
-   - Walk through Easy Apply modal, filling fields from user config
-   - Record any form field the system can't fill as a skill gap
-   - Submit (or dry-run), save result to `applications.csv`
-   - Random delay between jobs (60-180s)
-6. Close browser
+Pipeline: discover -> fetch description -> score (all resumes) -> decide -> fill (AI) -> apply -> track gaps -> evolve resume.
 
-### Anti-Detection Strategy (Critical)
+### Resume Evolution (`resume/evolution.py`)
 
-This is the primary technical risk. Key rules enforced in `browser/anti_detect.py`:
+Tracks skill gap frequency. When a skill appears >= 3 times, triggers a user prompt. User confirms skill level -> LLM generates resume bullet points -> user approves -> saved to that resume's profile. Original resume files are never modified.
 
-- **Rate limit hard:** 10-15 applications per day max. LinkedIn flags bulk apply behavior.
-- **Human-like delays:** `random.uniform(min, max)` for every action. Per-character typing jitter (50-150ms). Scroll job descriptions before clicking apply.
-- **Persistent sessions:** `data/browser_profile/` stores cookies/localStorage across runs. LinkedIn sees a returning user, not a fresh bot.
-- **Headed mode always:** Never run headless — it's too easy to detect.
-- **Hard stops on detection:** CAPTCHA → stop and alert user. "Suspicious activity" warning → stop for 24 hours. Never retry through these.
-- **Realistic browser fingerprint:** Custom viewport, user-agent. Don't use Playwright defaults.
+### Data Storage
 
-### Skills Gap Tracking (Differentiating Feature)
+CSV files in `data/` (openable in Excel):
+- `jobs.csv`, `applications.csv`, `skill_gaps.csv`
 
-Two sources of gap data:
-1. **Job descriptions** — `skills.py` compares job text against resume skills, logs missing ones
-2. **Easy Apply form fields** — any field the system can't auto-fill gets recorded
+JSON files in `data/`:
+- `user_config.json` — personal info and preferences
+- `answers.json` — pre-configured Q&A (starts blank, populated in wizard, grows from encounters)
+- `unanswered.json` — new questions from runs, queued for next wizard open
+- `profiles/<label>.json` — per-resume enhanced profiles
+- `prompted_skills.json` — skills already prompted for evolution
 
-The `gaps` command aggregates these by frequency: "15 jobs asked about AWS certification, 12 asked about Kubernetes, 8 asked for portfolio URL."
+Path constants in `config.py`.
+
+### Browser & Anti-Detection (Critical)
+
+- **patchright** first, standard Playwright fallback
+- **Real Chrome** via `channel` param
+- **Manual login ONLY** — never automate credentials for any platform
+- **Headed mode always**
+- **Bezier mouse paths** + typing jitter + organic noise + distraction pauses
+- **Rate limiting:** configurable, default 10 apps/day, 60-180s between apps
+- **Hard stop on CAPTCHA** — never retry through detection
+
+### Credential Flow
+
+- Passwords in `.env` only (pattern: `{PLATFORM}_EMAIL`, `{PLATFORM}_PASSWORD`)
+- `GEMINI_API_KEY` also in `.env`
+- `orchestrator/engine.py:_load_credentials()` merges `.env` into config at runtime
+
+## Entry Points
+
+- `python -m auto_applier` -> `__main__.py` -> GUI by default, CLI with `--cli`
+- `python run.py` -> convenience wrapper
+- `auto-applier` CLI (via pip install) -> `main.py:cli()` (Click group)
+
+## Important Constraints
+
+- **Zero cost:** No paid APIs, no cloud, no external services. Everything local.
+- **CSV over databases.** Users can inspect/edit their data in Excel.
+- **`--dry-run` for testing.** Never submit real applications during development.
+- **Selectors break frequently.** Use multiple fallback selectors via `safe_query()` and fail gracefully.
+- **Add scrollbars** to any GUI panel that might overflow.
+- **Original resume files are never modified.** Evolution writes to `data/profiles/`.
 
 ## Important Files (gitignored)
 
-- `.env` — LinkedIn credentials (see `.env.example` for template)
-- `data/*.csv` — Application data (contains personal info)
-- `data/user_config.json` — Personal info and preferences
-- `data/browser_profile/` — Persistent Playwright browser context
-- `data/resumes/` — Uploaded resume files
-- `dist/`, `build/`, `*.spec` — PyInstaller build artifacts
-
-## Design Principles
-
-- **Zero cost:** No paid APIs, no cloud, no external services. Everything local.
-- **Transparency:** CSV storage means users can always inspect/edit their data in Excel.
-- **Safety first:** `--dry-run` by default when testing. Hard daily limits. Human-like pacing.
-- **LinkedIn DOM changes frequently:** Selectors in `browser/` modules will break. Use multiple fallback selectors and fail gracefully.
-
-## LinkedIn ToS Risk
-
-LinkedIn prohibits automated access. The `--dry-run` flag exists for testing without submitting applications. Users accept the risk of account restriction.
-
-## Evolution Roadmap
-
-The MVP is GUI wizard + LinkedIn + keyword-based gap matching. Planned phases:
-- Better error recovery and `--dry-run` polish
-- Local LLM-powered gap analysis (e.g., Ollama — replacing keyword matching, still free)
-- Indeed/Glassdoor support (new `browser_*` modules)
-- Resume auto-rewriting based on accumulated gap data
+- `.env` — credentials and API keys (see `.env.example`)
+- `data/*.csv`, `data/*.json` — personal data
+- `data/browser_profile/` — persistent browser context
+- `data/resumes/` — uploaded resume files
+- `data/profiles/` — enhanced resume profiles
+- `data/cache/` — LLM response cache

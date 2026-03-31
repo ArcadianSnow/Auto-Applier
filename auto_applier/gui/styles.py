@@ -1,156 +1,179 @@
-"""ttk style definitions — Animal Crossing 'Tom Nook's Job Agency' theme."""
-
+"""Clean functional UI theme for Auto Applier v2."""
 import tkinter as tk
 from tkinter import ttk
 
-# ── Animal Crossing Color Palette ────────────────────────────────
+# ---------------------------------------------------------------------------
+# Color palette -- clean, professional
+# ---------------------------------------------------------------------------
+PRIMARY = "#2563EB"       # Blue
+PRIMARY_DARK = "#1D4ED8"
+PRIMARY_LIGHT = "#DBEAFE"
+ACCENT = "#10B981"        # Green
+ACCENT_DARK = "#059669"
+WARNING = "#F59E0B"       # Amber
+DANGER = "#EF4444"        # Red
+BG = "#F8FAFC"            # Light gray background
+BG_CARD = "#FFFFFF"       # White card background
+TEXT = "#1E293B"          # Dark slate text
+TEXT_LIGHT = "#64748B"    # Lighter text
+TEXT_MUTED = "#94A3B8"    # Muted text
+BORDER = "#E2E8F0"        # Light border
+BORDER_FOCUS = "#93C5FD"  # Blue border on focus
 
-# Primary
-NOOK_GREEN = "#4CAF7D"
-NOOK_GREEN_HOVER = "#3D9A6A"
-NOOK_GREEN_DARK = "#2E7D52"
-NOOK_TAN = "#C8A882"
-LEAF_GOLD = "#E8B84B"
-LEAF_GOLD_DARK = "#C89030"
+# Status colors
+STATUS_IDLE = "#94A3B8"    # Gray
+STATUS_RUNNING = "#F59E0B" # Yellow
+STATUS_SUCCESS = "#10B981" # Green
+STATUS_ERROR = "#EF4444"   # Red
 
-# Secondary / Accent
-BLUEBELL = "#7BB8D4"
-PEACH = "#F4A88A"
-PEACH_HOVER = "#E8875E"
-LAVENDER = "#C4AED8"
+# ---------------------------------------------------------------------------
+# Fonts (Segoe UI for Windows)
+# ---------------------------------------------------------------------------
+FONT_HEADING = ("Segoe UI", 16, "bold")
+FONT_SUBHEADING = ("Segoe UI", 12, "bold")
+FONT_BODY = ("Segoe UI", 10)
+FONT_SMALL = ("Segoe UI", 9)
+FONT_MONO = ("Consolas", 10)
+FONT_BUTTON = ("Segoe UI", 10, "bold")
 
-# Backgrounds
-SANDY_SHORE = "#F7F0E6"
-CREAM = "#FDFAF4"
-MORNING_SKY = "#E8F4F8"
-DRIFTWOOD = "#EDE0CE"
-WARM_WHITE = "#FFFEF9"
-
-# Text
-SOIL_BROWN = "#3D2B1F"
-BARK_BROWN = "#5C3D2E"
-DRIFTWOOD_GRAY = "#8B7355"
-FOGGY = "#B5A48A"
-
-# Status
-ERROR_RED = "#C44B2B"
-ERROR_BG = "#FAEAE4"
-ERROR_DOT = "#E06040"
-SUCCESS_GREEN = NOOK_GREEN_DARK
-SUCCESS_BG = "#D4EFE3"
-INFO_BLUE = "#2A6F8E"
-WARNING_GOLD = LEAF_GOLD_DARK
-SKIP_GRAY = "#B5A48A"
-
-# Borders
-BORDER_LIGHT = "#D4C4A8"
-BORDER_MED = "#C8A882"
-BORDER_DARK = "#B8906A"
-
-# Step indicator
-STEP_DONE = NOOK_GREEN
-STEP_ACTIVE = LEAF_GOLD
-STEP_UPCOMING = "#D4C4A8"
-
-# Fonts
-HEADING_FONT = "Bahnschrift"
-BODY_FONT = "Segoe UI"
-MONO_FONT = "Consolas"
+# ---------------------------------------------------------------------------
+# Layout constants
+# ---------------------------------------------------------------------------
+PAD_X = 24
+PAD_Y = 16
+CARD_PAD = 16
+BORDER_RADIUS = 8
 
 
-def apply_styles(root: tk.Tk) -> None:
-    style = ttk.Style(root)
+def apply_theme(root: tk.Tk) -> None:
+    """Apply the clean theme to the application."""
+    root.configure(bg=BG)
+    style = ttk.Style()
     style.theme_use("clam")
 
-    # Primary button (Nook Green)
+    # Base
+    style.configure(".", background=BG, foreground=TEXT, font=FONT_BODY)
+
+    # Frames
+    style.configure("TFrame", background=BG)
+    style.configure("Card.TFrame", background=BG_CARD)
+
+    # Labels
+    style.configure("TLabel", background=BG, foreground=TEXT, font=FONT_BODY)
+    style.configure("Card.TLabel", background=BG_CARD, foreground=TEXT, font=FONT_BODY)
+    style.configure("Heading.TLabel", font=FONT_HEADING, foreground=PRIMARY, background=BG)
+    style.configure("CardHeading.TLabel", font=FONT_HEADING, foreground=PRIMARY, background=BG_CARD)
+    style.configure("Subheading.TLabel", font=FONT_SUBHEADING, background=BG)
+    style.configure("CardSubheading.TLabel", font=FONT_SUBHEADING, background=BG_CARD)
+    style.configure("Small.TLabel", font=FONT_SMALL, foreground=TEXT_LIGHT, background=BG)
+    style.configure("CardSmall.TLabel", font=FONT_SMALL, foreground=TEXT_LIGHT, background=BG_CARD)
+    style.configure("Muted.TLabel", font=FONT_SMALL, foreground=TEXT_MUTED, background=BG)
+    style.configure("Success.TLabel", foreground=ACCENT, background=BG_CARD, font=FONT_BODY)
+    style.configure("Danger.TLabel", foreground=DANGER, background=BG_CARD, font=FONT_BODY)
+    style.configure("Warning.TLabel", foreground=WARNING, background=BG_CARD, font=FONT_BODY)
+
+    # Buttons
+    style.configure("TButton", font=FONT_BODY, padding=(16, 8))
     style.configure(
         "Primary.TButton",
-        background=NOOK_GREEN,
-        foreground=WARM_WHITE,
-        font=(HEADING_FONT, 10, "bold"),
-        padding=(16, 8),
-        borderwidth=0,
+        background=PRIMARY,
+        foreground="white",
+        font=FONT_BUTTON,
+        padding=(20, 10),
     )
     style.map(
         "Primary.TButton",
-        background=[("active", NOOK_GREEN_HOVER), ("disabled", "#A8D5BC")],
-        foreground=[("disabled", "#D4EDE0")],
+        background=[("active", PRIMARY_DARK), ("disabled", BORDER)],
+        foreground=[("disabled", TEXT_MUTED)],
     )
-
-    # Secondary button (Driftwood)
     style.configure(
-        "Secondary.TButton",
-        background=DRIFTWOOD,
-        foreground=BARK_BROWN,
-        font=(HEADING_FONT, 10, "bold"),
+        "Accent.TButton",
+        background=ACCENT,
+        foreground="white",
+        font=FONT_BUTTON,
+        padding=(20, 10),
+    )
+    style.map(
+        "Accent.TButton",
+        background=[("active", ACCENT_DARK), ("disabled", BORDER)],
+    )
+    style.configure(
+        "Danger.TButton",
+        background=DANGER,
+        foreground="white",
+        font=FONT_BUTTON,
         padding=(16, 8),
-        borderwidth=1,
-        relief="solid",
     )
-    style.map(
-        "Secondary.TButton",
-        background=[("active", "#E0CEB8")],
-    )
+    style.map("Danger.TButton", background=[("active", "#DC2626")])
 
-    # Ghost button (transparent-ish)
-    style.configure(
-        "Ghost.TButton",
-        background=SANDY_SHORE,
-        foreground=BARK_BROWN,
-        font=(BODY_FONT, 10),
-        padding=(12, 8),
-        borderwidth=0,
-    )
-    style.map(
-        "Ghost.TButton",
-        background=[("active", DRIFTWOOD)],
-    )
-
-    # Danger button (Peach)
-    style.configure(
-        "Danger.TButton",
-        background=PEACH,
-        foreground=SOIL_BROWN,
-        font=(HEADING_FONT, 10, "bold"),
-        padding=(12, 8),
-        borderwidth=0,
-    )
-    style.map(
-        "Danger.TButton",
-        background=[("active", PEACH_HOVER)],
-        foreground=[("active", WARM_WHITE)],
-    )
-
-    # Entry fields
-    style.configure(
-        "TEntry",
-        fieldbackground=WARM_WHITE,
-        foreground=BARK_BROWN,
-        font=(BODY_FONT, 10),
-        padding=6,
-        bordercolor=NOOK_TAN,
-    )
-
-    # Error entry
-    style.configure(
-        "Error.TEntry",
-        fieldbackground="#FEF5F2",
-        foreground=BARK_BROWN,
-        font=(BODY_FONT, 10),
-        padding=6,
-        bordercolor=ERROR_DOT,
-    )
+    # Entry / Spinbox
+    style.configure("TEntry", padding=6, font=FONT_BODY)
+    style.configure("TSpinbox", padding=6, font=FONT_BODY)
 
     # Checkbutton
+    style.configure("TCheckbutton", background=BG, font=FONT_BODY)
+    style.configure("Card.TCheckbutton", background=BG_CARD, font=FONT_BODY)
+
+    # Labelframe
+    style.configure("TLabelframe", background=BG, font=FONT_BODY)
     style.configure(
-        "TCheckbutton",
-        background=SANDY_SHORE,
-        foreground=BARK_BROWN,
-        font=(BODY_FONT, 9),
+        "TLabelframe.Label",
+        background=BG,
+        foreground=PRIMARY,
+        font=FONT_SUBHEADING,
+    )
+    style.configure("Card.TLabelframe", background=BG_CARD)
+    style.configure(
+        "Card.TLabelframe.Label",
+        background=BG_CARD,
+        foreground=PRIMARY,
+        font=FONT_SUBHEADING,
     )
 
+    # Scrollbar
+    style.configure("TScrollbar", troughcolor=BG, background=BORDER)
+    style.map("TScrollbar", background=[("active", TEXT_MUTED)])
+
+    # Combobox
+    style.configure("TCombobox", font=FONT_BODY, padding=6)
+
     # Separator
-    style.configure(
-        "TSeparator",
-        background=BORDER_LIGHT,
-    )
+    style.configure("TSeparator", background=BORDER)
+
+    # Notebook (tabs)
+    style.configure("TNotebook", background=BG)
+    style.configure("TNotebook.Tab", font=FONT_BODY, padding=(12, 6))
+
+
+def make_scrollable(parent: tk.Widget) -> tuple[tk.Canvas, ttk.Frame]:
+    """Create a scrollable frame inside *parent*.
+
+    Returns (canvas, inner_frame).  Pack widgets into inner_frame.
+    The canvas fills *parent* and scrolls vertically.
+    """
+    canvas = tk.Canvas(parent, bg=BG, highlightthickness=0, bd=0)
+    scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+
+    inner = ttk.Frame(canvas, style="TFrame")
+    inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    def _on_configure(_event=None):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+        # Match inner frame width to canvas width
+        canvas.itemconfig(inner_id, width=canvas.winfo_width())
+
+    inner.bind("<Configure>", _on_configure)
+    canvas.bind("<Configure>", _on_configure)
+
+    # Mouse wheel scrolling
+    def _on_mousewheel(event):
+        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+    scrollbar.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+
+    return canvas, inner

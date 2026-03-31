@@ -1,52 +1,41 @@
-"""Track and aggregate skills gaps found during applications."""
-
-from collections import Counter
-
-from auto_applier.resume.skills import find_missing_skills
+"""Skill gap recording and analysis."""
 from auto_applier.storage.models import SkillGap
-from auto_applier.storage import repository
+from auto_applier.storage.repository import save, load_all
+from auto_applier.resume.skills import find_missing_skills
 
 
 def record_gaps(job_id: str, gaps: list[SkillGap]) -> None:
-    """Save skill gaps from a single application to storage."""
+    """Save a list of skill gaps from a job application."""
     for gap in gaps:
-        gap.job_id = job_id
-        repository.save(gap)
+        save(gap)
 
 
-def record_skills_gaps_from_description(
-    job_id: str,
-    job_description: str,
-    resume_skills: set[str],
-) -> None:
-    """Compare job description to resume and save any missing skills."""
-    missing = find_missing_skills(resume_skills, job_description)
-    for skill in missing:
-        gap = SkillGap(
-            job_id=job_id,
-            field_label=skill,
-            category="skill",
-        )
-        repository.save(gap)
+async def record_skills_gaps_from_description(
+    router, job_id: str, job_description: str, resume_text: str, resume_label: str, source: str
+) -> list[SkillGap]:
+    """Extract skill gaps by comparing job description against resume via LLM.
 
-
-def get_gap_summary() -> list[tuple[str, int, str]]:
-    """Get all gaps sorted by frequency.
-
-    Returns list of (field_label, count, category).
+    Uses LLM-based skill extraction for both resume and JD, then finds the delta.
+    Falls back to empty list on LLM failure.
     """
-    all_gaps = repository.load_all(SkillGap)
+    from auto_applier.resume.skills import extract_resume_skills, extract_jd_requirements
 
-    # Count how often each gap appears
-    counter = Counter()
-    categories = {}
-    for gap in all_gaps:
-        key = gap.field_label.lower().strip()
-        counter[key] += 1
-        categories[key] = gap.category
+    try:
+        resume_skills = await extract_resume_skills(router, resume_text[:3000])
+        jd_requirements = await extract_jd_requirements(router, job_description[:2000])
+        missing = find_missing_skills(resume_skills, jd_requirements)
 
-    # Sort by frequency (most common first)
-    return [
-        (label, count, categories.get(label, "other"))
-        for label, count in counter.most_common()
-    ]
+        gaps = []
+        for skill_name in missing:
+            gap = SkillGap(
+                job_id=job_id,
+                field_label=skill_name,
+                category="skill",
+                resume_label=resume_label,
+                source=source,
+            )
+            save(gap)
+            gaps.append(gap)
+        return gaps
+    except Exception:
+        return []

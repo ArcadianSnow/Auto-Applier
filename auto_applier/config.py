@@ -1,8 +1,6 @@
 """Application configuration loaded from .env and defaults."""
-
 import os
 from pathlib import Path
-
 from dotenv import load_dotenv
 
 # Project root is one level up from this file
@@ -10,29 +8,29 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 BROWSER_PROFILE_DIR = DATA_DIR / "browser_profile"
 RESUMES_DIR = DATA_DIR / "resumes"
+PROFILES_DIR = DATA_DIR / "profiles"
+CACHE_DIR = DATA_DIR / "cache"
 
 # CSV data files
 JOBS_CSV = DATA_DIR / "jobs.csv"
 APPLICATIONS_CSV = DATA_DIR / "applications.csv"
 SKILL_GAPS_CSV = DATA_DIR / "skill_gaps.csv"
 USER_CONFIG_FILE = DATA_DIR / "user_config.json"
+ANSWERS_FILE = DATA_DIR / "answers.json"
+UNANSWERED_FILE = DATA_DIR / "unanswered.json"
 
 # Ensure data directories exist
-DATA_DIR.mkdir(exist_ok=True)
-BROWSER_PROFILE_DIR.mkdir(exist_ok=True)
-RESUMES_DIR.mkdir(exist_ok=True)
+for d in [DATA_DIR, BROWSER_PROFILE_DIR, RESUMES_DIR, PROFILES_DIR, CACHE_DIR]:
+    d.mkdir(parents=True, exist_ok=True)
 
 # Load .env from project root
 load_dotenv(PROJECT_ROOT / ".env")
 
-
-def get_linkedin_email() -> str:
-    return os.getenv("LINKEDIN_EMAIL", "")
-
-
-def get_linkedin_password() -> str:
-    return os.getenv("LINKEDIN_PASSWORD", "")
-
+# LLM settings
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 
 # Rate limiting / anti-detection defaults
 MAX_APPLICATIONS_PER_DAY = int(os.getenv("MAX_APPLICATIONS_PER_DAY", "10"))
@@ -40,3 +38,9 @@ MIN_DELAY_BETWEEN_ACTIONS = float(os.getenv("MIN_DELAY_BETWEEN_ACTIONS", "3"))
 MAX_DELAY_BETWEEN_ACTIONS = float(os.getenv("MAX_DELAY_BETWEEN_ACTIONS", "8"))
 MIN_DELAY_BETWEEN_APPLICATIONS = float(os.getenv("MIN_DELAY_BETWEEN_APPLICATIONS", "60"))
 MAX_DELAY_BETWEEN_APPLICATIONS = float(os.getenv("MAX_DELAY_BETWEEN_APPLICATIONS", "180"))
+
+# Scoring thresholds
+DEFAULT_AUTO_APPLY_MIN = 7
+DEFAULT_CLI_AUTO_APPLY_MIN = 7
+DEFAULT_REVIEW_MIN = 4
+DEFAULT_EVOLUTION_TRIGGER_THRESHOLD = 3

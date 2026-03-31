@@ -1,73 +1,76 @@
 """Step 1: Welcome screen."""
-
-from __future__ import annotations
-
 import tkinter as tk
 from tkinter import ttk
-from typing import TYPE_CHECKING
 
 from auto_applier.gui.styles import (
-    SANDY_SHORE, SOIL_BROWN, DRIFTWOOD_GRAY, NOOK_GREEN, LEAF_GOLD, WARM_WHITE,
-    HEADING_FONT, BODY_FONT,
+    BG, BG_CARD, PRIMARY, TEXT, TEXT_LIGHT, BORDER,
+    FONT_HEADING, FONT_SUBHEADING, FONT_BODY, FONT_SMALL,
+    PAD_X, PAD_Y,
 )
 
-if TYPE_CHECKING:
-    from auto_applier.gui.wizard import WizardApp
 
+class WelcomeStep(ttk.Frame):
+    """Welcome screen with feature overview."""
 
-class WelcomeStep(tk.Frame):
-    def __init__(self, parent: tk.Widget, wizard: WizardApp) -> None:
-        super().__init__(parent, bg=SANDY_SHORE)
+    def __init__(self, parent: tk.Widget, wizard) -> None:
+        super().__init__(parent, style="TFrame")
         self.wizard = wizard
+        self._build()
 
-        inner = tk.Frame(self, bg=SANDY_SHORE)
-        inner.place(relx=0.5, rely=0.45, anchor="center")
+    def _build(self) -> None:
+        # Center container
+        center = tk.Frame(self, bg=BG)
+        center.place(relx=0.5, rely=0.45, anchor="center")
 
-        # Leaf logo
-        logo = tk.Canvas(inner, width=68, height=68, bg=SANDY_SHORE, highlightthickness=0)
-        logo.create_oval(2, 2, 66, 66, fill=NOOK_GREEN, outline="#2E7D52", width=2)
-        logo.create_text(34, 28, text="🍃", font=(BODY_FONT, 18))
-        logo.create_text(34, 50, text="A", fill=WARM_WHITE, font=(HEADING_FONT, 14, "bold"))
-        logo.pack(pady=(0, 16))
-
+        # Title
         tk.Label(
-            inner,
-            text="Welcome to Auto Applier",
-            font=(HEADING_FONT, 18, "bold"),
-            fg=SOIL_BROWN,
-            bg=SANDY_SHORE,
+            center, text="Auto Applier v2", font=("Segoe UI", 24, "bold"),
+            fg=PRIMARY, bg=BG,
         ).pack(pady=(0, 8))
 
+        # Subtitle
         tk.Label(
-            inner,
+            center,
             text=(
-                "Auto Applier searches job sites for positions matching\n"
-                "your criteria and applies automatically. It also tracks\n"
-                "what skills employers are asking for to improve your resume."
+                "AI-powered job application automation.\n"
+                "Apply to jobs across multiple platforms with intelligent\n"
+                "form filling and resume matching."
             ),
-            font=(BODY_FONT, 10),
-            fg=DRIFTWOOD_GRAY,
-            bg=SANDY_SHORE,
-            justify="center",
-        ).pack(pady=(0, 28))
+            font=FONT_BODY, fg=TEXT_LIGHT, bg=BG, justify="center",
+        ).pack(pady=(0, 32))
 
-        ttk.Button(
-            inner,
-            text="Get Started",
-            style="Primary.TButton",
-            command=self._get_started,
-        ).pack(pady=(0, 8), ipadx=20)
+        # Feature cards
+        features = [
+            ("Multi-Platform", "Search and apply on LinkedIn, Indeed, Dice, and ZipRecruiter simultaneously."),
+            ("AI Scoring", "Each job is scored against your resume. Only apply to good matches."),
+            ("Resume Evolution", "Track skill gaps across applications and improve your resume over time."),
+            ("Cover Letters", "AI-generated cover letters tailored to each specific job posting."),
+        ]
 
-        ttk.Button(
-            inner,
-            text="Create Dummy Data (Dry Run)",
-            style="Secondary.TButton",
-            command=self._dummy_run,
-        ).pack(ipadx=10)
+        grid = tk.Frame(center, bg=BG)
+        grid.pack(pady=(0, 24))
 
-    def _get_started(self) -> None:
-        self.wizard.go_to_step(1)
+        for i, (title, desc) in enumerate(features):
+            row, col = divmod(i, 2)
+            card = tk.Frame(
+                grid, bg=BG_CARD, highlightbackground=BORDER,
+                highlightthickness=1, padx=16, pady=12,
+            )
+            card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
+            grid.columnconfigure(col, weight=1, minsize=300)
 
-    def _dummy_run(self) -> None:
-        self.wizard.fill_dummy_data()
-        self.wizard.go_to_step(len(self.wizard.step_frames) - 1)
+            tk.Label(
+                card, text=title, font=FONT_SUBHEADING,
+                fg=PRIMARY, bg=BG_CARD, anchor="w",
+            ).pack(anchor="w")
+            tk.Label(
+                card, text=desc, font=FONT_SMALL,
+                fg=TEXT_LIGHT, bg=BG_CARD, anchor="w",
+                wraplength=260, justify="left",
+            ).pack(anchor="w", pady=(4, 0))
+
+        # Get started hint
+        tk.Label(
+            center, text="Click Next to get started.",
+            font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG,
+        ).pack()

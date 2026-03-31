@@ -1,308 +1,803 @@
-"""ZipRecruiter 1-Click Apply platform adapter."""
+"""ZipRecruiter platform adapter for job search and 1-Click Apply automation.
 
-import click
+This adapter handles:
+- Manual login detection and prompting
+- Job search with Quick Apply filter
+- Job card parsing from search results
+- 1-Click Apply and short-form application walking
+- Form field filling via FormFiller
+- CAPTCHA detection and hard stop
+- "Apply on company site" link detection (skip with failure_reason)
+
+IMPORTANT: ZipRecruiter changes its DOM frequently. Every selector here
+has multiple fallbacks. When selectors break, add new ones to the lists --
+do not remove old ones (they may still work for some users).
+"""
+import asyncio
+import logging
+import random
+import re
+from urllib.parse import quote_plus
+
 from playwright.async_api import Page
 
 from auto_applier.browser.anti_detect import (
+    human_click,
     human_scroll,
     random_delay,
-    random_mouse_movement,
-    human_type,
+    reading_pause,
+    simulate_organic_behavior,
 )
-from auto_applier.browser.base_platform import JobPlatform
-from auto_applier.storage.models import Job, SkillGap
+from auto_applier.browser.base_platform import CaptchaDetectedError, JobPlatform
+from auto_applier.browser.selector_utils import find_form_fields
+from auto_applier.storage.models import ApplyResult, Job
 
-LOGIN_URL = "https://www.ziprecruiter.com/login"
-SEARCH_URL = "https://www.ziprecruiter.com/jobs-search"
+logger = logging.getLogger(__name__)
+
+
+# ── Selector Groups (multiple fallbacks for DOM changes) ─────────────
+
+# Indicators that the user is logged in
+LOGGED_IN_SELECTORS = [
+    "[data-testid='user-menu']",
+    ".user-menu",
+    "a[href*='/profile']",
+    "a[href*='/candidate/dashboard']",
+    ".navbar-user",
+    "[data-testid='header-profile']",
+    "img.profile-photo",
+    ".header-account-menu",
+    "[aria-label='Account menu']",
+]
+
+# Job card selectors on the search results page
+JOB_CARD_SELECTORS = [
+    ".job_content",
+    ".job-listing",
+    "article[data-job-id]",
+    "[data-testid='job-listing']",
+    ".job_result",
+    ".jobList-item",
+    "article.job-listing",
+    ".job-card",
+]
+
+# Job title within a card
+JOB_TITLE_SELECTORS = [
+    ".job_title a",
+    "h2.job_title a",
+    "[data-testid='job-title'] a",
+    "a.job_link",
+    ".jobList-title a",
+    "h2 a.job_title_link",
+    ".job-title a",
+]
+
+# Company name within a card
+JOB_COMPANY_SELECTORS = [
+    ".job_company",
+    "[data-testid='company-name']",
+    "a.company-name",
+    ".jobList-company",
+    ".job-company-name",
+    "span.company_name",
+    ".t_org_link",
+]
+
+# Location within a card
+JOB_LOCATION_SELECTORS = [
+    ".job_location",
+    "[data-testid='job-location']",
+    ".jobList-location",
+    ".job-location",
+    "span.location",
+]
+
+# Apply button on job detail / card
+APPLY_BUTTON_SELECTORS = [
+    "button[data-testid='apply-button']",
+    "button.apply-button",
+    ".job_apply button",
+    "a.apply-button",
+    "button[data-testid='quick-apply']",
+    "[data-testid='1-click-apply']",
+    "button.quick-apply-button",
+    "button[aria-label*='Apply']",
+    "button[aria-label*='apply']",
+    ".apply_now button",
+    "a.quick_apply_button",
+]
+
+# Job description on the detail page
+JOB_DESCRIPTION_SELECTORS = [
+    ".job_description",
+    ".jobDescriptionSection",
+    "[data-testid='job-description']",
+    "#job-description",
+    ".job-description",
+    ".jobDescription",
+    "div.job_details",
+]
+
+# Form elements in the application
+FORM_FIELD_SELECTORS = [
+    ".form-group",
+    ".application-form-field",
+    "[data-testid*='form-field']",
+    "fieldset",
+    ".form-field",
+]
+
+# Form navigation / submit buttons
+FORM_CONTINUE_SELECTORS = [
+    "button[data-testid='continue-button']",
+    "button.continue-button",
+    "button[type='submit']",
+    "button.btn-primary",
+    "button.next-button",
+]
+
+FORM_SUBMIT_SELECTORS = [
+    "button[data-testid='submit-application']",
+    "button[data-testid='submit-button']",
+    "button.submit-application",
+    "button[aria-label*='Submit']",
+    "button[type='submit']",
+    "button.btn-primary",
+]
+
+# Application success indicators
+SUCCESS_SELECTORS = [
+    "[data-testid='application-success']",
+    ".application-success",
+    ".apply-success",
+    "[data-testid='success-message']",
+    ".success-message",
+    ".application-confirmation",
+    "[class*='success']",
+    ".congratulations",
+]
+
+# "Apply on company site" indicators (external apply)
+EXTERNAL_APPLY_SELECTORS = [
+    "a[data-testid='apply-on-company-site']",
+    "a[href*='apply'][target='_blank']",
+    "button[data-testid='external-apply']",
+    ".apply-on-company-site",
+    "a.external-apply",
+]
+
+# Resume upload input
+RESUME_UPLOAD_SELECTORS = [
+    "input[type='file'][name*='resume']",
+    "input[type='file'][name*='Resume']",
+    "input[type='file'][accept*='.pdf']",
+    "input[type='file'][id*='resume']",
+    "input[type='file']",
+]
+
+# Max pagination and result limits
+MAX_SEARCH_PAGES = 3
+MAX_JOBS_PER_SEARCH = 25
+MAX_FORM_STEPS = 8  # Safety limit for multi-step forms
 
 
 class ZipRecruiterPlatform(JobPlatform):
-    name = "ZipRecruiter"
+    """ZipRecruiter job search and 1-Click / Quick Apply adapter.
+
+    Requires the user to be logged in manually -- this adapter will
+    never automate credential entry. It navigates to ZipRecruiter,
+    checks for login indicators, and waits for the user if needed.
+    """
+
     source_id = "ziprecruiter"
+    display_name = "ZipRecruiter"
 
-    def _get_credentials(self) -> tuple[str, str]:
-        platforms = self.config.get("platforms", {})
-        creds = platforms.get("ziprecruiter", {})
-        return creds.get("email", ""), creds.get("password", "")
-
-    # ── Auth ─────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
+    # Login
+    # ------------------------------------------------------------------
 
     async def ensure_logged_in(self) -> bool:
+        """Navigate to ZipRecruiter and verify the user is logged in.
+
+        If not logged in, navigates to the login page and waits up to
+        5 minutes for the user to log in manually.
+        """
         page = await self.get_page()
 
+        # Navigate to ZipRecruiter home to check login state
         await page.goto(
-            "https://www.ziprecruiter.com/profile", wait_until="domcontentloaded"
+            "https://www.ziprecruiter.com/", wait_until="domcontentloaded"
         )
-        await random_delay(2, 4)
+        await random_delay(2.0, 4.0)
 
-        if "login" not in page.url:
-            click.echo("  ZipRecruiter: already logged in.")
+        # Check if already logged in
+        logged_in = await self.safe_query(page, LOGGED_IN_SELECTORS, timeout=5000)
+        if logged_in:
+            logger.info("ZipRecruiter: Already logged in")
             return True
 
-        return await self._login(page)
-
-    async def _login(self, page: Page) -> bool:
-        email, password = self._get_credentials()
-        if not email or not password:
-            click.echo("  ZipRecruiter credentials not configured. Skipping.")
-            return False
-
-        click.echo("  Logging into ZipRecruiter...")
-        await page.goto(LOGIN_URL, wait_until="domcontentloaded")
-        await random_delay(2, 4)
-
-        # Email
-        email_input = await page.query_selector(
-            'input[name="email"], input[type="email"]'
+        # Not logged in -- navigate to login page
+        logger.info(
+            "ZipRecruiter: Not logged in. Navigating to login page for manual login..."
         )
-        if email_input:
-            await email_input.fill("")
-            await human_type(page, 'input[type="email"]', email)
-            await random_delay(1, 2)
-
-        # Password
-        pw_input = await page.query_selector('input[type="password"]')
-        if pw_input:
-            await human_type(page, 'input[type="password"]', password)
-            await random_delay(1, 2)
-
-        # Submit
-        submit = await page.query_selector(
-            'button[type="submit"], button[data-testid="login-button"]'
-        )
-        if submit:
-            await submit.click()
-            await random_delay(3, 6)
-
-        # Handle verification
-        if "verify" in page.url.lower() or "challenge" in page.url.lower():
-            click.echo(
-                "\n  ZipRecruiter is requesting verification.\n"
-                "  Please complete it in the browser window.\n"
-                "  Press Enter here once done..."
-            )
-            input()
-            await random_delay(2, 4)
-
-        # Verify success
         await page.goto(
-            "https://www.ziprecruiter.com/profile", wait_until="domcontentloaded"
+            "https://www.ziprecruiter.com/authn/login",
+            wait_until="domcontentloaded",
         )
-        await random_delay(2, 3)
-        if "login" not in page.url:
-            click.echo("  ZipRecruiter: logged in successfully.")
-            return True
 
-        click.echo(f"  ZipRecruiter login may have failed. URL: {page.url}")
-        return False
+        # Wait for user to log in manually (5 minute timeout)
+        return await self.wait_for_manual_login(
+            page,
+            check_url_pattern="ziprecruiter.com",
+            check_selector=LOGGED_IN_SELECTORS[0],
+            timeout=300,
+        )
 
-    # ── Search ───────────────────────────────────────────────────
+    # ------------------------------------------------------------------
+    # Job Search
+    # ------------------------------------------------------------------
 
     async def search_jobs(self, keyword: str, location: str) -> list[Job]:
+        """Search ZipRecruiter Jobs with Quick Apply filter enabled.
+
+        Uses ``days=14`` for last 14 days and
+        ``refine_by_quick_apply=true`` for Quick Apply filter.
+        Paginates through up to MAX_SEARCH_PAGES pages.
+        """
         page = await self.get_page()
-        click.echo(f"  Searching ZipRecruiter for: {keyword}")
+        await self.check_and_abort_on_captcha(page)
 
-        url = f"{SEARCH_URL}?search={keyword}&is_one_click_apply=true"
-        if location:
-            url += f"&location={location}"
+        jobs: list[Job] = []
+        encoded_kw = quote_plus(keyword)
+        encoded_loc = quote_plus(location)
 
-        await page.goto(url, wait_until="domcontentloaded")
-        await random_delay(3, 6)
-        await human_scroll(page)
+        for page_num in range(MAX_SEARCH_PAGES):
+            # ZipRecruiter uses 1-based page numbering
+            search_url = (
+                f"https://www.ziprecruiter.com/jobs-search"
+                f"?search={encoded_kw}"
+                f"&location={encoded_loc}"
+                f"&days=14"
+                f"&refine_by_quick_apply=true"
+                f"&page={page_num + 1}"
+            )
 
-        job_cards = await page.query_selector_all(
-            'article.job-listing, [data-testid="job-card"], .jobList article'
+            logger.info(
+                "ZipRecruiter: Searching page %d -- %s %s",
+                page_num + 1,
+                keyword,
+                location,
+            )
+            await page.goto(search_url, wait_until="domcontentloaded")
+            await reading_pause(page)
+            await self.check_and_abort_on_captcha(page)
+
+            # Parse job cards from this page
+            page_jobs = await self._parse_job_cards(page, keyword)
+            jobs.extend(page_jobs)
+
+            if len(jobs) >= MAX_JOBS_PER_SEARCH:
+                break
+
+            # Check if there are more pages
+            if not page_jobs:
+                logger.info(
+                    "ZipRecruiter: No more job cards found, stopping pagination"
+                )
+                break
+
+            # Organic delay between pages
+            await simulate_organic_behavior(page)
+            await random_delay(3.0, 6.0)
+
+        logger.info(
+            "ZipRecruiter: Found %d jobs for '%s' in '%s'",
+            len(jobs),
+            keyword,
+            location,
         )
+        return jobs[:MAX_JOBS_PER_SEARCH]
 
-        click.echo(f"  Found {len(job_cards)} listings.")
-        jobs = []
+    async def _parse_job_cards(self, page: Page, keyword: str) -> list[Job]:
+        """Parse job cards from the current search results page."""
+        jobs: list[Job] = []
 
-        for card in job_cards:
+        # Scroll down to load lazy-loaded cards
+        for _ in range(random.randint(2, 4)):
+            await human_scroll(page, "down", random.randint(300, 500))
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+
+        # Find all job card containers
+        cards = []
+        for sel in JOB_CARD_SELECTORS:
             try:
-                job = await self._parse_card(card, keyword)
+                cards = await page.query_selector_all(sel)
+                if cards:
+                    logger.debug("Found %d job cards via '%s'", len(cards), sel)
+                    break
+            except Exception:
+                continue
+
+        if not cards:
+            logger.warning("ZipRecruiter: No job cards found on page")
+            return jobs
+
+        for card in cards:
+            try:
+                job = await self._parse_single_card(card, page, keyword)
                 if job:
                     jobs.append(job)
-            except Exception as e:
-                click.echo(f"    Skipping card (parse error): {e}")
-            await random_mouse_movement(page)
+            except Exception as exc:
+                logger.debug("Failed to parse a job card: %s", exc)
+                continue
 
         return jobs
 
-    async def _parse_card(self, card, search_keyword: str) -> Job | None:
-        link = await card.query_selector(
-            'a[href*="/jobs/"], a.job-title, a[data-testid="job-title"]'
-        )
-        if not link:
+    async def _parse_single_card(
+        self, card, page: Page, keyword: str
+    ) -> Job | None:
+        """Extract job data from a single job card element."""
+        # Get title
+        title = ""
+        for sel in JOB_TITLE_SELECTORS:
+            try:
+                title_el = await card.query_selector(sel)
+                if title_el:
+                    title = (await title_el.inner_text()).strip()
+                    break
+            except Exception:
+                continue
+
+        if not title:
             return None
 
-        href = await link.get_attribute("href") or ""
-        # ZipRecruiter job URLs look like /jobs/{slug}/{job_id}
-        # or /c/{company}/job/{job_id}
-        job_id = href.rstrip("/").split("/")[-1].split("?")[0]
+        # Get company
+        company = ""
+        for sel in JOB_COMPANY_SELECTORS:
+            try:
+                company_el = await card.query_selector(sel)
+                if company_el:
+                    company = (await company_el.inner_text()).strip()
+                    break
+            except Exception:
+                continue
+
+        # Get job URL / ID
+        job_url = ""
+        job_id = ""
+
+        # Try data-job-id attribute on the card (article element)
+        try:
+            data_id = await card.get_attribute("data-job-id")
+            if data_id:
+                job_id = f"zr-{data_id}"
+        except Exception:
+            pass
+
+        # Try the title link for URL
+        for sel in JOB_TITLE_SELECTORS:
+            try:
+                link_el = await card.query_selector(sel)
+                if link_el:
+                    href = await link_el.get_attribute("href") or ""
+                    if href:
+                        job_url = (
+                            href
+                            if href.startswith("http")
+                            else f"https://www.ziprecruiter.com{href}"
+                        )
+                        # Extract job ID from URL if not found via attribute
+                        if not job_id:
+                            # ZipRecruiter URLs often contain job ID in path
+                            match = re.search(r"/jobs?/([a-f0-9-]+)", href)
+                            if match:
+                                job_id = f"zr-{match.group(1)}"
+                        break
+            except Exception:
+                continue
+
+        # Fallback: try other data attributes
         if not job_id:
-            return None
+            try:
+                data_id = await card.get_attribute("data-id")
+                if data_id:
+                    job_id = f"zr-{data_id}"
+            except Exception:
+                pass
 
-        title = (await link.inner_text()).strip()
-
-        company_el = await card.query_selector(
-            '[data-testid="company-name"], .company-name, .job-company'
-        )
-        company = (await company_el.inner_text()).strip() if company_el else "Unknown Company"
-
-        full_url = href if href.startswith("http") else f"https://www.ziprecruiter.com{href}"
+        if not job_id:
+            # Generate a fallback ID from title + company
+            job_id = f"zr-{hash(title + company) % 10**8}"
 
         return Job(
             job_id=job_id,
             title=title,
             company=company,
-            url=full_url,
-            search_keyword=search_keyword,
+            url=job_url,
+            search_keyword=keyword,
             source=self.source_id,
         )
 
-    # ── Job Description ──────────────────────────────────────────
+    # ------------------------------------------------------------------
+    # Job Description
+    # ------------------------------------------------------------------
 
     async def get_job_description(self, job: Job) -> str:
+        """Navigate to or click into the job listing and extract description."""
         page = await self.get_page()
-        await page.goto(job.url, wait_until="domcontentloaded")
-        await random_delay(2, 4)
-        await human_scroll(page)
 
-        for selector in [
-            '[data-testid="job-description"]',
-            '.job-description',
-            '.jobDescriptionSection',
-            '#job-description',
-        ]:
-            el = await page.query_selector(selector)
-            if el:
-                return (await el.inner_text()).strip()
-        return ""
+        if job.url:
+            await page.goto(job.url, wait_until="domcontentloaded")
+        else:
+            logger.warning(
+                "ZipRecruiter: No URL for job %s, cannot fetch description",
+                job.job_id,
+            )
+            return ""
 
-    # ── Apply ────────────────────────────────────────────────────
+        await reading_pause(page)
+        await self.check_and_abort_on_captcha(page)
+
+        # Extract description text
+        description = await self.safe_get_text(
+            page, JOB_DESCRIPTION_SELECTORS, timeout=5000
+        )
+
+        if description:
+            logger.debug(
+                "ZipRecruiter: Got description for %s (%d chars)",
+                job.job_id,
+                len(description),
+            )
+        else:
+            logger.warning(
+                "ZipRecruiter: Could not extract description for %s",
+                job.job_id,
+            )
+
+        return description
+
+    # ------------------------------------------------------------------
+    # Apply (1-Click + Short Form)
+    # ------------------------------------------------------------------
 
     async def apply_to_job(
-        self, job: Job, dry_run: bool = False,
-    ) -> tuple[bool, list[SkillGap]]:
+        self, job: Job, resume_path: str, dry_run: bool = False
+    ) -> ApplyResult:
+        """Apply via ZipRecruiter's 1-Click Apply or short form.
+
+        Many ZipRecruiter jobs support true 1-click apply. Others have
+        a short form with a few screener questions. This method handles
+        both cases. In dry_run mode, fills fields but does not submit.
+
+        Detects and skips "Apply on company site" links.
+        """
         page = await self.get_page()
 
-        # ZipRecruiter 1-Click Apply is simpler than other platforms:
-        # click button → optional confirm dialog → done
-        apply_btn = None
-        for selector in [
-            'button[data-testid="apply-button"]',
-            'button.one_click_apply',
-            'button[aria-label*="1-Click Apply"]',
-            'button:has-text("1-Click Apply")',
-            'button:has-text("Apply")',
-        ]:
-            apply_btn = await page.query_selector(selector)
-            if apply_btn:
-                # Make sure it's not "Apply on company site"
-                text = (await apply_btn.inner_text()).strip().lower()
-                if "company" in text:
-                    apply_btn = None
-                    continue
-                break
+        try:
+            # Navigate to the job if needed
+            if job.url and job.url not in page.url:
+                await page.goto(job.url, wait_until="domcontentloaded")
+                await reading_pause(page)
 
-        if not apply_btn:
-            click.echo("    No ZipRecruiter 1-Click Apply button found.")
-            return False, []
+            await self.check_and_abort_on_captcha(page)
 
-        if dry_run:
-            click.echo("    [DRY RUN] Would 1-Click Apply here.")
-            return True, []
+            # Check for external apply link (company site redirect)
+            if await self._is_external_apply(page):
+                logger.info(
+                    "ZipRecruiter: Job %s has 'Apply on company site' link, skipping",
+                    job.job_id,
+                )
+                return ApplyResult(
+                    success=False,
+                    failure_reason="Apply on company site -- external redirect",
+                )
 
-        await random_delay(1, 2)
-        await apply_btn.click()
-        await random_delay(2, 4)
-
-        # Handle optional confirmation dialog
-        confirm = await page.query_selector(
-            'button[data-testid="confirm-apply"], '
-            'button:has-text("Confirm"), '
-            'button:has-text("Submit Application")'
-        )
-        if confirm:
-            await confirm.click()
-            await random_delay(2, 4)
-
-        # Check for success indicator
-        success = await page.query_selector(
-            '[data-testid="application-success"], '
-            '.application-success, '
-            ':has-text("Application submitted")'
-        )
-        if success:
-            click.echo("    Application submitted!")
-            return True, []
-
-        # If there's a form (screener questions), try to fill it
-        form = await page.query_selector('form[data-testid*="apply"], .apply-form')
-        if form:
-            gaps = await self._fill_screeners(page, job.job_id)
-
-            submit = await page.query_selector(
-                'button[type="submit"], button:has-text("Submit")'
+            # Click the Apply button
+            clicked = await self.safe_click(
+                page, APPLY_BUTTON_SELECTORS, timeout=5000
             )
-            if submit:
-                if dry_run:
-                    click.echo("    [DRY RUN] Would submit here.")
-                    return True, gaps
-                await submit.click()
-                await random_delay(2, 4)
-                click.echo("    Application submitted!")
-                return True, gaps
+            if not clicked:
+                return ApplyResult(
+                    success=False,
+                    failure_reason="Apply button not found",
+                )
 
-            return False, gaps
+            await random_delay(1.5, 3.0)
 
-        # Assume success if the button was clicked and no error appeared
-        click.echo("    Application likely submitted (no error detected).")
-        return True, []
+            # Check if we got redirected externally after clicking
+            if await self._check_external_redirect(page):
+                return ApplyResult(
+                    success=False,
+                    failure_reason="Apply click redirected to external site",
+                )
 
-    async def _fill_screeners(self, page: Page, job_id: str) -> list[SkillGap]:
-        gaps = []
-        fields = await page.query_selector_all(
-            '.form-group, [data-testid*="question"], .screener-question'
-        )
+            await self.check_and_abort_on_captcha(page)
 
-        for field_group in fields:
-            label_el = await field_group.query_selector("label")
-            if not label_el:
+            # Check for immediate success (1-click apply)
+            if await self._check_success(page):
+                logger.info(
+                    "ZipRecruiter: 1-click apply succeeded for %s", job.job_id
+                )
+                return self._build_result(success=True, dry_run=False)
+
+            # Walk the short application form if present
+            return await self._walk_application_form(
+                page, job, resume_path, dry_run
+            )
+
+        except CaptchaDetectedError as exc:
+            logger.error("ZipRecruiter: %s", exc)
+            return ApplyResult(
+                success=False,
+                failure_reason=str(exc),
+            )
+        except Exception as exc:
+            logger.error(
+                "ZipRecruiter: Apply failed for %s: %s", job.job_id, exc
+            )
+            return ApplyResult(
+                success=False,
+                failure_reason=f"Unexpected error: {exc}",
+            )
+
+    async def _is_external_apply(self, page: Page) -> bool:
+        """Check if the job has an external apply link."""
+        for sel in EXTERNAL_APPLY_SELECTORS:
+            try:
+                el = await page.query_selector(sel)
+                if el:
+                    return True
+            except Exception:
                 continue
 
-            label_text = (await label_el.inner_text()).strip().lower()
-            value = self._match_field(label_text)
+        # Check button/link text for external apply indicators
+        try:
+            links = await page.query_selector_all("a.apply-button, button.apply-button")
+            for link in links:
+                text = (await link.inner_text()).strip().lower()
+                if "company site" in text or "external" in text:
+                    return True
+        except Exception:
+            pass
 
-            if value:
-                input_el = await field_group.query_selector("input, textarea, select")
-                if input_el:
-                    tag = await input_el.evaluate("el => el.tagName.toLowerCase()")
-                    if tag == "select":
-                        await input_el.select_option(label=value)
-                    else:
-                        await input_el.fill("")
-                        input_id = await input_el.get_attribute("id") or ""
-                        if input_id:
-                            await human_type(page, f"#{input_id}", value)
+        return False
+
+    async def _check_external_redirect(self, page: Page) -> bool:
+        """Check if clicking apply left ZipRecruiter or opened a new tab."""
+        if "ziprecruiter.com" not in page.url:
+            return True
+
+        # Check if a new page/tab was opened
+        pages = self.context.pages
+        if len(pages) > 1:
+            for p in pages[1:]:
+                try:
+                    await p.close()
+                except Exception:
+                    pass
+            return True
+
+        return False
+
+    async def _walk_application_form(
+        self, page: Page, job: Job, resume_path: str, dry_run: bool
+    ) -> ApplyResult:
+        """Walk through ZipRecruiter's short application form.
+
+        ZipRecruiter forms are typically shorter than LinkedIn or
+        Indeed -- often just a resume upload and 1-3 screener questions.
+        """
+        for step in range(MAX_FORM_STEPS):
+            logger.info(
+                "ZipRecruiter: Application form step %d for %s",
+                step + 1,
+                job.job_id,
+            )
+
+            await self.check_and_abort_on_captcha(page)
+
+            # Handle resume upload on this step
+            await self._handle_resume_upload(page, resume_path)
+
+            # Detect and fill form fields
+            if self.form_filler:
+                fields = await find_form_fields(page)
+                for field in fields:
+                    await self.form_filler.fill_field(
+                        page, field, job_id=job.job_id
+                    )
+                    await random_delay(0.5, 1.5)
+
+            await simulate_organic_behavior(page)
+
+            # Check for success indicators
+            if await self._check_success(page):
+                logger.info(
+                    "ZipRecruiter: Application success detected for %s",
+                    job.job_id,
+                )
+                return self._build_result(success=True, dry_run=False)
+
+            # Check if this is the submit step
+            is_submit = await self._is_submit_step(page)
+
+            if is_submit:
+                if dry_run:
+                    logger.info(
+                        "ZipRecruiter: DRY RUN -- would submit application for %s",
+                        job.job_id,
+                    )
+                    return self._build_result(success=True, dry_run=True)
+
+                # Submit the application
+                clicked = await self.safe_click(
+                    page, FORM_SUBMIT_SELECTORS, timeout=3000
+                )
+                if clicked:
+                    await random_delay(2.0, 4.0)
+
+                    # Verify submission success
+                    if await self._check_success(page):
+                        logger.info(
+                            "ZipRecruiter: Submitted application for %s",
+                            job.job_id,
+                        )
+                        return self._build_result(success=True, dry_run=False)
+
+                    # Assume success if submit clicked without error
+                    logger.info(
+                        "ZipRecruiter: Submit clicked for %s (no explicit success indicator)",
+                        job.job_id,
+                    )
+                    return self._build_result(success=True, dry_run=False)
+                else:
+                    return self._build_result(
+                        success=False,
+                        failure_reason="Submit button not found on submit step",
+                    )
+
             else:
-                gaps.append(SkillGap(
-                    job_id=job_id,
-                    field_label=label_text,
-                    category="other",
-                ))
+                # Click Continue to advance to the next step
+                clicked = await self.safe_click(
+                    page, FORM_CONTINUE_SELECTORS, timeout=3000
+                )
+                if not clicked:
+                    # Try submit as fallback (single-page form)
+                    clicked = await self.safe_click(
+                        page, FORM_SUBMIT_SELECTORS, timeout=3000
+                    )
+                    if clicked:
+                        if dry_run:
+                            logger.info(
+                                "ZipRecruiter: DRY RUN -- would submit for %s",
+                                job.job_id,
+                            )
+                            return self._build_result(success=True, dry_run=True)
+                        await random_delay(2.0, 4.0)
+                        logger.info(
+                            "ZipRecruiter: Submit clicked (single-page) for %s",
+                            job.job_id,
+                        )
+                        return self._build_result(success=True, dry_run=False)
 
-        return gaps
+                    logger.warning(
+                        "ZipRecruiter: No Continue/Submit button found at step %d",
+                        step + 1,
+                    )
+                    return self._build_result(
+                        success=False,
+                        failure_reason=f"No navigation button found at step {step + 1}",
+                    )
+                await random_delay(1.5, 3.0)
 
-    def _match_field(self, label: str) -> str | None:
-        mappings = {
-            "phone": ["phone", "mobile"],
-            "email": ["email"],
-            "city": ["city", "location"],
-            "first_name": ["first name"],
-            "last_name": ["last name"],
-        }
-        for key, keywords in mappings.items():
-            if any(kw in label for kw in keywords):
-                return self.config.get(key, "")
-        return None
+        # Exceeded max steps
+        logger.warning(
+            "ZipRecruiter: Exceeded %d form steps for %s",
+            MAX_FORM_STEPS,
+            job.job_id,
+        )
+        return self._build_result(
+            success=False,
+            failure_reason=f"Exceeded maximum form steps ({MAX_FORM_STEPS})",
+        )
+
+    async def _is_submit_step(self, page: Page) -> bool:
+        """Check if the current form step has a Submit button."""
+        for sel in FORM_SUBMIT_SELECTORS[:3]:
+            try:
+                el = await page.query_selector(sel)
+                if el:
+                    text = (await el.inner_text()).strip().lower()
+                    if "submit" in text or "apply" in text:
+                        return True
+            except Exception:
+                continue
+
+        # Check all buttons for submit-like text
+        try:
+            buttons = await page.query_selector_all("button")
+            for btn in buttons:
+                text = (await btn.inner_text()).strip().lower()
+                if text in (
+                    "submit",
+                    "submit application",
+                    "apply",
+                    "apply now",
+                    "1-click apply",
+                ):
+                    return True
+        except Exception:
+            pass
+
+        return False
+
+    async def _check_success(self, page: Page) -> bool:
+        """Check if application submission succeeded."""
+        el = await self.safe_query(page, SUCCESS_SELECTORS, timeout=2000)
+        if el:
+            return True
+
+        # Check page text for success phrases
+        try:
+            body_text = await page.inner_text("body")
+            body_lower = body_text.lower()
+            success_phrases = [
+                "application submitted",
+                "your application has been submitted",
+                "successfully applied",
+                "application sent",
+                "you've applied",
+                "thank you for applying",
+                "congratulations",
+                "application received",
+            ]
+            for phrase in success_phrases:
+                if phrase in body_lower:
+                    return True
+        except Exception:
+            pass
+
+        return False
+
+    async def _handle_resume_upload(self, page: Page, resume_path: str) -> None:
+        """Upload resume if a file input is present on the current form step."""
+        if not resume_path:
+            return
+
+        for sel in RESUME_UPLOAD_SELECTORS:
+            try:
+                file_input = await page.query_selector(sel)
+                if file_input:
+                    await file_input.set_input_files(resume_path)
+                    logger.info(
+                        "ZipRecruiter: Uploaded resume from %s", resume_path
+                    )
+                    await random_delay(1.0, 2.0)
+                    return
+            except Exception:
+                continue
+
+    def _build_result(
+        self,
+        success: bool,
+        dry_run: bool = False,
+        failure_reason: str = "",
+    ) -> ApplyResult:
+        """Build an ApplyResult from the current form_filler state."""
+        if self.form_filler:
+            return ApplyResult(
+                success=success,
+                gaps=list(self.form_filler.gaps),
+                resume_used=self.form_filler.resume_label,
+                cover_letter_generated=self.form_filler.cover_letter_generated,
+                failure_reason=failure_reason,
+                fields_filled=self.form_filler.fields_filled,
+                fields_total=self.form_filler.fields_total,
+                used_llm=self.form_filler.used_llm,
+            )
+        return ApplyResult(
+            success=success,
+            failure_reason=failure_reason,
+        )

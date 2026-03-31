@@ -1,50 +1,253 @@
-"""Abstract base class for all job site platform adapters."""
+"""Base class for all job platform adapters.
 
+Each job site (LinkedIn, Indeed, Dice, etc.) implements a subclass of
+:class:`JobPlatform` that provides site-specific selectors and workflows
+while sharing anti-detection helpers and common form utilities.
+
+Key design principles:
+- Manual login ONLY -- never automate credential entry
+- Hard stop on CAPTCHA detection
+- Multiple fallback selectors for everything (DOM changes frequently)
+- Anti-detect helpers between every action
+"""
+import asyncio
+import logging
+import random
+import time
 from abc import ABC, abstractmethod
 
-from playwright.async_api import BrowserContext, Page
+from playwright.async_api import Page
 
-from auto_applier.storage.models import Job, SkillGap
+from auto_applier.browser.anti_detect import (
+    human_move,
+    random_delay,
+    reading_pause,
+    simulate_organic_behavior,
+)
+from auto_applier.storage.models import ApplyResult, Job, SkillGap
+
+logger = logging.getLogger(__name__)
+
+
+class CaptchaDetectedError(Exception):
+    """Raised when a CAPTCHA or bot-detection challenge is detected."""
 
 
 class JobPlatform(ABC):
-    """Every job site adapter implements this interface.
+    """Abstract base for job site adapters.
 
-    The run loop in main.py calls only these methods — it never
-    imports anything platform-specific.
+    Subclasses must define ``source_id`` and ``display_name`` as class
+    attributes, and implement the four abstract methods below.
     """
 
-    name: str  # Human-readable, e.g. "LinkedIn"
-    source_id: str  # Short key for CSV storage, e.g. "linkedin"
+    source_id: str  # "linkedin", "indeed", etc.
+    display_name: str  # "LinkedIn", "Indeed", etc.
 
-    def __init__(self, context: BrowserContext, config: dict) -> None:
-        self.context = context
-        self.config = config
-        self._page: Page | None = None
+    def __init__(self, context, config: dict, form_filler=None) -> None:
+        self.context = context  # Browser context from BrowserSession
+        self.config = config  # Platform-specific config dict
+        self.form_filler = form_filler
+        self._page = None
 
     async def get_page(self) -> Page:
-        """Get or create a page for this platform."""
+        """Get or create the page for this platform."""
         if self._page is None or self._page.is_closed():
-            self._page = await self.context.new_page()
+            pages = self.context.pages
+            self._page = pages[0] if pages else await self.context.new_page()
         return self._page
+
+    # ------------------------------------------------------------------
+    # Required Methods (subclasses must implement)
+    # ------------------------------------------------------------------
 
     @abstractmethod
     async def ensure_logged_in(self) -> bool:
-        """Authenticate with the platform. Return True on success."""
+        """Check if logged in. If not, prompt user for manual login.
+
+        Returns True if successfully logged in. Must NEVER automate
+        credential entry -- only navigate to the login page and wait.
+        """
+        ...
 
     @abstractmethod
     async def search_jobs(self, keyword: str, location: str) -> list[Job]:
-        """Search for jobs matching keyword/location. Return Job objects."""
+        """Search for jobs matching the keyword and location.
+
+        Returns a list of Job objects parsed from the search results.
+        """
+        ...
 
     @abstractmethod
     async def get_job_description(self, job: Job) -> str:
-        """Fetch full description text for a job listing."""
+        """Fetch the full job description text for a given job."""
+        ...
 
     @abstractmethod
     async def apply_to_job(
-        self, job: Job, dry_run: bool = False,
-    ) -> tuple[bool, list[SkillGap]]:
-        """Attempt to apply to a job.
+        self, job: Job, resume_path: str, dry_run: bool = False
+    ) -> ApplyResult:
+        """Apply to a job. Returns rich result with gaps and metadata.
 
-        Returns (success, list_of_skill_gaps_found).
+        If dry_run is True, walk through the form but do not submit.
         """
+        ...
+
+    # ------------------------------------------------------------------
+    # Shared Helpers -- Selector Utilities
+    # ------------------------------------------------------------------
+
+    async def safe_query(
+        self, page: Page, selectors: list[str], timeout: int = 3000
+    ):
+        """Try multiple selectors, return first visible match or None.
+
+        This is essential because job sites change their DOM frequently.
+        Always provide multiple fallback selectors.
+        """
+        for sel in selectors:
+            try:
+                el = await page.wait_for_selector(
+                    sel, timeout=timeout, state="visible"
+                )
+                if el:
+                    return el
+            except Exception:
+                continue
+        return None
+
+    async def safe_click(
+        self, page: Page, selectors: list[str], timeout: int = 3000
+    ) -> bool:
+        """Try clicking first matching selector with human-like movement.
+
+        Returns True if an element was found and clicked.
+        """
+        el = await self.safe_query(page, selectors, timeout)
+        if el:
+            box = await el.bounding_box()
+            if box:
+                tx = box["x"] + random.uniform(
+                    box["width"] * 0.2, box["width"] * 0.8
+                )
+                ty = box["y"] + random.uniform(
+                    box["height"] * 0.2, box["height"] * 0.8
+                )
+                await human_move(page, tx, ty)
+                await asyncio.sleep(random.uniform(0.05, 0.15))
+                await page.mouse.click(tx, ty)
+                return True
+            # Fallback if no bounding box
+            await el.click()
+            return True
+        return False
+
+    async def safe_get_text(
+        self, page: Page, selectors: list[str], timeout: int = 3000
+    ) -> str:
+        """Get inner text from first matching selector, or empty string."""
+        el = await self.safe_query(page, selectors, timeout)
+        if el:
+            try:
+                return (await el.inner_text()).strip()
+            except Exception:
+                return ""
+        return ""
+
+    # ------------------------------------------------------------------
+    # Shared Helpers -- Detection
+    # ------------------------------------------------------------------
+
+    async def detect_captcha(self, page: Page) -> bool:
+        """Check if a CAPTCHA or bot-detection challenge is present.
+
+        Checks both iframe-based CAPTCHAs and page-text detection phrases.
+        """
+        captcha_selectors = [
+            "iframe[src*='captcha']",
+            "iframe[src*='recaptcha']",
+            "iframe[src*='hcaptcha']",
+            "#captcha",
+            "[data-testid='captcha']",
+            ".g-recaptcha",
+            "#px-captcha",
+        ]
+        for sel in captcha_selectors:
+            try:
+                el = await page.query_selector(sel)
+                if el:
+                    logger.warning("CAPTCHA detected via selector: %s", sel)
+                    return True
+            except Exception:
+                continue
+
+        # Check page text for common detection phrases
+        try:
+            body_text = await page.inner_text("body")
+            detection_phrases = [
+                "unusual activity",
+                "suspicious activity",
+                "verify you're human",
+                "security check",
+                "are you a robot",
+                "challenge validation",
+                "bot detection",
+            ]
+            body_lower = body_text.lower()
+            for phrase in detection_phrases:
+                if phrase in body_lower:
+                    logger.warning("Detection phrase found: '%s'", phrase)
+                    return True
+        except Exception:
+            pass
+
+        return False
+
+    async def check_and_abort_on_captcha(self, page: Page) -> None:
+        """Raise CaptchaDetectedError if a CAPTCHA is present.
+
+        Call this between major actions to implement the hard-stop rule.
+        """
+        if await self.detect_captcha(page):
+            raise CaptchaDetectedError(
+                f"CAPTCHA detected on {self.display_name}. "
+                "Stopping immediately to protect the account."
+            )
+
+    # ------------------------------------------------------------------
+    # Shared Helpers -- Manual Login
+    # ------------------------------------------------------------------
+
+    async def wait_for_manual_login(
+        self,
+        page: Page,
+        check_url_pattern: str = "",
+        check_selector: str = "",
+        timeout: int = 300,
+    ) -> bool:
+        """Wait for the user to manually log in via the headed browser.
+
+        Polls every 2 seconds for login indicators (URL pattern or
+        DOM selector). Times out after ``timeout`` seconds (default 5 min).
+        """
+        logger.info(
+            "Waiting for manual login on %s (timeout=%ds)...",
+            self.display_name,
+            timeout,
+        )
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            if check_url_pattern and check_url_pattern in page.url:
+                logger.info("Login detected via URL pattern")
+                return True
+            if check_selector:
+                try:
+                    el = await page.query_selector(check_selector)
+                    if el:
+                        logger.info("Login detected via selector")
+                        return True
+                except Exception:
+                    pass
+            await asyncio.sleep(2.0)
+
+        logger.warning("Manual login timed out after %ds", timeout)
+        return False

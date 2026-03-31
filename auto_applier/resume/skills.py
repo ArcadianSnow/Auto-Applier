@@ -1,64 +1,76 @@
-"""Extract and normalize skills from resume text.
-
-Uses simple keyword matching for the MVP. Can be replaced with NLP later.
-"""
-
-import re
-
-# Common tech/professional skills to look for. Extend as needed.
-KNOWN_SKILLS = {
-    # Programming
-    "python", "java", "javascript", "typescript", "c++", "c#", "go", "rust",
-    "ruby", "php", "swift", "kotlin", "scala", "r",
-    # Web
-    "react", "angular", "vue", "node.js", "django", "flask", "fastapi",
-    "html", "css", "tailwind", "next.js",
-    # Data
-    "sql", "postgresql", "mysql", "mongodb", "redis", "elasticsearch",
-    "pandas", "numpy", "spark", "hadoop", "tableau", "power bi",
-    # Cloud / DevOps
-    "aws", "azure", "gcp", "docker", "kubernetes", "terraform",
-    "ci/cd", "jenkins", "github actions", "linux",
-    # AI/ML
-    "machine learning", "deep learning", "pytorch", "tensorflow",
-    "natural language processing", "computer vision", "llm",
-    # Sales / Business
-    "salesforce", "hubspot", "crm", "b2b sales", "b2c sales", "enterprise sales",
-    "account management", "pipeline management", "lead generation", "cold calling",
-    "prospecting", "negotiation", "closing", "contract management",
-    "revenue forecasting", "territory management", "consultative selling",
-    "solution selling", "upselling", "cross-selling", "sales analytics",
-    "client relationship management",
-    # General
-    "git", "agile", "scrum", "jira", "project management",
-    "communication", "leadership", "problem solving",
-    "excel", "powerpoint", "microsoft office", "google analytics",
-    "strategic planning",
-}
+"""LLM-powered skill extraction from resumes and job descriptions."""
+from auto_applier.llm.router import LLMRouter
+from auto_applier.llm.prompts import SKILL_EXTRACT_RESUME, SKILL_EXTRACT_JD
 
 
-def extract_skills(resume_text: str) -> set[str]:
-    """Find known skills mentioned in the resume text."""
-    text_lower = resume_text.lower()
-    found = set()
+async def extract_resume_skills(router: LLMRouter, resume_text: str) -> dict:
+    """Extract structured skills from resume text via LLM.
 
-    for skill in KNOWN_SKILLS:
-        # Word boundary match to avoid partial matches (e.g., "r" in "react")
-        pattern = r"\b" + re.escape(skill) + r"\b"
-        if re.search(pattern, text_lower):
-            found.add(skill)
+    Returns::
 
-    return found
+        {
+            "technical_skills": [{"name": str, "level": str, "years": int}, ...],
+            "soft_skills": [str, ...],
+            "certifications": [str, ...],
+            "tools": [str, ...]
+        }
+    """
+    result = await router.complete_json(
+        prompt=SKILL_EXTRACT_RESUME.format(resume_text=resume_text),
+        system_prompt=SKILL_EXTRACT_RESUME.system,
+    )
+    # Ensure expected keys exist with defaults
+    return {
+        "technical_skills": result.get("technical_skills", []),
+        "soft_skills": result.get("soft_skills", []),
+        "certifications": result.get("certifications", []),
+        "tools": result.get("tools", []),
+    }
 
 
-def find_missing_skills(resume_skills: set[str], job_description: str) -> set[str]:
-    """Find skills mentioned in job description but not in the resume."""
-    job_text_lower = job_description.lower()
-    missing = set()
+async def extract_jd_requirements(router: LLMRouter, job_description: str) -> dict:
+    """Extract required/preferred skills from a job description via LLM.
 
-    for skill in KNOWN_SKILLS:
-        pattern = r"\b" + re.escape(skill) + r"\b"
-        if re.search(pattern, job_text_lower) and skill not in resume_skills:
-            missing.add(skill)
+    Returns::
 
+        {
+            "required": [str, ...],
+            "preferred": [str, ...],
+            "experience_level": str
+        }
+    """
+    result = await router.complete_json(
+        prompt=SKILL_EXTRACT_JD.format(job_description=job_description),
+        system_prompt=SKILL_EXTRACT_JD.system,
+    )
+    return {
+        "required": result.get("required", []),
+        "preferred": result.get("preferred", []),
+        "experience_level": result.get("experience_level", ""),
+    }
+
+
+def find_missing_skills(resume_skills: dict, jd_requirements: dict) -> list[str]:
+    """Compare resume skills against JD requirements. Returns missing skill names.
+
+    Flattens technical_skills, tools, and certifications from the resume
+    into a lowercase set and checks each required skill against it.
+    """
+    # Flatten all resume skill names to lowercase set
+    resume_names: set[str] = set()
+    for skill in resume_skills.get("technical_skills", []):
+        if isinstance(skill, dict):
+            resume_names.add(skill.get("name", "").lower())
+        else:
+            resume_names.add(str(skill).lower())
+    for skill in resume_skills.get("tools", []):
+        resume_names.add(str(skill).lower())
+    for cert in resume_skills.get("certifications", []):
+        resume_names.add(str(cert).lower())
+
+    # Check required skills against resume
+    missing = []
+    for req in jd_requirements.get("required", []):
+        if req.lower() not in resume_names:
+            missing.append(req)
     return missing

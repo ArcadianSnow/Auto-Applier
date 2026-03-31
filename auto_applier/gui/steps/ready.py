@@ -1,127 +1,189 @@
-"""Step 6: Ready to run — AC theme."""
-
-from __future__ import annotations
-
+"""Step 8: Summary and launch."""
+import asyncio
 import json
-import os
-import shutil
+import threading
 import tkinter as tk
-from pathlib import Path
-from tkinter import ttk
-from typing import TYPE_CHECKING
+from tkinter import ttk, messagebox
 
+from auto_applier.config import DATA_DIR
 from auto_applier.gui.styles import (
-    SANDY_SHORE, CREAM, DRIFTWOOD, WARM_WHITE,
-    SOIL_BROWN, BARK_BROWN, DRIFTWOOD_GRAY,
-    BORDER_LIGHT, NOOK_GREEN_DARK, INFO_BLUE, ERROR_RED,
-    HEADING_FONT, BODY_FONT,
+    BG, BG_CARD, PRIMARY, ACCENT, DANGER, TEXT, TEXT_LIGHT, TEXT_MUTED,
+    BORDER, STATUS_SUCCESS, STATUS_ERROR,
+    FONT_HEADING, FONT_SUBHEADING, FONT_BODY, FONT_SMALL, FONT_MONO,
+    PAD_X, PAD_Y, make_scrollable,
 )
 
-if TYPE_CHECKING:
-    from auto_applier.gui.wizard import WizardApp
 
+class ReadyStep(ttk.Frame):
+    """Final step: configuration summary and launch buttons."""
 
-class ReadyStep(tk.Frame):
-    def __init__(self, parent: tk.Widget, wizard: WizardApp) -> None:
-        super().__init__(parent, bg=SANDY_SHORE)
+    def __init__(self, parent: tk.Widget, wizard) -> None:
+        super().__init__(parent, style="TFrame")
         self.wizard = wizard
+        self._build()
 
-        self.grid_columnconfigure(0, weight=1)
+    def _build(self) -> None:
+        # Heading
+        ttk.Label(
+            self, text="Ready to Apply", style="Heading.TLabel",
+        ).pack(anchor="w", padx=PAD_X, pady=(PAD_Y, 4))
 
-        header_row = tk.Frame(self, bg=SANDY_SHORE)
-        header_row.grid(row=0, column=0, sticky="ew", padx=40, pady=(16, 4))
-        tk.Label(header_row, text="You're All Set!", font=(HEADING_FONT, 14, "bold"), fg=SOIL_BROWN, bg=SANDY_SHORE).pack(side="left")
-        ttk.Button(header_row, text="← Edit Settings", style="Ghost.TButton", command=lambda: wizard.go_to_step(1)).pack(side="right")
+        ttk.Label(
+            self,
+            text="Review your configuration and launch.",
+            style="Small.TLabel",
+        ).pack(anchor="w", padx=PAD_X, pady=(0, PAD_Y))
 
-        tk.Label(self, text="Review your configuration below, then choose how to proceed.", font=(BODY_FONT, 10), fg=DRIFTWOOD_GRAY, bg=SANDY_SHORE, anchor="w").grid(row=1, column=0, sticky="nw", padx=40, pady=(0, 6))
+        # Scrollable summary area
+        scroll_container = ttk.Frame(self)
+        scroll_container.pack(fill="both", expand=True, padx=PAD_X, pady=(0, 8))
+        _canvas, self._inner = make_scrollable(scroll_container)
 
-        self.card = tk.Frame(self, bg=CREAM, highlightbackground=BORDER_LIGHT, highlightthickness=1, padx=16, pady=8)
-        self.card.grid(row=2, column=0, sticky="ew", padx=40, pady=(0, 10))
+        # Buttons at bottom (outside scroll)
+        btn_frame = tk.Frame(self, bg=BG)
+        btn_frame.pack(fill="x", padx=PAD_X, pady=(0, PAD_Y))
 
-        self.summary_labels: list[tuple[tk.Label, tk.Label]] = []
-        for i, field in enumerate(["Platforms", "Resume", "Name", "Phone", "City", "LinkedIn", "Keywords", "Job Location"]):
-            k = tk.Label(self.card, text=field + ":", font=(BODY_FONT, 9, "bold"), fg=BARK_BROWN, bg=CREAM, anchor="e", width=12)
-            k.grid(row=i, column=0, sticky="e", padx=(0, 8), pady=1)
-            v = tk.Label(self.card, text="—", font=(BODY_FONT, 9), fg=SOIL_BROWN, bg=CREAM, anchor="w", wraplength=380)
-            v.grid(row=i, column=1, sticky="w", pady=1)
-            self.summary_labels.append((k, v))
+        ttk.Button(
+            btn_frame, text="Run", style="Primary.TButton",
+            command=lambda: self._launch(dry_run=False),
+        ).pack(side="left", padx=(0, 8))
 
-        ttk.Separator(self, orient="horizontal").grid(row=3, column=0, sticky="ew", padx=40, pady=(0, 10))
+        ttk.Button(
+            btn_frame, text="Dry Run", style="Accent.TButton",
+            command=lambda: self._launch(dry_run=True),
+        ).pack(side="left", padx=(0, 8))
 
-        btn_row = tk.Frame(self, bg=SANDY_SHORE)
-        btn_row.grid(row=4, column=0, pady=(0, 4))
-        ttk.Button(btn_row, text="Run (Apply to Jobs)", style="Primary.TButton", command=self._run_live).pack(side="left", padx=(0, 8))
-        ttk.Button(btn_row, text="Dry Run", style="Secondary.TButton", command=self._run_dry).pack(side="left", padx=(0, 8))
-        ttk.Button(btn_row, text="Exit", style="Danger.TButton", command=self._exit).pack(side="left")
+        ttk.Button(
+            btn_frame, text="Exit",
+            command=self.wizard.destroy,
+        ).pack(side="right")
 
-        self.status_label = tk.Label(self, text="", font=(BODY_FONT, 10), fg=DRIFTWOOD_GRAY, bg=SANDY_SHORE)
-        self.status_label.grid(row=5, column=0, pady=(4, 8))
+    def on_show(self) -> None:
+        """Rebuild the summary when this step is shown."""
+        # Clear old summary widgets
+        for w in self._inner.winfo_children():
+            w.destroy()
+        self._render_summary()
 
-    def on_show(self):
-        d = self.wizard.data
-        names = {"linkedin": "LinkedIn", "indeed": "Indeed", "dice": "Dice", "ziprecruiter": "ZipRecruiter"}
-        enabled = self.wizard.get_enabled_platforms()
-        vals = [
-            ", ".join(names.get(k, k) for k in enabled) or "None",
-            os.path.basename(d["resume_path"].get()) or "—",
-            f"{d['first_name'].get()} {d['last_name'].get()}".strip() or "—",
-            d["phone"].get() or "—", d["city"].get() or "—",
-            d["linkedin"].get() or "—", d["keywords"].get() or "—", d["location"].get() or "—",
+    def _render_summary(self) -> None:
+        """Build the configuration summary cards."""
+        config = self.wizard.get_config()
+
+        # --- Platforms ---
+        self._summary_card("Platforms", self._inner, [
+            ("Enabled", ", ".join(p.title() for p in config["enabled_platforms"]) or "None"),
+        ])
+
+        # --- Resumes ---
+        resumes = config.get("resumes", [])
+        resume_lines = [
+            ("Loaded", f"{len(resumes)} resume(s)"),
         ]
-        for (_, v_lbl), val in zip(self.summary_labels, vals):
-            v_lbl.configure(text=val[:55] + "..." if len(val) > 55 else val)
+        for r in resumes:
+            resume_lines.append(("", f"  {r['label']}"))
+        self._summary_card("Resumes", self._inner, resume_lines)
 
-    def _save_config(self):
-        from auto_applier.config import PROJECT_ROOT, RESUMES_DIR, USER_CONFIG_FILE
-        d = self.wizard.data
-        enabled = self.wizard.get_enabled_platforms()
+        # --- Search ---
+        keywords = ", ".join(config.get("search_keywords", []))
+        self._summary_card("Search", self._inner, [
+            ("Keywords", keywords or "None"),
+            ("Location", config.get("location", "") or "Not set"),
+        ])
 
-        with open(PROJECT_ROOT / ".env", "w") as f:
-            for key in enabled:
-                prefix = key.upper()
-                f.write(f"{prefix}_EMAIL={d[f'{key}_email'].get()}\n")
-                f.write(f"{prefix}_PASSWORD={d[f'{key}_password'].get()}\n")
+        # --- Scoring ---
+        scoring = config.get("scoring", {})
+        self._summary_card("Scoring", self._inner, [
+            ("Max apps/day", str(config.get("max_applications_per_day", 10))),
+            ("Auto-apply threshold", str(scoring.get("auto_apply_min", 7))),
+            ("Review minimum", str(scoring.get("review_min", 4))),
+        ])
 
-        resume_src = d["resume_path"].get()
-        config = {}
-        if resume_src and os.path.exists(resume_src):
-            src = Path(resume_src).resolve()
-            dest = RESUMES_DIR / src.name
-            if src != dest.resolve():
-                shutil.copy2(resume_src, dest)
-            config["resume_path"] = str(dest)
-        else:
-            config["resume_path"] = resume_src
+        # --- AI ---
+        llm = config.get("llm", {})
+        ollama_model = llm.get("ollama_model", "")
+        gemini_key = llm.get("gemini_api_key", "")
+        ai_status = []
+        if ollama_model:
+            ai_status.append(f"Ollama ({ollama_model})")
+        if gemini_key:
+            ai_status.append("Gemini (key set)")
+        ai_status.append("Rule-based (always available)")
 
-        platforms_config = {key: {"email": d[f"{key}_email"].get()} for key in enabled}
-        config.update({
-            "enabled_platforms": enabled, "platforms": platforms_config,
-            "first_name": d["first_name"].get(), "last_name": d["last_name"].get(),
-            "phone": d["phone"].get(), "city": d["city"].get(),
-            "linkedin": d["linkedin"].get(), "website": d["website"].get(),
-            "search_keywords": [k.strip() for k in d["keywords"].get().split(",") if k.strip()],
-            "location": d["location"].get(),
-        })
-        with open(USER_CONFIG_FILE, "w") as f:
-            json.dump(config, f, indent=2)
+        self._summary_card("AI Backends", self._inner, [
+            ("Routing", " -> ".join(ai_status)),
+        ])
 
-    def _run_live(self):
-        self._save_config()
-        self.status_label.configure(text="Configuration saved! Launching dashboard...", fg=NOOK_GREEN_DARK)
-        self.wizard.root.after(300, self._launch_dashboard, False)
+        # --- Personal ---
+        p = config.get("personal_info", {})
+        name = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
+        self._summary_card("Personal Info", self._inner, [
+            ("Name", name or "Not set"),
+            ("Email", p.get("email", "") or "Not set"),
+            ("Phone", p.get("phone", "") or "Not set"),
+            ("City", p.get("city", "") or "Not set"),
+        ])
 
-    def _run_dry(self):
-        self._save_config()
-        self.status_label.configure(text="Configuration saved! Launching dashboard...", fg=INFO_BLUE)
-        self.wizard.root.after(300, self._launch_dashboard, True)
+    def _summary_card(
+        self, title: str, parent: tk.Widget, rows: list[tuple[str, str]]
+    ) -> None:
+        """Render a summary card with key-value rows."""
+        card = tk.Frame(
+            parent, bg=BG_CARD, highlightbackground=BORDER,
+            highlightthickness=1, padx=16, pady=12,
+        )
+        card.pack(fill="x", padx=4, pady=4)
 
-    def _launch_dashboard(self, dry_run):
+        tk.Label(
+            card, text=title, font=FONT_SUBHEADING,
+            fg=PRIMARY, bg=BG_CARD,
+        ).pack(anchor="w", pady=(0, 6))
+
+        for label, value in rows:
+            row = tk.Frame(card, bg=BG_CARD)
+            row.pack(fill="x", pady=1)
+
+            if label:
+                tk.Label(
+                    row, text=f"{label}:", font=FONT_BODY,
+                    fg=TEXT_LIGHT, bg=BG_CARD, width=20, anchor="w",
+                ).pack(side="left")
+
+            tk.Label(
+                row, text=value, font=FONT_BODY,
+                fg=TEXT, bg=BG_CARD, anchor="w",
+            ).pack(side="left", fill="x")
+
+    # ------------------------------------------------------------------
+    # Launch
+    # ------------------------------------------------------------------
+
+    def _launch(self, dry_run: bool) -> None:
+        """Save all config and open the dashboard."""
+        # Validate resumes
+        if not self.wizard.resume_list:
+            messagebox.showwarning(
+                "No Resumes",
+                "Please go back and add at least one resume.",
+                parent=self.wizard,
+            )
+            return
+
+        # Save config
+        try:
+            self.wizard.save_config()
+            self.wizard.save_answers()
+        except Exception as e:
+            messagebox.showerror(
+                "Save Error",
+                f"Failed to save configuration:\n{e}",
+                parent=self.wizard,
+            )
+            return
+
+        config = self.wizard.get_config()
+        config["dry_run"] = dry_run
+
+        # Open dashboard
         from auto_applier.gui.dashboard import DashboardWindow
-        from auto_applier.main import load_user_config
-        config = load_user_config()
-        enabled = config.get("enabled_platforms", ["linkedin"])
-        dashboard = DashboardWindow(self.wizard.root, enabled, dry_run=dry_run)
+        dashboard = DashboardWindow(self.wizard, config)
         dashboard.start_run(config, dry_run)
-
-    def _exit(self):
-        self.wizard.root.destroy()

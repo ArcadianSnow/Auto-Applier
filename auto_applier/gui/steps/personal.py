@@ -1,70 +1,115 @@
-"""Step 4: Personal information — AC theme."""
-
-from __future__ import annotations
-
+"""Step 4: Personal information form."""
 import tkinter as tk
-from tkinter import ttk
-from typing import TYPE_CHECKING
+from tkinter import ttk, messagebox
 
 from auto_applier.gui.styles import (
-    SANDY_SHORE, SOIL_BROWN, BARK_BROWN, DRIFTWOOD_GRAY, FOGGY, ERROR_RED,
-    HEADING_FONT, BODY_FONT,
+    BG, BG_CARD, PRIMARY, TEXT, TEXT_LIGHT, BORDER,
+    FONT_HEADING, FONT_SUBHEADING, FONT_BODY, FONT_SMALL,
+    PAD_X, PAD_Y, make_scrollable,
 )
 
-if TYPE_CHECKING:
-    from auto_applier.gui.wizard import WizardApp
 
+class PersonalStep(ttk.Frame):
+    """Personal info form with scrollable content."""
 
-class PersonalInfoStep(tk.Frame):
-    def __init__(self, parent: tk.Widget, wizard: WizardApp) -> None:
-        super().__init__(parent, bg=SANDY_SHORE)
+    def __init__(self, parent: tk.Widget, wizard) -> None:
+        super().__init__(parent, style="TFrame")
         self.wizard = wizard
-        self.errors: dict[str, tk.Label] = {}
+        self._build()
 
-        canvas = tk.Canvas(self, bg=SANDY_SHORE, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
-        self.scroll_frame = tk.Frame(canvas, bg=SANDY_SHORE)
-        self.scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw", width=600)
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True, padx=(40, 0), pady=16)
-        scrollbar.pack(side="right", fill="y", pady=16)
-        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"))
+    def _build(self) -> None:
+        # Heading (outside scroll area)
+        ttk.Label(
+            self, text="Personal Information", style="Heading.TLabel",
+        ).pack(anchor="w", padx=PAD_X, pady=(PAD_Y, 4))
 
-        content = self.scroll_frame
+        ttk.Label(
+            self,
+            text="This information is used to fill out application forms.",
+            style="Small.TLabel",
+        ).pack(anchor="w", padx=PAD_X, pady=(0, PAD_Y))
 
-        tk.Label(content, text="Personal Information", font=(HEADING_FONT, 14, "bold"), fg=SOIL_BROWN, bg=SANDY_SHORE).pack(anchor="w", pady=(0, 4))
-        tk.Label(content, text="Used to fill out application forms automatically.", font=(BODY_FONT, 10), fg=DRIFTWOOD_GRAY, bg=SANDY_SHORE).pack(anchor="w", pady=(0, 14))
+        # Scrollable area
+        scroll_container = ttk.Frame(self)
+        scroll_container.pack(fill="both", expand=True, padx=PAD_X, pady=(0, PAD_Y))
+        _canvas, inner = make_scrollable(scroll_container)
 
-        name_row = tk.Frame(content, bg=SANDY_SHORE)
-        name_row.pack(fill="x", pady=(0, 2))
-        left = tk.Frame(name_row, bg=SANDY_SHORE)
-        left.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self._add_field(left, "First Name", "first_name", width=25, required=True)
-        right = tk.Frame(name_row, bg=SANDY_SHORE)
-        right.pack(side="left", fill="x", expand=True, padx=(8, 0))
-        self._add_field(right, "Last Name", "last_name", width=25, required=True)
+        # Card
+        card = tk.Frame(
+            inner, bg=BG_CARD, highlightbackground=BORDER,
+            highlightthickness=1, padx=20, pady=16,
+        )
+        card.pack(fill="x", padx=4, pady=4)
 
-        self._add_field(content, "Phone Number", "phone", width=30, required=True, hint="+1 (555) 000-0000")
-        self._add_field(content, "City / Location", "city", width=30, required=True, hint="e.g. San Francisco, CA")
-        self._add_field(content, "LinkedIn Profile URL", "linkedin", width=45, required=True, hint="https://linkedin.com/in/yourname")
-        self._add_field(content, "Website / Portfolio (optional)", "website", width=45, required=False, hint="https://yoursite.com")
+        # Field definitions: (label, key, placeholder, required)
+        fields = [
+            ("First Name", "first_name", "Jane", True),
+            ("Last Name", "last_name", "Doe", True),
+            ("Email", "email", "jane.doe@email.com", True),
+            ("Phone", "phone", "+1 (555) 123-4567", True),
+            ("City", "city", "New York, NY", True),
+            ("LinkedIn Profile URL", "linkedin_url", "https://linkedin.com/in/janedoe", False),
+            ("Website / Portfolio URL", "website", "https://janedoe.dev", False),
+        ]
 
-    def _add_field(self, parent, label, key, width=40, required=True, hint=""):
-        tk.Label(parent, text=label, font=(BODY_FONT, 10, "bold"), fg=BARK_BROWN, bg=SANDY_SHORE).pack(anchor="w", pady=(4, 2))
-        ttk.Entry(parent, textvariable=self.wizard.data[key], width=width).pack(anchor="w")
-        if hint:
-            tk.Label(parent, text=hint, font=(BODY_FONT, 9), fg=FOGGY, bg=SANDY_SHORE).pack(anchor="w")
-        err = tk.Label(parent, text="", font=(BODY_FONT, 9, "italic"), fg=ERROR_RED, bg=SANDY_SHORE)
-        err.pack(anchor="w")
-        if required:
-            self.errors[key] = err
-            self.wizard.data[key].trace_add("write", lambda *_, k=key: self.errors[k].configure(text=""))
+        self._entries: dict[str, ttk.Entry] = {}
 
-    def validate(self):
-        valid = True
-        for key, err in self.errors.items():
+        for i, (label_text, key, placeholder, required) in enumerate(fields):
+            row = tk.Frame(card, bg=BG_CARD)
+            row.pack(fill="x", pady=(0, 12))
+
+            display = label_text
+            if not required:
+                display += "  (optional)"
+
+            tk.Label(
+                row, text=display, font=FONT_BODY,
+                fg=TEXT, bg=BG_CARD, anchor="w",
+            ).pack(anchor="w")
+
+            entry = ttk.Entry(
+                row, textvariable=self.wizard.data[key],
+                font=FONT_BODY, width=50,
+            )
+            entry.pack(fill="x", pady=(4, 0))
+            self._entries[key] = entry
+
+            # Placeholder behavior
+            self._setup_placeholder(entry, self.wizard.data[key], placeholder)
+
+    def _setup_placeholder(
+        self, entry: ttk.Entry, var: tk.StringVar, placeholder: str
+    ) -> None:
+        """Show placeholder text when field is empty and unfocused."""
+        def on_focus_in(_event=None):
+            if var.get() == placeholder:
+                var.set("")
+                entry.configure(foreground=TEXT)
+
+        def on_focus_out(_event=None):
+            if not var.get().strip():
+                var.set("")
+                # Don't set placeholder into the variable -- just leave empty
+
+        entry.bind("<FocusIn>", on_focus_in)
+        entry.bind("<FocusOut>", on_focus_out)
+
+    def validate(self) -> bool:
+        """Require first name, last name, email."""
+        missing = []
+        for key, label in [
+            ("first_name", "First Name"),
+            ("last_name", "Last Name"),
+            ("email", "Email"),
+        ]:
             if not self.wizard.data[key].get().strip():
-                err.configure(text=f"{key.replace('_', ' ').title()} is required.")
-                valid = False
-        return valid
+                missing.append(label)
+
+        if missing:
+            messagebox.showwarning(
+                "Required Fields",
+                f"Please fill in: {', '.join(missing)}",
+                parent=self.wizard,
+            )
+            return False
+        return True

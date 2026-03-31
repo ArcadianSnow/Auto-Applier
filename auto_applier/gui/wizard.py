@@ -1,264 +1,410 @@
-"""Main wizard window and step controller — Animal Crossing theme."""
-
+"""Main wizard controller -- 8-step setup flow for Auto Applier v2."""
+import json
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
+from auto_applier.config import USER_CONFIG_FILE, DATA_DIR
 from auto_applier.gui.styles import (
-    apply_styles,
-    SANDY_SHORE, CREAM, DRIFTWOOD, WARM_WHITE, BORDER_LIGHT, NOOK_TAN,
-    SOIL_BROWN, DRIFTWOOD_GRAY, FOGGY,
-    STEP_DONE, STEP_ACTIVE, STEP_UPCOMING, NOOK_GREEN_DARK,
-    HEADING_FONT, BODY_FONT,
+    apply_theme,
+    BG,
+    BG_CARD,
+    PRIMARY,
+    PRIMARY_LIGHT,
+    TEXT,
+    TEXT_LIGHT,
+    TEXT_MUTED,
+    BORDER,
+    FONT_HEADING,
+    FONT_BODY,
+    FONT_SMALL,
+    FONT_BUTTON,
+    PAD_X,
+    PAD_Y,
 )
-from auto_applier.gui.steps.welcome import WelcomeStep
-from auto_applier.gui.steps.sites import SitesStep
-from auto_applier.gui.steps.resume import ResumeStep
-from auto_applier.gui.steps.personal import PersonalInfoStep
-from auto_applier.gui.steps.preferences import PreferencesStep
-from auto_applier.gui.steps.ready import ReadyStep
-
-STEPS = [
-    ("Welcome", WelcomeStep),
-    ("Platforms", SitesStep),
-    ("Resume", ResumeStep),
-    ("Personal Info", PersonalInfoStep),
-    ("Job Prefs", PreferencesStep),
-    ("Ready", ReadyStep),
-]
-
-PLATFORM_KEYS = ["linkedin", "indeed", "dice", "ziprecruiter"]
 
 
-class WizardApp:
-    """Multi-step setup wizard for Auto Applier."""
+class WizardApp(tk.Tk):
+    """Multi-step configuration wizard."""
+
+    WINDOW_WIDTH = 800
+    WINDOW_HEIGHT = 650
 
     def __init__(self) -> None:
-        self.root = tk.Tk()
-        self.root.title("Auto Applier — Tom Nook's Job Agency")
-        self.root.geometry("700x600")
-        self.root.resizable(False, False)
-        self.root.configure(bg=SANDY_SHORE)
+        super().__init__()
 
-        apply_styles(self.root)
+        self.title("Auto Applier v2")
+        self.configure(bg=BG)
+        self.resizable(False, False)
+        self._center_window()
 
-        # Shared state
-        self.data: dict[str, tk.Variable] = {
-            "resume_path": tk.StringVar(),
-            "first_name": tk.StringVar(),
-            "last_name": tk.StringVar(),
-            "phone": tk.StringVar(),
-            "city": tk.StringVar(),
-            "linkedin": tk.StringVar(),
-            "website": tk.StringVar(),
-            "keywords": tk.StringVar(),
-            "location": tk.StringVar(),
-        }
+        apply_theme(self)
 
-        for key in PLATFORM_KEYS:
-            self.data[f"{key}_enabled"] = tk.BooleanVar(value=(key == "linkedin"))
-            self.data[f"{key}_email"] = tk.StringVar()
-            self.data[f"{key}_password"] = tk.StringVar()
+        # Shared state -- Variables accessible by all steps
+        self.data: dict[str, tk.Variable] = {}
+        self._init_variables()
 
-        self.current_step = 0
+        # Resume list: list of (label, path) tuples, managed by ResumesStep
+        self.resume_list: list[tuple[str, str]] = []
 
-        self.root.grid_rowconfigure(1, weight=1)
-        self.root.grid_columnconfigure(0, weight=1)
+        # Answer variables: populated by AnswersStep
+        self.answer_vars: dict[str, tk.StringVar] = {}
 
+        # Build UI structure
         self._build_header()
         self._build_content()
         self._build_footer()
 
-        self._show_step(0)
-        self.root.bind("<Return>", lambda e: self._on_next())
+        # Import and register steps (lazy to avoid circular imports)
+        from auto_applier.gui.steps.welcome import WelcomeStep
+        from auto_applier.gui.steps.sites import SitesStep
+        from auto_applier.gui.steps.resumes import ResumesStep
+        from auto_applier.gui.steps.personal import PersonalStep
+        from auto_applier.gui.steps.preferences import PreferencesStep
+        from auto_applier.gui.steps.llm_setup import LLMSetupStep
+        from auto_applier.gui.steps.answers import AnswersStep
+        from auto_applier.gui.steps.ready import ReadyStep
 
-    # ── Header ───────────────────────────────────────────────────
+        self.step_classes = [
+            WelcomeStep,
+            SitesStep,
+            ResumesStep,
+            PersonalStep,
+            PreferencesStep,
+            LLMSetupStep,
+            AnswersStep,
+            ReadyStep,
+        ]
+        self.step_labels = [
+            "Welcome",
+            "Platforms",
+            "Resumes",
+            "Personal",
+            "Preferences",
+            "AI Setup",
+            "Answers",
+            "Ready",
+        ]
+
+        self.steps: list[ttk.Frame] = []
+        for cls in self.step_classes:
+            step = cls(self.content_frame, self)
+            step.place(relx=0, rely=0, relwidth=1, relheight=1)
+            self.steps.append(step)
+
+        self.current_step = 0
+        self._show_step(0)
+
+    # ------------------------------------------------------------------
+    # Variable initialization
+    # ------------------------------------------------------------------
+
+    def _init_variables(self) -> None:
+        """Create all shared tk.Variable instances."""
+        # Platform toggles
+        for key in ("linkedin", "indeed", "dice", "ziprecruiter"):
+            self.data[f"{key}_enabled"] = tk.BooleanVar(value=True)
+
+        # Personal info
+        for key in ("first_name", "last_name", "email", "phone", "city",
+                     "linkedin_url", "website"):
+            self.data[key] = tk.StringVar(value="")
+
+        # Job preferences
+        self.data["search_keywords"] = tk.StringVar(value="")
+        self.data["location"] = tk.StringVar(value="")
+        self.data["max_applications_per_day"] = tk.IntVar(value=10)
+        self.data["auto_apply_min"] = tk.IntVar(value=7)
+        self.data["cli_auto_apply_min"] = tk.IntVar(value=7)
+        self.data["review_min"] = tk.IntVar(value=4)
+
+        # LLM settings
+        self.data["ollama_model"] = tk.StringVar(value="llama3.1:8b")
+        self.data["gemini_api_key"] = tk.StringVar(value="")
+
+        # Load saved config if it exists
+        self._load_saved_config()
+
+    def _load_saved_config(self) -> None:
+        """Pre-populate variables from existing user_config.json."""
+        if not USER_CONFIG_FILE.exists():
+            return
+        try:
+            with open(USER_CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return
+
+        # Personal info
+        personal = cfg.get("personal_info", {})
+        for key in ("first_name", "last_name", "email", "phone", "city",
+                     "linkedin_url", "website"):
+            if key in personal and key in self.data:
+                self.data[key].set(personal[key])
+
+        # Platforms
+        for plat in cfg.get("enabled_platforms", []):
+            var_key = f"{plat}_enabled"
+            if var_key in self.data:
+                self.data[var_key].set(True)
+
+        # Preferences
+        kws = cfg.get("search_keywords", [])
+        if kws:
+            self.data["search_keywords"].set(", ".join(kws))
+        if cfg.get("location"):
+            self.data["location"].set(cfg["location"])
+        if cfg.get("max_applications_per_day"):
+            self.data["max_applications_per_day"].set(cfg["max_applications_per_day"])
+
+        scoring = cfg.get("scoring", {})
+        for key in ("auto_apply_min", "cli_auto_apply_min", "review_min"):
+            if key in scoring:
+                self.data[key].set(scoring[key])
+
+        # LLM
+        llm = cfg.get("llm", {})
+        if llm.get("ollama_model"):
+            self.data["ollama_model"].set(llm["ollama_model"])
+        if llm.get("gemini_api_key"):
+            self.data["gemini_api_key"].set(llm["gemini_api_key"])
+
+    # ------------------------------------------------------------------
+    # Window layout
+    # ------------------------------------------------------------------
+
+    def _center_window(self) -> None:
+        """Center the window on screen."""
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        x = (sw - self.WINDOW_WIDTH) // 2
+        y = (sh - self.WINDOW_HEIGHT) // 2
+        self.geometry(f"{self.WINDOW_WIDTH}x{self.WINDOW_HEIGHT}+{x}+{y}")
 
     def _build_header(self) -> None:
-        # Accent strip (gradient-like with three colors)
-        accent = tk.Frame(self.root, bg=DRIFTWOOD, height=4)
-        accent.grid(row=0, column=0, sticky="ew")
-        accent.grid_propagate(False)
-        # Simple three-color bar
-        for i, color in enumerate(["#4CAF7D", "#7BB8D4", "#E8B84B"]):
-            seg = tk.Frame(accent, bg=color, height=4)
-            seg.place(relx=i/3, rely=0, relwidth=1/3, relheight=1)
+        """Build the progress indicator header."""
+        self.header = tk.Frame(self, bg=BG_CARD, height=70)
+        self.header.pack(fill="x", side="top")
+        self.header.pack_propagate(False)
 
-        self.header = tk.Frame(self.root, bg=DRIFTWOOD, height=86)
-        self.header.grid(row=1, column=0, sticky="ew")
-        self.header.grid_propagate(False)
+        # Separator under header
+        sep = tk.Frame(self, bg=BORDER, height=1)
+        sep.pack(fill="x", side="top")
 
-        self.step_label = tk.Label(
-            self.header, text="",
-            font=(BODY_FONT, 10), fg=DRIFTWOOD_GRAY, bg=DRIFTWOOD,
-        )
-        self.step_label.pack(pady=(10, 4))
+        # Progress dots container
+        self.dots_frame = tk.Frame(self.header, bg=BG_CARD)
+        self.dots_frame.place(relx=0.5, rely=0.5, anchor="center")
 
-        self.dot_frame = tk.Frame(self.header, bg=DRIFTWOOD)
-        self.dot_frame.pack(pady=(0, 6))
-
-        self.dots: list[tk.Canvas] = []
+        self.dot_canvases: list[tk.Canvas] = []
         self.dot_labels: list[tk.Label] = []
-        self.lines: list[tk.Canvas] = []
 
-        for i, (name, _) in enumerate(STEPS):
+    def _build_progress_dots(self) -> None:
+        """Render numbered progress circles with connecting lines."""
+        # Clear previous
+        for w in self.dots_frame.winfo_children():
+            w.destroy()
+        self.dot_canvases.clear()
+        self.dot_labels.clear()
+
+        num = len(self.step_labels)
+        for i, label in enumerate(self.step_labels):
+            # Connecting line (before dot, except first)
             if i > 0:
-                line = tk.Canvas(self.dot_frame, width=50, height=4, bg=DRIFTWOOD, highlightthickness=0)
-                line.create_rectangle(0, 1, 50, 3, fill=STEP_UPCOMING, outline="", tags="line")
-                line.grid(row=0, column=i * 2 - 1, padx=0, pady=(0, 14))
-                self.lines.append(line)
+                line = tk.Frame(self.dots_frame, bg=BORDER, height=2, width=30)
+                line.pack(side="left", pady=(0, 14))
+                # Store the line so we can color it
+                line._step_index = i  # type: ignore[attr-defined]
 
-            dot = tk.Canvas(self.dot_frame, width=24, height=24, bg=DRIFTWOOD, highlightthickness=0)
-            dot.grid(row=0, column=i * 2, padx=2, pady=(0, 14))
-            self.dots.append(dot)
+            # Dot + label column
+            col = tk.Frame(self.dots_frame, bg=BG_CARD)
+            col.pack(side="left")
+
+            canvas = tk.Canvas(
+                col, width=28, height=28, bg=BG_CARD,
+                highlightthickness=0, bd=0,
+            )
+            canvas.pack()
+            self.dot_canvases.append(canvas)
 
             lbl = tk.Label(
-                self.dot_frame, text=name, font=(BODY_FONT, 7),
-                fg=FOGGY, bg=DRIFTWOOD,
+                col, text=label, font=FONT_SMALL, bg=BG_CARD,
+                fg=TEXT_MUTED,
             )
-            lbl.grid(row=1, column=i * 2, padx=0)
+            lbl.pack(pady=(2, 0))
             self.dot_labels.append(lbl)
 
-        tk.Frame(self.header, bg=NOOK_TAN, height=2).pack(fill="x", side="bottom")
-
     def _update_dots(self) -> None:
-        for i, dot in enumerate(self.dots):
-            dot.delete("all")
+        """Redraw progress dots to reflect the current step."""
+        if not self.dot_canvases:
+            self._build_progress_dots()
+
+        for i, canvas in enumerate(self.dot_canvases):
+            canvas.delete("all")
             if i < self.current_step:
-                dot.create_oval(2, 2, 22, 22, fill=STEP_DONE, outline=NOOK_GREEN_DARK)
-                dot.create_text(12, 12, text="✓", fill="white", font=(BODY_FONT, 9, "bold"))
-                self.dot_labels[i].configure(fg=NOOK_GREEN_DARK)
+                # Completed
+                canvas.create_oval(2, 2, 26, 26, fill=PRIMARY, outline=PRIMARY)
+                canvas.create_text(14, 14, text="\u2713", fill="white",
+                                   font=("Segoe UI", 10, "bold"))
+                self.dot_labels[i].configure(fg=PRIMARY)
             elif i == self.current_step:
-                dot.create_oval(2, 2, 22, 22, fill=STEP_ACTIVE, outline="#C89030")
-                dot.create_text(12, 12, text=str(i + 1), fill="white", font=(BODY_FONT, 9, "bold"))
-                self.dot_labels[i].configure(fg=SOIL_BROWN)
+                # Current
+                canvas.create_oval(2, 2, 26, 26, fill=PRIMARY, outline=PRIMARY)
+                canvas.create_text(14, 14, text=str(i + 1), fill="white",
+                                   font=("Segoe UI", 10, "bold"))
+                self.dot_labels[i].configure(fg=PRIMARY)
             else:
-                dot.create_oval(2, 2, 22, 22, fill=STEP_UPCOMING, outline=FOGGY)
-                dot.create_text(12, 12, text=str(i + 1), fill=FOGGY, font=(BODY_FONT, 9))
-                self.dot_labels[i].configure(fg=FOGGY)
+                # Future
+                canvas.create_oval(2, 2, 26, 26, fill=BG_CARD, outline=BORDER,
+                                   width=2)
+                canvas.create_text(14, 14, text=str(i + 1), fill=TEXT_MUTED,
+                                   font=("Segoe UI", 9))
+                self.dot_labels[i].configure(fg=TEXT_MUTED)
 
-        for i, line in enumerate(self.lines):
-            line.delete("line")
-            color = STEP_DONE if i < self.current_step else STEP_UPCOMING
-            line.create_rectangle(0, 1, 50, 3, fill=color, outline="", tags="line")
-
-        name = STEPS[self.current_step][0]
-        self.step_label.configure(text=f"Step {self.current_step + 1} of {len(STEPS)} — {name}")
-
-    # ── Content ──────────────────────────────────────────────────
+        # Color connecting lines
+        for widget in self.dots_frame.winfo_children():
+            idx = getattr(widget, "_step_index", None)
+            if idx is not None:
+                color = PRIMARY if idx <= self.current_step else BORDER
+                widget.configure(bg=color)
 
     def _build_content(self) -> None:
-        self.content = tk.Frame(self.root, bg=SANDY_SHORE)
-        self.content.grid(row=2, column=0, sticky="nsew")
-        self.root.grid_rowconfigure(2, weight=1)
-        self.content.grid_rowconfigure(0, weight=1)
-        self.content.grid_columnconfigure(0, weight=1)
-
-        self.step_frames: list = []
-        for i, (_, StepClass) in enumerate(STEPS):
-            frame = StepClass(self.content, self)
-            frame.grid(row=0, column=0, sticky="nsew")
-            self.step_frames.append(frame)
-
-    # ── Footer ───────────────────────────────────────────────────
+        """Build the main content area."""
+        self.content_frame = ttk.Frame(self, style="TFrame")
+        self.content_frame.pack(fill="both", expand=True, padx=0, pady=0)
 
     def _build_footer(self) -> None:
-        tk.Frame(self.root, bg=NOOK_TAN, height=1).grid(row=3, column=0, sticky="ew")
+        """Build the navigation footer with Back/Next buttons."""
+        sep = tk.Frame(self, bg=BORDER, height=1)
+        sep.pack(fill="x", side="bottom", before=self.content_frame)
 
-        self.footer = tk.Frame(self.root, bg=DRIFTWOOD, height=60)
-        self.footer.grid(row=4, column=0, sticky="ew")
-        self.footer.grid_propagate(False)
-        self.footer.grid_columnconfigure(1, weight=1)
+        self.footer = tk.Frame(self, bg=BG_CARD, height=60)
+        self.footer.pack(fill="x", side="bottom", before=sep)
+        self.footer.pack_propagate(False)
 
-        self.back_btn = ttk.Button(
-            self.footer, text="← Back", style="Ghost.TButton", command=self._on_back,
+        inner = tk.Frame(self.footer, bg=BG_CARD)
+        inner.place(relx=0.5, rely=0.5, anchor="center")
+
+        self.btn_back = ttk.Button(
+            inner, text="Back", command=self._on_back,
         )
-        self.back_btn.grid(row=0, column=0, padx=32, pady=14, sticky="w")
+        self.btn_back.pack(side="left", padx=(0, 12))
 
-        self.next_btn = ttk.Button(
-            self.footer, text="Next →", style="Primary.TButton", command=self._on_next,
+        self.btn_next = ttk.Button(
+            inner, text="Next", style="Primary.TButton",
+            command=self._on_next,
         )
-        self.next_btn.grid(row=0, column=2, padx=32, pady=14, sticky="e")
+        self.btn_next.pack(side="left")
 
-    # ── Navigation ───────────────────────────────────────────────
+    # ------------------------------------------------------------------
+    # Navigation
+    # ------------------------------------------------------------------
 
     def _show_step(self, index: int) -> None:
+        """Show the step at *index* and update navigation state."""
         self.current_step = index
-        self.step_frames[index].tkraise()
+        self.steps[index].tkraise()
+
+        # Notify step it is being shown (for dynamic updates)
+        step = self.steps[index]
+        if hasattr(step, "on_show"):
+            step.on_show()
+
+        # Update dots
         self._update_dots()
 
-        if index == 0 or index == len(STEPS) - 1:
-            self.back_btn.grid_remove()
-            self.next_btn.grid_remove()
+        # Update button visibility
+        if index == 0:
+            self.btn_back.pack_forget()
         else:
-            self.back_btn.grid()
-            self.next_btn.grid()
+            self.btn_back.pack(side="left", padx=(0, 12))
+
+        # Last step has no Next (it has its own buttons)
+        if index == len(self.steps) - 1:
+            self.btn_next.pack_forget()
+        else:
+            self.btn_next.pack(side="left")
+            self.btn_next.configure(text="Next")
 
     def _on_next(self) -> None:
-        step = self.step_frames[self.current_step]
-        if hasattr(step, "validate") and not step.validate():
-            return
-        if self.current_step < len(STEPS) - 1:
+        """Validate current step and advance."""
+        step = self.steps[self.current_step]
+        if hasattr(step, "validate"):
+            if not step.validate():
+                return
+
+        if self.current_step < len(self.steps) - 1:
             self._show_step(self.current_step + 1)
-            new_step = self.step_frames[self.current_step]
-            if hasattr(new_step, "on_show"):
-                new_step.on_show()
 
     def _on_back(self) -> None:
+        """Go to the previous step."""
         if self.current_step > 0:
             self._show_step(self.current_step - 1)
 
-    def go_to_step(self, index: int) -> None:
-        self._show_step(index)
-        new_step = self.step_frames[index]
-        if hasattr(new_step, "on_show"):
-            new_step.on_show()
+    # ------------------------------------------------------------------
+    # Config builder
+    # ------------------------------------------------------------------
 
-    def get_enabled_platforms(self) -> list[str]:
-        return [k for k in PLATFORM_KEYS if self.data[f"{k}_enabled"].get()]
+    def get_config(self) -> dict:
+        """Build the full configuration dict from all wizard state."""
+        # Enabled platforms
+        enabled = []
+        for key in ("linkedin", "indeed", "dice", "ziprecruiter"):
+            if self.data[f"{key}_enabled"].get():
+                enabled.append(key)
 
-    def fill_dummy_data(self) -> None:
-        from auto_applier.config import RESUMES_DIR
+        # Personal info
+        personal = {}
+        for key in ("first_name", "last_name", "email", "phone", "city",
+                     "linkedin_url", "website"):
+            personal[key] = self.data[key].get().strip()
 
-        dummy_resume = RESUMES_DIR / "dummy_resume.docx"
-        if not dummy_resume.exists():
-            self._create_dummy_resume(dummy_resume)
+        # Search keywords as list
+        raw_kw = self.data["search_keywords"].get()
+        keywords = [k.strip() for k in raw_kw.split(",") if k.strip()]
 
-        self.data["linkedin_enabled"].set(True)
-        self.data["linkedin_email"].set("jane.doe@example.com")
-        self.data["linkedin_password"].set("DummyPassword123!")
-        self.data["resume_path"].set(str(dummy_resume))
-        self.data["first_name"].set("Jane")
-        self.data["last_name"].set("Doe")
-        self.data["phone"].set("+1 (555) 123-4567")
-        self.data["city"].set("San Francisco, CA")
-        self.data["linkedin"].set("https://linkedin.com/in/janedoe")
-        self.data["website"].set("https://janedoe.dev")
-        self.data["keywords"].set("Software Engineer, Backend Developer, Python Developer")
-        self.data["location"].set("Remote")
+        config = {
+            "enabled_platforms": enabled,
+            "personal_info": personal,
+            "search_keywords": keywords,
+            "location": self.data["location"].get().strip(),
+            "max_applications_per_day": self.data["max_applications_per_day"].get(),
+            "scoring": {
+                "auto_apply_min": self.data["auto_apply_min"].get(),
+                "cli_auto_apply_min": self.data["cli_auto_apply_min"].get(),
+                "review_min": self.data["review_min"].get(),
+            },
+            "llm": {
+                "ollama_model": self.data["ollama_model"].get().strip(),
+                "gemini_api_key": self.data["gemini_api_key"].get().strip(),
+            },
+            "resumes": [
+                {"label": label, "path": path}
+                for label, path in self.resume_list
+            ],
+        }
+        return config
 
-    @staticmethod
-    def _create_dummy_resume(path) -> None:
-        content = (
-            "Jane Doe\nSoftware Engineer\n"
-            "jane.doe@example.com | +1 (555) 123-4567 | San Francisco, CA\n"
-            "linkedin.com/in/janedoe | janedoe.dev\n\nSKILLS\n"
-            "Python, JavaScript, TypeScript, React, Node.js, Django, Flask,\n"
-            "PostgreSQL, MongoDB, Docker, AWS, Git, Agile, CI/CD\n\nEXPERIENCE\n"
-            "Senior Software Engineer — Acme Corp (2020-Present)\n"
-            "- Built scalable REST APIs serving 1M+ requests/day\n\n"
-            "EDUCATION\nB.S. Computer Science — UC Berkeley (2017)\n"
-        )
-        from docx import Document
-        doc = Document()
-        for line in content.strip().split("\n"):
-            doc.add_paragraph(line)
-        path = path.with_suffix(".docx")
-        doc.save(str(path))
+    def save_config(self) -> None:
+        """Write the current config to user_config.json."""
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        config = self.get_config()
+        with open(USER_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
 
-    def run(self) -> None:
-        self.root.mainloop()
+    def save_answers(self) -> None:
+        """Write collected answers to answers.json."""
+        from auto_applier.config import ANSWERS_FILE
+
+        answers = {}
+        for question, var in self.answer_vars.items():
+            value = var.get().strip()
+            if value:
+                answers[question] = value
+
+        with open(ANSWERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(answers, f, indent=2)
 
 
 def launch_wizard() -> None:
+    """Create and run the wizard application."""
     app = WizardApp()
-    app.run()
+    app.mainloop()

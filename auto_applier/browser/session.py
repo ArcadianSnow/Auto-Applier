@@ -1,118 +1,149 @@
-"""Browser lifecycle with persistent context and anti-detection.
-
-Uses patchright (undetected Playwright fork) when available, falls back
-to standard Playwright. Always runs in headed mode with a persistent
-user profile to preserve cookies/sessions across runs.
-"""
-
+"""Browser lifecycle with persistent context and anti-detection."""
+import logging
 import shutil
+import sys
+from pathlib import Path
 
 from auto_applier.config import BROWSER_PROFILE_DIR
 
+logger = logging.getLogger(__name__)
+
 
 class BrowserSession:
-    """Manages a persistent browser that looks like a real user's Chrome."""
+    """Manages a persistent browser that looks like a real user's Chrome.
+
+    Key stealth features:
+    - Patchright preferred (patches CDP fingerprint leaks), Playwright fallback
+    - Real Chrome via channel param (not bundled Chromium)
+    - Persistent user profile preserves cookies/sessions across runs
+    - Headed mode always -- never headless
+    - Stealth patches applied on standard Playwright pages
+    """
 
     def __init__(self) -> None:
         self._playwright = None
         self._context = None
+        self._using_patchright = False
 
-    async def start(self):
+    async def start(self) -> None:
         """Launch browser with maximum stealth settings."""
-
-        # Prefer patchright (patches CDP leaks that Playwright exposes)
+        # Prefer patchright (patches CDP leaks that detection services check)
         try:
             from patchright.async_api import async_playwright
             self._using_patchright = True
+            logger.info("Using patchright (CDP leak patches active)")
         except ImportError:
             from playwright.async_api import async_playwright
             self._using_patchright = False
+            logger.info("Patchright unavailable, falling back to standard Playwright")
 
         self._playwright = await async_playwright().start()
 
-        # Detect if real Chrome is installed — its fingerprint is much
-        # better than the bundled Chromium binary
         chrome_channel = self._detect_chrome_channel()
+        if chrome_channel:
+            logger.info("Detected real Chrome installation, using channel=%s", chrome_channel)
+        else:
+            logger.warning(
+                "Real Chrome not found -- using bundled Chromium. "
+                "Install Chrome for a better browser fingerprint."
+            )
 
         launch_args = {
             "user_data_dir": str(BROWSER_PROFILE_DIR),
             "headless": False,
-            # Let the browser use its natural viewport — fixed sizes are detectable
-            "no_viewport": True,
-            "locale": "en-US",
-            "color_scheme": "light",
+            "no_viewport": True,  # Let browser use natural viewport size
             "args": [
                 "--disable-blink-features=AutomationControlled",
-                "--disable-infobars",
-                "--enable-webgl",
                 "--no-first-run",
                 "--no-default-browser-check",
             ],
         }
 
-        # Use real Chrome if available (its TLS/JA3 fingerprint is genuine)
         if chrome_channel:
             launch_args["channel"] = chrome_channel
-
-        # Do NOT set a custom user_agent — let the real browser provide its
-        # own UA string so it matches the TLS fingerprint and other signals
 
         self._context = await self._playwright.chromium.launch_persistent_context(
             **launch_args
         )
+        logger.info("Browser session started (patchright=%s)", self._using_patchright)
 
-        # Apply stealth patches if using standard Playwright (patchright
-        # handles this internally)
+        # Apply stealth patches on existing pages if using standard Playwright
         if not self._using_patchright:
+            await self._apply_stealth_to_pages(self._context.pages)
+
+    async def stop(self) -> None:
+        """Close browser and playwright gracefully."""
+        if self._context:
             try:
-                from playwright_stealth import Stealth
-                stealth = Stealth()
-                await stealth.apply_stealth_async(self._context)
-            except ImportError:
-                pass
-
-        return self._context
-
-    @staticmethod
-    def _detect_chrome_channel() -> str | None:
-        """Check if a real Chrome installation exists."""
-        import os
-        from pathlib import Path
-
-        # Common Chrome locations on Windows
-        candidates = [
-            Path(os.environ.get("PROGRAMFILES", "")) / "Google/Chrome/Application/chrome.exe",
-            Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Google/Chrome/Application/chrome.exe",
-            Path(os.environ.get("LOCALAPPDATA", "")) / "Google/Chrome/Application/chrome.exe",
-        ]
-        for path in candidates:
-            if path.exists():
-                return "chrome"
-
-        # Check if chrome is on PATH (Linux/macOS)
-        if shutil.which("google-chrome") or shutil.which("chrome"):
-            return "chrome"
-
-        return None
+                await self._context.close()
+            except Exception as exc:
+                logger.warning("Error closing browser context: %s", exc)
+            self._context = None
+        if self._playwright:
+            try:
+                await self._playwright.stop()
+            except Exception as exc:
+                logger.warning("Error stopping playwright: %s", exc)
+            self._playwright = None
+        logger.info("Browser session stopped")
 
     @property
     def context(self):
-        if self._context is None:
+        """Return the browser context, raising if not started."""
+        if not self._context:
             raise RuntimeError("Browser not started. Call start() first.")
         return self._context
 
     async def get_page(self):
-        """Get the first page or create a new one."""
+        """Get the first existing page or create a new one."""
         pages = self.context.pages
         if pages:
             return pages[0]
-        return await self.context.new_page()
+        return await self.new_page()
 
-    async def close(self) -> None:
-        """Close the browser and clean up."""
-        if self._context:
-            await self._context.close()
-            self._context = None
-        if self._playwright:
-            await self._playwright.stop()
-            self._playwright = None
+    async def new_page(self):
+        """Create a new browser tab with stealth patches applied."""
+        page = await self.context.new_page()
+        if not self._using_patchright:
+            await self._apply_stealth_to_pages([page])
+        return page
+
+    @property
+    def is_running(self) -> bool:
+        """Whether the browser context is active."""
+        return self._context is not None
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _detect_chrome_channel(self) -> str | None:
+        """Check if real Chrome is installed and return the channel name."""
+        if sys.platform == "win32":
+            chrome_paths = [
+                Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+                Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+                Path.home() / r"AppData\Local\Google\Chrome\Application\chrome.exe",
+            ]
+            for p in chrome_paths:
+                if p.exists():
+                    return "chrome"
+        elif sys.platform == "darwin":
+            if Path("/Applications/Google Chrome.app").exists():
+                return "chrome"
+        else:  # Linux
+            for name in ["google-chrome", "google-chrome-stable"]:
+                if shutil.which(name):
+                    return "chrome"
+        return None
+
+    async def _apply_stealth_to_pages(self, pages: list) -> None:
+        """Apply playwright-stealth patches to pages (standard Playwright only)."""
+        try:
+            from playwright_stealth import stealth_async
+            for page in pages:
+                await stealth_async(page)
+            if pages:
+                logger.debug("Applied stealth patches to %d page(s)", len(pages))
+        except ImportError:
+            logger.debug("playwright-stealth not installed, skipping stealth patches")

@@ -1,6 +1,4 @@
-"""Launch Auto Applier wizard. Double-click this file or run: python run.py"""
+"""Convenience launcher."""
+from auto_applier.__main__ import main
 
-from auto_applier.gui.wizard import launch_wizard
-
-if __name__ == "__main__":
-    launch_wizard()
+main()
