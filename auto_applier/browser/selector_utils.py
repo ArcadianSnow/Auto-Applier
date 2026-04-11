@@ -34,6 +34,11 @@ async def find_form_fields(page: Page) -> list[FormField]:
     """
     fields: list[FormField] = []
     seen_labels: set[str] = set()
+    try:
+        url = page.url
+    except Exception:
+        url = "?"
+    logger.debug("find_form_fields: scanning page url=%s", url)
 
     # Strategy 1: label[for] -> input[id] pairing
     labels = await page.query_selector_all("label[for]")
@@ -115,6 +120,14 @@ async def find_form_fields(page: Page) -> list[FormField]:
             continue
 
     logger.debug("Detected %d form fields on page", len(fields))
+    # Dump every detected field's label + type so the run log has
+    # a full inventory per page navigation. This is the breadcrumb
+    # trail we need when the form filler appears to hang — we can
+    # see whether the problem is 'label never detected' vs
+    # 'detected but fill failed' vs 'filled but Continue not clicked'.
+    for i, f in enumerate(fields):
+        opts = f" options={f.options}" if f.options else ""
+        logger.debug("  field[%d]: label=%r type=%s%s", i, f.label, f.field_type, opts)
     return fields
 
 

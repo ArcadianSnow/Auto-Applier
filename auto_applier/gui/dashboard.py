@@ -5,6 +5,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
+from pathlib import Path
 
 from auto_applier.gui.styles import (
     BG, BG_CARD, PRIMARY, PRIMARY_LIGHT, ACCENT, DANGER, WARNING,
@@ -230,11 +231,54 @@ class DashboardWindow(tk.Toplevel):
         )
         self._stop_btn.pack(side="left")
 
+        # Developer aid: one-click access to the debug log file for
+        # the current run. Paste the path / attach the file when
+        # asking for help with a failing run.
+        ttk.Button(
+            footer, text="Open Log",
+            command=self._open_log_file,
+        ).pack(side="left", padx=(8, 0))
+
+        ttk.Button(
+            footer, text="Open Logs Folder",
+            command=self._open_logs_folder,
+        ).pack(side="left", padx=(8, 0))
+
         self._close_btn = ttk.Button(
             footer, text="Close",
             command=self._on_close, state="disabled",
         )
         self._close_btn.pack(side="right")
+
+    def _open_log_file(self) -> None:
+        """Open the current run's debug log file in the OS default app."""
+        from auto_applier.log_setup import current_log_path
+        path = current_log_path()
+        if path is None or not path.exists():
+            self.log("No log file for this session yet.", "warning")
+            return
+        self._open_path(path)
+
+    def _open_logs_folder(self) -> None:
+        """Open the data/logs directory in the OS file explorer."""
+        from auto_applier.config import LOGS_DIR
+        self._open_path(LOGS_DIR)
+
+    @staticmethod
+    def _open_path(path: Path) -> None:
+        """Cross-platform open-with-default-app helper."""
+        import os
+        import subprocess
+        import sys
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(path))
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Event subscriptions
@@ -481,6 +525,11 @@ class DashboardWindow(tk.Toplevel):
         self._start_timer()
         self.log(f"Preparing to run ({'dry run' if dry_run else 'live'})...", "info")
 
+        # Kick on the debug log file FIRST so we capture everything
+        # including the resume preprocessing step that happens before
+        # the orchestrator even starts.
+        self._start_file_logging()
+
         thread = threading.Thread(
             target=self._run_in_thread,
             args=(config, dry_run),
@@ -506,6 +555,25 @@ class DashboardWindow(tk.Toplevel):
         finally:
             loop.close()
             self.after(0, self._on_run_finished)
+
+    def _start_file_logging(self) -> Path | None:
+        """Turn on the debug log file for this run and log its path."""
+        try:
+            from auto_applier.log_setup import start_run_logging
+            path = start_run_logging()
+            self.after(0, lambda p=path: self.log(
+                f"Debug log: {p}", "info",
+            ))
+            self.after(0, lambda p=path: self.log(
+                f"  (paste this path to your helper if something looks wrong)",
+                "info",
+            ))
+            return path
+        except Exception as exc:
+            self.after(0, lambda e=exc: self.log(
+                f"Could not start debug log: {e}", "warning",
+            ))
+            return None
 
     async def _process_resumes(self, config: dict) -> None:
         """Add resumes to the ResumeManager (requires LLM for skill extraction).

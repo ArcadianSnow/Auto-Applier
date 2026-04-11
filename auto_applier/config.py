@@ -14,6 +14,7 @@ BACKUP_DIR = DATA_DIR / ".backups"
 SCHEMA_VERSION_FILE = DATA_DIR / ".schema_version.json"
 GENERATED_RESUMES_DIR = PROFILES_DIR / "generated"
 RESEARCH_DIR = DATA_DIR / "research"
+LOGS_DIR = DATA_DIR / "logs"
 
 # CSV data files
 JOBS_CSV = DATA_DIR / "jobs.csv"
@@ -25,7 +26,7 @@ ANSWERS_FILE = DATA_DIR / "answers.json"
 UNANSWERED_FILE = DATA_DIR / "unanswered.json"
 
 # Ensure data directories exist
-for d in [DATA_DIR, BROWSER_PROFILE_DIR, RESUMES_DIR, PROFILES_DIR, CACHE_DIR, BACKUP_DIR, GENERATED_RESUMES_DIR, RESEARCH_DIR]:
+for d in [DATA_DIR, BROWSER_PROFILE_DIR, RESUMES_DIR, PROFILES_DIR, CACHE_DIR, BACKUP_DIR, GENERATED_RESUMES_DIR, RESEARCH_DIR, LOGS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # Load .env from project root

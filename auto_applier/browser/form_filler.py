@@ -191,45 +191,73 @@ class FormFiller:
         """Fill a single form field using the priority chain.
 
         Returns True if the field was successfully filled.
+
+        Every step of the priority chain emits a DEBUG log line so
+        run-log files capture exactly how each field was resolved
+        (or why it wasn't). When something goes wrong mid-form-fill,
+        the log shows the label, the field type, the options list,
+        which layer matched, what value was returned, and whether
+        the apply step actually wrote to the DOM.
         """
         self.fields_total += 1
         label_lower = field.label.lower()
+
+        logger.debug(
+            "fill_field: label=%r type=%s options=%s",
+            field.label, field.field_type,
+            field.options if field.options else "none",
+        )
 
         # File upload fields are handled by the platform adapter
         if field.field_type == "file" and any(
             kw in label_lower for kw in RESUME_UPLOAD_KEYWORDS
         ):
+            logger.debug("  → file upload, deferring to platform")
             return False
 
         # Cover letter fields get special treatment
         if any(kw in label_lower for kw in COVER_LETTER_KEYWORDS):
-            return await self._fill_cover_letter(page, field)
+            logger.debug("  → cover letter field, generating")
+            ok = await self._fill_cover_letter(page, field)
+            logger.debug("  ← cover letter fill result: %s", ok)
+            return ok
 
         # Priority 1: Personal info match
         answer = self._match_personal_info(label_lower)
+        if answer:
+            logger.debug("  matched personal_info → %r", answer)
 
         # Priority 2: Contextual auto-answers (source, prior employment,
         # start date). These are deterministic and free — no LLM cost.
         if not answer:
             answer = self._match_contextual(label_lower, field)
+            if answer:
+                logger.debug("  matched contextual → %r", answer)
 
         # Priority 3: answers.json match
         if not answer:
             answer = self._match_answers(field.label)
+            if answer:
+                logger.debug("  matched answers.json → %r", answer)
 
         # Priority 4: LLM generation
         if not answer:
+            logger.debug("  no deterministic match, calling LLM...")
             answer = await self._generate_answer(field)
             if answer:
                 self.used_llm = True
+                logger.debug("  LLM returned → %r", answer)
 
         # Priority 5: Record as gap
         if not answer:
+            logger.debug("  → NO ANSWER FOUND, recording as skill gap")
             self._record_gap(field, job_id)
             self._record_unanswered(field.label)
             return False
 
-        return await self._apply_answer(page, field, answer)
+        ok = await self._apply_answer(page, field, answer)
+        logger.debug("  ← apply_answer returned %s for %r", ok, field.label)
+        return ok
 
     # ------------------------------------------------------------------
     # Priority 1: Personal Info
@@ -512,10 +540,15 @@ class FormFiller:
 
         except Exception as exc:
             logger.warning(
-                "Failed to fill field '%s' (%s): %s",
+                "Failed to fill field %r (%s): %s",
                 field.label,
                 field.field_type,
                 exc,
+            )
+            logger.debug(
+                "apply_answer exception detail: value=%r field.options=%s",
+                answer, field.options,
+                exc_info=True,
             )
         return False
 
