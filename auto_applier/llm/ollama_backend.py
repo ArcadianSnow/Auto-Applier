@@ -152,49 +152,6 @@ class OllamaBackend(LLMBackend):
                 on_progress(f"pull error: {e}", None)
             return False
 
-
-def start_ollama_server() -> bool:
-    """Start ``ollama serve`` as a detached background process.
-
-    Cross-platform: looks for the ``ollama`` binary on PATH and
-    launches it without waiting. On Windows this spawns a hidden
-    console window; on macOS/Linux the process is daemonized via
-    the standard subprocess.Popen mechanics.
-
-    Returns True if the binary was found and launched, False if
-    Ollama isn't installed. Does NOT verify that the server actually
-    came up — callers should poll ``get_version()`` after a short
-    delay.
-    """
-    import shutil
-    import subprocess
-    import sys
-
-    binary = shutil.which("ollama")
-    if not binary:
-        return False
-
-    try:
-        kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
-        if sys.platform == "win32":
-            # CREATE_NO_WINDOW + DETACHED_PROCESS so we don't spawn a
-            # visible console and the server survives the wizard exit.
-            CREATE_NO_WINDOW = 0x08000000
-            DETACHED_PROCESS = 0x00000008
-            kwargs["creationflags"] = CREATE_NO_WINDOW | DETACHED_PROCESS
-        else:
-            kwargs["start_new_session"] = True
-        subprocess.Popen([binary, "serve"], **kwargs)
-        return True
-    except Exception:
-        return False
-
-
-def ollama_binary_installed() -> bool:
-    """Return True if the ``ollama`` CLI is on PATH."""
-    import shutil
-    return shutil.which("ollama") is not None
-
     # ------------------------------------------------------------------
     # Text completion
     # ------------------------------------------------------------------
@@ -283,3 +240,136 @@ def ollama_binary_installed() -> bool:
             except json.JSONDecodeError:
                 pass
         return {}
+
+
+def find_ollama_binary() -> str | None:
+    """Locate the Ollama binary, even if it isn't on PATH.
+
+    Windows installers put Ollama in a user-local directory that the
+    system PATH doesn't cover by default, so ``shutil.which`` returns
+    None for plenty of working installs. This function checks known
+    install locations for every supported platform before giving up.
+
+    Returns the absolute path to a launchable binary (preferring the
+    desktop-app launcher on Windows, which also starts the tray icon),
+    or None if nothing is found.
+    """
+    import os
+    import shutil
+    import sys
+
+    # 1. PATH lookup (works for most Linux, macOS Homebrew, etc.)
+    on_path = shutil.which("ollama")
+    if on_path:
+        return on_path
+
+    # 2. Windows: check the installer's default location
+    if sys.platform == "win32":
+        localappdata = os.environ.get("LOCALAPPDATA", "")
+        candidates = [
+            # Prefer the desktop app launcher — it starts the tray icon
+            # AND the server together, which is what Windows users
+            # expect to see.
+            os.path.join(localappdata, "Programs", "Ollama", "ollama app.exe"),
+            os.path.join(localappdata, "Programs", "Ollama", "ollama.exe"),
+            r"C:\Program Files\Ollama\ollama.exe",
+            r"C:\Program Files (x86)\Ollama\ollama.exe",
+        ]
+    # 3. macOS: check /Applications for the app bundle
+    elif sys.platform == "darwin":
+        home = os.path.expanduser("~")
+        candidates = [
+            "/Applications/Ollama.app/Contents/Resources/ollama",
+            f"{home}/Applications/Ollama.app/Contents/Resources/ollama",
+            "/usr/local/bin/ollama",
+            "/opt/homebrew/bin/ollama",
+        ]
+    # 4. Linux: check common package-manager install paths
+    else:
+        candidates = [
+            "/usr/local/bin/ollama",
+            "/usr/bin/ollama",
+            "/opt/ollama/ollama",
+        ]
+
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def ollama_binary_installed() -> bool:
+    """Return True if Ollama can be found anywhere — PATH or known locations."""
+    return find_ollama_binary() is not None
+
+
+def start_ollama_server() -> tuple[bool, str]:
+    """Launch Ollama in the background so the HTTP API comes up.
+
+    Returns ``(launched, detail)``. ``launched`` is True only if the
+    subprocess spawned cleanly. ``detail`` is an empty string on
+    success, or a short human-readable failure reason.
+
+    On Windows, prefers launching the desktop app (``ollama app.exe``)
+    over ``ollama.exe serve`` because the desktop app sets up the
+    tray icon + server that users expect. Falls back to the CLI
+    binary if only that is available.
+
+    Callers still need to poll ``get_version()`` afterwards to verify
+    the server actually responds — spawning the process is not the
+    same as the port being open.
+    """
+    import os
+    import subprocess
+    import sys
+
+    binary = find_ollama_binary()
+    if not binary:
+        return False, "Ollama isn't installed in any of the known locations."
+
+    # Decide launch arguments: the desktop app takes no args, the CLI
+    # binary needs 'serve'. We detect by filename.
+    basename = os.path.basename(binary).lower()
+    is_desktop_app = "ollama app" in basename
+    if is_desktop_app:
+        cmd = [binary]
+    else:
+        cmd = [binary, "serve"]
+
+    try:
+        kwargs: dict = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+        }
+        if sys.platform == "win32":
+            # CREATE_NO_WINDOW alone keeps the hidden console handle
+            # the child expects; DETACHED_PROCESS actively breaks
+            # apps that rely on stdout handles.
+            CREATE_NO_WINDOW = 0x08000000
+            kwargs["creationflags"] = CREATE_NO_WINDOW
+            # The desktop-app launcher needs its install directory as
+            # the cwd so it can find its bundled DLLs.
+            if is_desktop_app:
+                kwargs["cwd"] = os.path.dirname(binary)
+        else:
+            kwargs["start_new_session"] = True
+
+        proc = subprocess.Popen(cmd, **kwargs)
+        # Give it a brief window to fail loudly (e.g. "port in use").
+        # A healthy start won't exit within 500 ms; callers handle the
+        # slower "did the HTTP port come up?" polling separately.
+        try:
+            retcode = proc.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            retcode = None
+
+        if retcode is not None and retcode != 0:
+            err = ""
+            try:
+                err = (proc.stderr.read() or b"").decode(errors="replace").strip()
+            except Exception:
+                pass
+            return False, err or f"Ollama exited immediately (code {retcode})."
+        return True, ""
+    except Exception as e:
+        return False, str(e)

@@ -26,8 +26,8 @@ from auto_applier.gui.styles import (
 class WizardApp(tk.Tk):
     """Multi-step configuration wizard."""
 
-    WINDOW_WIDTH = 800
-    WINDOW_HEIGHT = 650
+    WINDOW_WIDTH = 980
+    WINDOW_HEIGHT = 820
 
     def __init__(self) -> None:
         super().__init__()

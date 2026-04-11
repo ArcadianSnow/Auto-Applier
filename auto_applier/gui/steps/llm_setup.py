@@ -23,7 +23,21 @@ class LLMSetupStep(ttk.Frame):
         self.wizard = wizard
         self._ollama_available = False
         self._gemini_available = False
+        self._auto_checked = False
         self._build()
+
+    def on_show(self) -> None:
+        """Auto-run the Ollama check the first time this step is shown.
+
+        If Ollama is already installed and running (common if the user
+        installed it during a previous wizard run or via the tray app),
+        they get an immediate green status without having to click
+        anything.
+        """
+        if self._auto_checked:
+            return
+        self._auto_checked = True
+        self._test_ollama()
 
     def _build(self) -> None:
         # Heading
@@ -441,33 +455,47 @@ class LLMSetupStep(ttk.Frame):
     # ------------------------------------------------------------------
 
     def _start_server(self) -> None:
-        """Launch 'ollama serve' in the background and poll for readiness."""
+        """Launch Ollama in the background and poll for readiness.
+
+        First checks whether Ollama is already running — if it is, we
+        don't need to launch anything, and we update the status
+        immediately instead of trying to spawn a second server.
+        """
         from auto_applier.llm.ollama_backend import (
-            ollama_binary_installed, start_ollama_server,
+            find_ollama_binary, start_ollama_server,
         )
 
-        if not ollama_binary_installed():
-            self._ollama_progress.configure(
-                text=(
-                    "Ollama isn't installed yet. Do Step 1 first — click "
-                    "'Open ollama.com' up top."
-                ),
-                fg=DANGER,
-            )
-            return
-
         self._ollama_progress.configure(
-            text="Turning on the AI... (this takes a few seconds)",
+            text="Checking if the AI is already on...",
             fg=TEXT_LIGHT,
         )
         self._start_server_btn.configure(state="disabled")
 
         def worker():
-            launched = start_ollama_server()
-            if not launched:
-                self.after(0, lambda: self._on_server_start_failed())
+            # 1. If Ollama is already running, we're done — just
+            #    refresh the status display and exit.
+            try:
+                version = asyncio.run(_get_version())
+            except Exception:
+                version = ""
+            if version:
+                self.after(0, lambda v=version: self._on_server_already_running(v))
                 return
-            # Poll for readiness for up to 30 seconds
+
+            # 2. Not running — try to find and launch it.
+            if find_ollama_binary() is None:
+                self.after(0, self._on_binary_missing)
+                return
+
+            launched, detail = start_ollama_server()
+            if not launched:
+                err = detail
+                self.after(
+                    0, lambda msg=err: self._on_server_start_failed(msg),
+                )
+                return
+
+            # 3. Poll for readiness for up to 30 seconds.
             import time as _time
             for _ in range(30):
                 _time.sleep(1)
@@ -478,13 +506,39 @@ class LLMSetupStep(ttk.Frame):
                 if version:
                     self.after(0, lambda v=version: self._on_server_ready(v))
                     return
-            self.after(0, lambda: self._on_server_start_failed())
+            self.after(0, lambda: self._on_server_start_failed(
+                "The AI didn't come up within 30 seconds. Try clicking "
+                "'Turn on AI' again, or open the Ollama app from your "
+                "Start menu manually."
+            ))
 
         async def _get_version():
             from auto_applier.llm.ollama_backend import OllamaBackend
             return await OllamaBackend().get_version()
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_server_already_running(self, version: str) -> None:
+        self._start_server_btn.configure(state="normal")
+        self._ollama_progress.configure(
+            text=(
+                f"The AI is already on (Ollama {version}). Moving on — "
+                f"do Step 3 if you haven't downloaded the AI brain yet, "
+                f"otherwise click 'Check it's working' below."
+            ),
+            fg=STATUS_SUCCESS,
+        )
+        self._test_ollama()
+
+    def _on_binary_missing(self) -> None:
+        self._start_server_btn.configure(state="normal")
+        self._ollama_progress.configure(
+            text=(
+                "Ollama isn't installed on this computer. Do Step 1 — "
+                "click 'Open ollama.com' up top to download it."
+            ),
+            fg=DANGER,
+        )
 
     def _on_server_ready(self, version: str) -> None:
         self._start_server_btn.configure(state="normal")
@@ -497,17 +551,17 @@ class LLMSetupStep(ttk.Frame):
         )
         self._test_ollama()
 
-    def _on_server_start_failed(self) -> None:
+    def _on_server_start_failed(self, detail: str = "") -> None:
         self._start_server_btn.configure(state="normal")
-        self._ollama_progress.configure(
-            text=(
-                "Couldn't turn on the AI automatically. Make sure you "
-                "finished installing Ollama, then try clicking 'Turn on "
-                "AI' again. If it still doesn't work, restart your "
-                "computer and try once more."
-            ),
-            fg=DANGER,
+        base = (
+            "Couldn't turn on the AI automatically. Try opening "
+            "'Ollama' from your Start menu yourself, then click 'Check "
+            "it's working' below. If that doesn't help, restart your "
+            "computer and try once more."
         )
+        if detail:
+            base += f"\n\nDetails: {detail}"
+        self._ollama_progress.configure(text=base, fg=DANGER)
 
     # ------------------------------------------------------------------
     # Install model button
