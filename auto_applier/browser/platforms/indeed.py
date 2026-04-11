@@ -651,21 +651,94 @@ class IndeedPlatform(JobPlatform):
             )
 
     async def _is_external_apply(self, page: Page) -> bool:
-        """Check if the job has an external apply link instead of Indeed Apply."""
+        """Check if the job has an external apply link instead of Indeed Apply.
+
+        A job is "external" when Indeed surfaces an 'Apply on company
+        site' button that routes the user to the employer's own ATS.
+        Applying to those via our pipeline has no effect — Indeed
+        never shows a form for us to fill. They have to be skipped
+        and recorded as 'external'.
+
+        Detection uses four overlapping signals so we catch modern
+        layouts even when one fails:
+
+        1. Class-based EXTERNAL_APPLY_SELECTORS (legacy).
+        2. Button text containing 'company site' or 'external' —
+           searches deep, including nested spans.
+        3. ANY anchor (button or link) whose href leaves indeed.com
+           AND is visually prominent (button-like).
+        4. The absence of an IndeedApply button PLUS the presence
+           of at least one outbound anchor.
+        """
+        # 1. Known class names
         for sel in EXTERNAL_APPLY_SELECTORS:
             try:
                 el = await page.query_selector(sel)
                 if el:
+                    logger.debug("External apply detected via selector: %s", sel)
                     return True
             except Exception:
                 continue
 
-        # Also check button text for "apply on company site" variations
+        # 2. Button text — inner_text() walks nested spans already,
+        # so this catches 'Apply on company site' regardless of whether
+        # the text is in the <button> directly or a descendant.
         try:
-            buttons = await page.query_selector_all("button, a.btn")
+            buttons = await page.query_selector_all(
+                "button, a.btn, a[role='button'], [class*='apply'] a, "
+                "[class*='apply'] button"
+            )
             for btn in buttons:
-                text = (await btn.inner_text()).strip().lower()
-                if "company site" in text or "external" in text:
+                text = ""
+                try:
+                    text = (await btn.inner_text() or "").strip().lower()
+                except Exception:
+                    continue
+                if not text:
+                    continue
+                if (
+                    "company site" in text
+                    or "apply on company" in text
+                    or "apply externally" in text
+                    or "on employer site" in text
+                    or "on company website" in text
+                ):
+                    logger.debug(
+                        "External apply detected via button text: %r", text,
+                    )
+                    return True
+        except Exception:
+            pass
+
+        # 3. Prominent button-like anchor with an outbound href.
+        # This catches the case where 'Apply on company site' is a
+        # link whose text lives in a child span we don't inner_text.
+        try:
+            apply_anchors = await page.query_selector_all(
+                "a[class*='apply'], a[class*='Apply'], "
+                "a[data-tn-element*='apply']"
+            )
+            for a in apply_anchors:
+                href = ""
+                try:
+                    href = await a.get_attribute("href") or ""
+                except Exception:
+                    continue
+                if not href:
+                    continue
+                if href.startswith("javascript:") or href.startswith("#"):
+                    continue
+                href_lower = href.lower()
+                # Anchors whose href leaves indeed.com are external.
+                # Indeed-internal paths start with /, contain indeed.com,
+                # or use /rc/clk (Indeed's own click redirector — internal).
+                if (
+                    href_lower.startswith("http")
+                    and "indeed.com" not in href_lower
+                ):
+                    logger.debug(
+                        "External apply detected via outbound href: %s", href,
+                    )
                     return True
         except Exception:
             pass
@@ -700,6 +773,7 @@ class IndeedPlatform(JobPlatform):
         a single page with resume upload and a few screener questions.
         Some jobs have multi-step forms with continue buttons.
         """
+        steps_with_no_fields = 0
         for step in range(MAX_FORM_STEPS):
             logger.info(
                 "Indeed: Application form step %d for %s", step + 1, job.job_id
@@ -711,13 +785,38 @@ class IndeedPlatform(JobPlatform):
             await self._handle_resume_upload(page, resume_path)
 
             # Detect and fill form fields
+            fields_on_step: list = []
             if self.form_filler:
-                fields = await find_form_fields(page)
-                for field in fields:
+                fields_on_step = await find_form_fields(page)
+                for field in fields_on_step:
                     await self.form_filler.fill_field(
                         page, field, job_id=job.job_id
                     )
                     await random_delay(0.5, 1.5)
+
+            # Guard against silently 'applying' to external / broken
+            # jobs: if we see two consecutive steps with zero fields
+            # detected AND no success marker, bail out rather than
+            # claiming success. This catches the case where the
+            # 'Apply' click actually landed on an external site (or
+            # an Indeed loading screen that never renders a form).
+            if not fields_on_step:
+                steps_with_no_fields += 1
+                if steps_with_no_fields >= 2 and not await self._check_success(page):
+                    logger.warning(
+                        "Indeed: 2 consecutive form steps with no fields "
+                        "detected for %s — treating as external/broken",
+                        job.job_id,
+                    )
+                    return self._build_result(
+                        success=False,
+                        failure_reason=(
+                            "No form fields detected — likely external "
+                            "apply or broken form"
+                        ),
+                    )
+            else:
+                steps_with_no_fields = 0
 
             await simulate_organic_behavior(page)
 
@@ -834,28 +933,62 @@ class IndeedPlatform(JobPlatform):
         return False
 
     async def _check_success(self, page: Page) -> bool:
-        """Check if application submission succeeded."""
-        el = await self.safe_query(page, SUCCESS_SELECTORS, timeout=2000)
-        if el:
-            return True
+        """Check if application submission succeeded.
 
-        # Check page text for success phrases
+        Strong signals only — the old 'you've applied' phrase was
+        too loose and false-matched on page chrome like 'see jobs
+        you've applied to in the sidebar'. A real post-apply page
+        is distinctive:
+
+        1. URL contains '/confirmation' or '/post-apply' or
+           '/smartapply/.../success' — Indeed redirects here after a
+           real submission.
+        2. A known success-banner selector is present AND visible.
+        3. Strong confirmation phrases ('your application has been
+           submitted', 'thank you for applying to') PAIRED with a
+           selector match, not alone.
+        """
+        # 1. URL-based signal (cheapest, strongest)
+        try:
+            url = page.url.lower()
+        except Exception:
+            url = ""
+        for pat in ("/confirmation", "/post-apply", "/postapply", "/success"):
+            if pat in url:
+                return True
+
+        # 2. Success selector must be VISIBLE to count
+        for sel in SUCCESS_SELECTORS:
+            try:
+                el = await page.query_selector(sel)
+                if not el:
+                    continue
+                try:
+                    visible = await el.is_visible()
+                except Exception:
+                    visible = False
+                if visible:
+                    return True
+            except Exception:
+                continue
+
+        # 3. Strong phrases (specific, full-sentence) — no loose
+        # fragments like 'you've applied' that match sidebar chrome.
         try:
             body_text = await page.inner_text("body")
             body_lower = body_text.lower()
-            success_phrases = [
-                "application submitted",
-                "your application has been submitted",
-                "successfully applied",
-                "application sent",
-                "you've applied",
-                "thank you for applying",
-            ]
-            for phrase in success_phrases:
-                if phrase in body_lower:
-                    return True
         except Exception:
-            pass
+            body_lower = ""
+        strong_phrases = [
+            "your application has been submitted",
+            "thank you for applying to",
+            "your application has been sent",
+            "we've received your application",
+            "application received successfully",
+        ]
+        for phrase in strong_phrases:
+            if phrase in body_lower:
+                return True
 
         return False
 

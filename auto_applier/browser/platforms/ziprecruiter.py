@@ -446,9 +446,20 @@ class ZipRecruiterPlatform(JobPlatform):
                 "ZipRecruiter: %d cards detected but none parsed, "
                 "falling back to anchor-based finder", len(cards),
             )
-            anchor_hits = await self.find_jobs_by_anchors(
-                page, href_pattern="/jobs/",
-            )
+            # Try multiple href patterns. ZR has historically used
+            # /jobs/<slug>, /job/<slug>, /ec/<tracking-id>, /k/
+            # depending on layout. Loop until something sticks.
+            anchor_hits: list[tuple[str, str]] = []
+            for pattern in ("/jobs/", "/job/", "/ec/", "/k/", "/apply/"):
+                anchor_hits = await self.find_jobs_by_anchors(
+                    page, href_pattern=pattern,
+                )
+                if anchor_hits:
+                    logger.info(
+                        "ZipRecruiter: anchor pattern %r recovered %d jobs",
+                        pattern, len(anchor_hits),
+                    )
+                    break
             for title, url in anchor_hits:
                 jobs.append(Job(
                     job_id=f"zr-{abs(hash(url)) % 10**10}",
@@ -458,11 +469,6 @@ class ZipRecruiterPlatform(JobPlatform):
                     search_keyword=keyword,
                     source=self.source_id,
                 ))
-            if anchor_hits:
-                logger.info(
-                    "ZipRecruiter: anchor fallback recovered %d jobs",
-                    len(anchor_hits),
-                )
 
         return jobs
 

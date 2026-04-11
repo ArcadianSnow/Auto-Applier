@@ -13,6 +13,7 @@ Key behaviors:
 import asyncio
 import logging
 import math
+import os
 import random
 
 from playwright.async_api import Page
@@ -20,6 +21,24 @@ from playwright.async_api import Page
 from auto_applier.config import MIN_DELAY_BETWEEN_ACTIONS, MAX_DELAY_BETWEEN_ACTIONS
 
 logger = logging.getLogger(__name__)
+
+
+# Module-level fast-mode flag. Set by the engine at start_run for
+# dry-run invocations so the anti-detect delays shrink dramatically.
+# Dry runs don't submit anything, so the cost of 'looking like a
+# human' is pure latency with zero upside.
+_FAST_MODE: bool = False
+
+
+def set_fast_mode(enabled: bool) -> None:
+    """Toggle abbreviated delays for dry runs."""
+    global _FAST_MODE
+    _FAST_MODE = bool(enabled)
+    logger.info("Anti-detect fast mode: %s", "ON" if _FAST_MODE else "OFF")
+
+
+def is_fast_mode() -> bool:
+    return _FAST_MODE
 
 
 # ── Delays ───────────────────────────────────────────────────────────
@@ -33,9 +52,22 @@ async def random_delay(
 
     15% of the time the delay is multiplied by 2-5x to simulate
     the user getting distracted (checking phone, reading something).
+
+    Fast mode (dry runs) skips the distraction multiplier and
+    scales the base delay down by 4x so a 10-step form walks in a
+    few seconds instead of several minutes.
     """
     low = min_sec if min_sec is not None else MIN_DELAY_BETWEEN_ACTIONS
     high = max_sec if max_sec is not None else MAX_DELAY_BETWEEN_ACTIONS
+
+    if _FAST_MODE:
+        # Scale base by 4x, no distraction multiplier
+        low = low / 4.0
+        high = high / 4.0
+        delay = random.uniform(low, high)
+        await asyncio.sleep(delay)
+        return
+
     # 15% chance of distraction pause
     if random.random() < 0.15:
         multiplier = random.uniform(2.0, 5.0)
@@ -195,7 +227,13 @@ async def reading_pause(page: Page) -> None:
 
     Waits 2-5 seconds, then optionally scrolls around (0-2 scrolls)
     to mimic a user scanning the content.
+
+    In fast mode (dry runs), pauses shrink to 0.5-1.5s with no
+    extra scrolling.
     """
+    if _FAST_MODE:
+        await asyncio.sleep(random.uniform(0.5, 1.5))
+        return
     await asyncio.sleep(random.uniform(2.0, 5.0))
     for _ in range(random.randint(0, 2)):
         await human_scroll(page, "down", random.randint(100, 300))
@@ -207,7 +245,12 @@ async def simulate_organic_behavior(page: Page) -> None:
 
     Randomly chooses one of: idle pause, scroll, mouse wander, or
     hover over a random link/button.
+
+    Fast mode skips this entirely — the purpose is anti-detection,
+    and dry runs don't need it.
     """
+    if _FAST_MODE:
+        return
     action = random.choice(["idle", "scroll", "mouse", "hover"])
 
     if action == "idle":

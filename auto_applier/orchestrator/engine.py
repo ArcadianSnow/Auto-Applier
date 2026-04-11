@@ -110,12 +110,23 @@ class ApplicationEngine:
     # Main run loop
     # ------------------------------------------------------------------
 
+    def _apply_fast_mode(self) -> None:
+        """Toggle anti-detect fast mode to match the run type.
+
+        Real submissions need the full stealth delays so the browser
+        fingerprint looks human. Dry runs don't submit anything, so
+        the delays just cost the user wall-clock time for no benefit.
+        """
+        from auto_applier.browser.anti_detect import set_fast_mode
+        set_fast_mode(self.dry_run)
+
     async def run(self):
         """Execute the full application pipeline."""
         self.events.emit(RUN_STARTED, dry_run=self.dry_run)
 
         try:
             await self.start()
+            self._apply_fast_mode()
 
             # Per-platform daily budget. max_applications_per_day is
             # interpreted as the cap PER PLATFORM — with a limit of 3
@@ -135,7 +146,29 @@ class ApplicationEngine:
             enabled = self.config.get("enabled_platforms", ["linkedin"])
             keywords = self.config.get("search_keywords", [])
             location = self.config.get("location", "")
-            personal_info = self.config.get("personal_info", {})
+            personal_info = self.config.get("personal_info", {}) or {}
+
+            # Merge personal_info from user_config.json directly so
+            # any fields the wizard UI doesn't have widgets for
+            # (zip_code, state, street_address, etc. from the fixture
+            # generator) reach the form filler. user_config.json is
+            # the canonical source of truth; the config dict passed
+            # in here is just whatever the wizard UI captured.
+            try:
+                from auto_applier.config import USER_CONFIG_FILE
+                import json as _json
+                if USER_CONFIG_FILE.exists():
+                    with open(USER_CONFIG_FILE, "r", encoding="utf-8") as _f:
+                        saved = _json.load(_f)
+                    saved_personal = saved.get("personal_info", {}) or {}
+                    if isinstance(saved_personal, dict):
+                        # saved fields go UNDER what the wizard explicitly
+                        # set this session — UI overrides file.
+                        merged = dict(saved_personal)
+                        merged.update(personal_info)
+                        personal_info = merged
+            except Exception:
+                pass
 
             # Merge .env credentials into config
             self._load_credentials()

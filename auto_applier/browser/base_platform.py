@@ -329,6 +329,11 @@ class JobPlatform(ABC):
         except Exception:
             return out
 
+        total_anchors = len(anchors)
+        rejected_length = 0
+        rejected_excluded = 0
+        rejected_empty = 0
+
         for a in anchors:
             try:
                 href = await a.get_attribute("href") or ""
@@ -336,10 +341,13 @@ class JobPlatform(ABC):
             except Exception:
                 continue
             if not href or not text:
+                rejected_empty += 1
                 continue
             if not (min_title_length <= len(text) <= max_title_length):
+                rejected_length += 1
                 continue
             if text.lower() in exclude_texts:
+                rejected_excluded += 1
                 continue
             # Normalize href to absolute so dedup is consistent
             if href.startswith("/"):
@@ -355,6 +363,12 @@ class JobPlatform(ABC):
             seen_hrefs.add(key)
             out.append((text, href))
 
+        logger.debug(
+            "find_jobs_by_anchors(pattern=%r): %d anchors matched selector, "
+            "kept %d, rejected %d empty / %d length / %d excluded",
+            href_pattern, total_anchors, len(out),
+            rejected_empty, rejected_length, rejected_excluded,
+        )
         return out
 
     async def check_and_abort_on_captcha(
