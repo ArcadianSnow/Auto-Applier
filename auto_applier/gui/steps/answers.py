@@ -194,16 +194,39 @@ class AnswersStep(ttk.Frame):
 
     @staticmethod
     def _load_unanswered() -> list[str]:
-        """Load unanswered questions from previous runs."""
+        """Load unanswered questions from previous runs.
+
+        Returns a list of question STRINGS. Tolerant of three
+        historical shapes on disk:
+
+        1. List of plain strings (original format)::
+           ["Zip code", "Street address"]
+
+        2. List of entry dicts (what form_filler._record_unanswered
+           writes today)::
+           [{"question": "Zip code", "encountered": 3}, ...]
+
+        3. Flat dict of {question: count} (legacy wizard saves)::
+           {"Zip code": 3, "Street address": 1}
+        """
         if not UNANSWERED_FILE.exists():
             return []
         try:
             with open(UNANSWERED_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if isinstance(data, list):
-                return data
-            if isinstance(data, dict):
-                return list(data.keys())
-            return []
         except (json.JSONDecodeError, OSError):
             return []
+
+        if isinstance(data, list):
+            out: list[str] = []
+            for entry in data:
+                if isinstance(entry, str):
+                    out.append(entry)
+                elif isinstance(entry, dict):
+                    q = entry.get("question", "")
+                    if isinstance(q, str) and q:
+                        out.append(q)
+            return out
+        if isinstance(data, dict):
+            return [k for k in data.keys() if isinstance(k, str)]
+        return []
