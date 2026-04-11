@@ -197,11 +197,28 @@ def update_followups_for_job(
     return updated
 
 
-def get_todays_application_count() -> int:
-    """Return the number of applications submitted (or dry-run) today (UTC)."""
+def get_todays_application_count(
+    include_dry_run: bool = False, source: str = "",
+) -> int:
+    """Return the number of applications made today (UTC).
+
+    By default, counts ONLY real submissions — dry runs don't
+    consume daily quota, because no application was actually sent.
+    Callers that want to count both (e.g. audit reports, pattern
+    analysis) can pass ``include_dry_run=True``.
+
+    Pass ``source`` to narrow the count to a specific platform
+    (e.g. "linkedin", "indeed"). Used by the engine to enforce
+    per-platform daily budgets.
+    """
     today = datetime.now(timezone.utc).date().isoformat()
+    counted_statuses = {"applied"}
+    if include_dry_run:
+        counted_statuses.add("dry_run")
     return sum(
         1
         for app in load_all(Application)
-        if app.applied_at.startswith(today) and app.status in ("applied", "dry_run")
+        if app.applied_at.startswith(today)
+        and app.status in counted_statuses
+        and (not source or app.source == source)
     )

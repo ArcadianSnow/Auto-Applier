@@ -28,13 +28,17 @@ HELP = {
         "Applier handles the differences for you."
     ),
     "max_apps": (
-        "The most applications Auto Applier is allowed to actually "
-        "submit in one day. When it hits this number, it stops — "
-        "even if it finds more good jobs.\n\n"
+        "The most applications Auto Applier will submit per site, "
+        "per day. So if you set this to 3 and have three sites "
+        "enabled, you can get up to 9 applications total in a day "
+        "(3 on each site).\n\n"
         "Start small (3–5) while you're trying it out. That way if "
         "something surprises you, only a handful of applications went "
         "out before you noticed.\n\n"
-        "When you trust it, you can turn this up to 10 or 15."
+        "When you trust it, you can turn this up to 10 or 15.\n\n"
+        "Test runs (the blue button on the last page) ignore this "
+        "limit completely — nothing is actually submitted so there's "
+        "no quota to protect."
     ),
     "auto_apply": (
         "Auto Applier gives every job a match score from 1 to 10 "
@@ -155,7 +159,7 @@ class PreferencesStep(ttk.Frame):
         grid.pack(fill="x")
 
         spinbox_fields = [
-            ("Most applications per day", "max_applications_per_day", 1, 50, HELP["max_apps"]),
+            ("Most applications per day (per site)", "max_applications_per_day", 1, 50, HELP["max_apps"]),
             ("Auto-apply score (1-10)", "auto_apply_min", 1, 10, HELP["auto_apply"]),
             ("Review score (1-10)", "review_min", 1, 10, HELP["review_min"]),
             ("Command-line auto-apply score (advanced)", "cli_auto_apply_min", 1, 10, HELP["cli_auto_apply"]),

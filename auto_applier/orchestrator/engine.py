@@ -112,15 +112,19 @@ class ApplicationEngine:
         try:
             await self.start()
 
-            # Check daily limit
-            todays_count = get_todays_application_count()
-            max_daily = self.config.get(
+            # Per-platform daily budget. max_applications_per_day is
+            # interpreted as the cap PER PLATFORM — with a limit of 3
+            # and three platforms enabled, the run can apply to up to
+            # 9 jobs total (3 on Indeed, 3 on Dice, 3 on ZipRecruiter).
+            # This matches user intuition much better than a single
+            # global budget shared across platforms.
+            #
+            # Dry runs get a fresh per-platform budget every invocation
+            # so dry-running in the morning doesn't consume your real
+            # quota for the afternoon.
+            per_platform_max = self.config.get(
                 "max_applications_per_day", MAX_APPLICATIONS_PER_DAY
             )
-            remaining = max_daily - todays_count
-            if remaining <= 0:
-                self.events.emit(RUN_FINISHED, reason="Daily limit reached")
-                return
 
             # Gather run parameters
             enabled = self.config.get("enabled_platforms", ["linkedin"])
@@ -133,8 +137,24 @@ class ApplicationEngine:
 
             # Run each platform with error isolation
             for platform_key in enabled:
-                if self.applied_count >= remaining:
-                    break
+                # Per-platform budget check. Dry runs always get the
+                # full cap; real runs subtract today's real applies
+                # for this source from the cap.
+                if self.dry_run:
+                    platform_budget = per_platform_max
+                else:
+                    todays_on_platform = get_todays_application_count(
+                        source=platform_key,
+                    )
+                    platform_budget = per_platform_max - todays_on_platform
+                    if platform_budget <= 0:
+                        self.events.emit(
+                            PLATFORM_STARTED, platform=platform_key,
+                        )
+                        self.events.emit(
+                            PLATFORM_FINISHED, platform=platform_key,
+                        )
+                        continue
 
                 platform_cls = PLATFORM_REGISTRY.get(platform_key)
                 if not platform_cls:
@@ -149,7 +169,7 @@ class ApplicationEngine:
                         keywords,
                         location,
                         personal_info,
-                        remaining - self.applied_count,
+                        platform_budget,
                     )
                 except Exception as e:
                     self.events.emit(
