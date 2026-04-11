@@ -337,6 +337,25 @@ class ApplicationEngine:
 
                 self.events.emit(APPLICATION_COMPLETE, job=job, application=app)
 
+                # Generate STAR+R interview stories for real submissions.
+                # Non-blocking: failure here must never affect the run.
+                if app.status == "applied":
+                    try:
+                        from auto_applier.resume.story_bank import (
+                            StoryGenerator, append_stories,
+                        )
+                        stories = await StoryGenerator(self.router).generate(
+                            resume_text=resume_text,
+                            job_description=job.description,
+                            company_name=job.company,
+                            job_title=job.title,
+                            job_id=job.job_id,
+                            resume_label=job_score.resume_label,
+                        )
+                        append_stories(stories)
+                    except Exception:
+                        pass
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------

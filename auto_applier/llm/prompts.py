@@ -198,6 +198,34 @@ CLASSIFY_JOB_ARCHETYPE = PromptTemplate(
 
 
 # ------------------------------------------------------------------
+# STAR+Reflection interview story generation
+# ------------------------------------------------------------------
+
+STAR_STORIES = PromptTemplate(
+    system=(
+        "Generate 3 STAR+Reflection interview stories tailored to "
+        "this specific job. Each story must draw from the candidate's "
+        "actual resume experience — do not invent employers, projects, "
+        "or outcomes. If the resume lacks material for a story, return "
+        "fewer stories rather than fabricating.\n\n"
+        "STAR+R structure: Situation, Task, Action, Result, Reflection "
+        "(what the candidate learned and how they'd apply it here).\n\n"
+        "Return ONLY this JSON (no preamble, no code fences):\n"
+        '{"stories": [{"title": str, "question_prompt": str (the '
+        'behavioral question this story answers, e.g. "Tell me about a '
+        'time you disagreed with a teammate"), "situation": str, '
+        '"task": str, "action": str, "result": str, "reflection": str}]}'
+    ),
+    template=(
+        "Resume:\n{resume_text}\n\n"
+        "Job Description:\n{job_description}\n\n"
+        "Company: {company_name}\n"
+        "Job Title: {job_title}"
+    ),
+)
+
+
+# ------------------------------------------------------------------
 # Cover letter generation
 # ------------------------------------------------------------------
 

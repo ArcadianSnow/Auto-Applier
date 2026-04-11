@@ -323,6 +323,84 @@ def normalize():
 
 
 @cli.group()
+def story():
+    """Manage the STAR+Reflection interview story bank."""
+    pass
+
+
+@story.command("list")
+@click.option("--company", default=None, help="Filter by company name")
+def story_list(company):
+    """List stories in the bank (titles + question prompts)."""
+    from auto_applier.resume.story_bank import load_bank
+
+    bank = load_bank()
+    if company:
+        bank = [s for s in bank if company.lower() in s.company.lower()]
+    if not bank:
+        click.echo("Story bank is empty.")
+        return
+    click.echo(f"\n{len(bank)} story/stories:\n")
+    for i, s in enumerate(bank, 1):
+        click.echo(f"  {i:3d}. {s.title}")
+        if s.question_prompt:
+            click.echo(f"       Q: {s.question_prompt}")
+        if s.company:
+            click.echo(f"       from: {s.job_title} @ {s.company}")
+
+
+@story.command("show")
+@click.argument("index", type=int)
+def story_show(index: int):
+    """Show the full text of a single story (1-indexed)."""
+    from auto_applier.resume.story_bank import load_bank
+
+    bank = load_bank()
+    if not 1 <= index <= len(bank):
+        click.echo(f"Index out of range (bank has {len(bank)} stories).")
+        return
+    s = bank[index - 1]
+    click.echo(f"\n{s.title}")
+    click.echo("=" * len(s.title))
+    if s.question_prompt:
+        click.echo(f"Answers: {s.question_prompt}\n")
+    if s.company or s.job_title:
+        click.echo(f"From: {s.job_title} @ {s.company}\n")
+    click.echo(f"Situation:  {s.situation}\n")
+    click.echo(f"Task:       {s.task}\n")
+    click.echo(f"Action:     {s.action}\n")
+    click.echo(f"Result:     {s.result}\n")
+    click.echo(f"Reflection: {s.reflection}")
+
+
+@story.command("export")
+@click.option("--output", "-o", default="story_bank.md", help="Output file path")
+def story_export(output: str):
+    """Export the full story bank as a markdown document."""
+    from auto_applier.resume.story_bank import export_bank_markdown
+    from pathlib import Path
+
+    content = export_bank_markdown()
+    Path(output).write_text(content, encoding="utf-8")
+    click.echo(f"Exported to {output}")
+
+
+@story.command("prune")
+@click.argument("index", type=int)
+def story_prune(index: int):
+    """Delete a story from the bank (1-indexed)."""
+    from auto_applier.resume.story_bank import load_bank, save_bank
+
+    bank = load_bank()
+    if not 1 <= index <= len(bank):
+        click.echo(f"Index out of range (bank has {len(bank)} stories).")
+        return
+    removed = bank.pop(index - 1)
+    save_bank(bank)
+    click.echo(f"Removed: {removed.title}")
+
+
+@cli.group()
 def archetype():
     """Manage job archetypes for resume routing."""
     pass
