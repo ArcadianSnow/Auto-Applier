@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TypeVar, Type
 
 from auto_applier.config import JOBS_CSV, APPLICATIONS_CSV, SKILL_GAPS_CSV
+from auto_applier.storage.migrations import migrate_csv, record_current_schema
 from auto_applier.storage.models import Job, Application, SkillGap
 
 T = TypeVar("T", Job, Application, SkillGap)
@@ -18,11 +19,17 @@ _CSV_MAP: dict[type, Path] = {
 
 
 def _ensure_csv(path: Path, model_type: type) -> None:
-    """Create the CSV file with headers if it does not already exist."""
+    """Create the CSV file with headers if needed, migrating on schema drift."""
     if not path.exists():
         headers = [f.name for f in dc_fields(model_type)]
         with open(path, "w", newline="", encoding="utf-8") as f:
             csv.DictWriter(f, fieldnames=headers).writeheader()
+        # Record the baseline schema for first-time installs so future
+        # drift is detectable. Safe to call repeatedly.
+        record_current_schema([Job, Application, SkillGap])
+        return
+    # Existing file: migrate in place if fields have shifted since last run.
+    migrate_csv(path, model_type)
 
 
 def save(record: T) -> None:

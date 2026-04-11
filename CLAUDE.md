@@ -101,6 +101,8 @@ Tracks skill gap frequency. When a skill appears >= 3 times, triggers a user pro
 CSV files in `data/` (openable in Excel):
 - `jobs.csv`, `applications.csv`, `skill_gaps.csv`
 
+**Schema migrations** (`storage/migrations.py`): CSV schemas drift as dataclass models gain/lose fields between versions. The migration layer runs transparently before every `load_all()` / `save()`. On header drift it backs up the old file to `data/.backups/<name>.<timestamp>.csv`, rewrites the live file with the current canonical header, preserves overlapping columns, backfills new columns with dataclass defaults, and drops removed columns (archived only in the backup). All migrations are recorded in `data/.schema_version.json`. Inspect history with `cli migrations`. Forward-only — no down-migrations. When adding a field to any model in `storage/models.py`, you don't need to write a migration by hand.
+
 JSON files in `data/`:
 - `user_config.json` — personal info and preferences
 - `answers.json` — pre-configured Q&A (starts blank, populated in wizard, grows from encounters)

@@ -227,6 +227,39 @@ def gaps():
 
 
 @cli.command()
+def migrations():
+    """Show CSV schema migration history."""
+    from auto_applier.storage.migrations import list_migration_history
+    from auto_applier.storage.repository import _CSV_MAP, _ensure_csv
+
+    # Touch each CSV to trigger any pending migration before listing.
+    for model_type, path in _CSV_MAP.items():
+        try:
+            _ensure_csv(path, model_type)
+        except Exception as e:
+            click.echo(f"  warn: {path.name}: {e}")
+
+    history = list_migration_history()
+    if not history:
+        click.echo("No schema migrations recorded. Current schema is the baseline.")
+        return
+
+    click.echo(f"\nSchema migration history ({len(history)} entries):\n")
+    for rec in history[-20:]:
+        ts = rec.get("timestamp", "?")
+        model = rec.get("model", "?")
+        added = rec.get("added", [])
+        removed = rec.get("removed", [])
+        rows = rec.get("rows_migrated", 0)
+        click.echo(f"  {ts}  {model}  (+{len(added)} -{len(removed)}, {rows} rows)")
+        if added:
+            click.echo(f"      added:   {', '.join(added)}")
+        if removed:
+            click.echo(f"      removed: {', '.join(removed)}")
+        click.echo(f"      backup:  {rec.get('backup', '?')}")
+
+
+@cli.command()
 def resumes():
     """List loaded resumes."""
     from auto_applier.config import PROFILES_DIR
