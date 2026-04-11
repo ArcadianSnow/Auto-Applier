@@ -194,48 +194,41 @@ def write_user_config() -> Path:
 # ---------------------------------------------------------------------------
 
 def write_answers() -> Path:
+    """Write a flat {question: answer} dict — the canonical format.
+
+    form_filler._load_answers tolerates three historical shapes
+    (flat dict, list of entries, {'questions': [...]}); we pick
+    the flat dict here because it matches what the wizard's
+    save_answers produces and round-trips cleanly.
+    """
     answers = {
-        "questions": [
-            {
-                "question": "Are you legally authorized to work in the United States?",
-                "answer": "Yes",
-                "aliases": [
-                    "work authorization",
-                    "authorized to work",
-                    "legally authorized",
-                ],
-            },
-            {
-                "question": "Will you now or in the future require sponsorship for employment visa status?",
-                "answer": "No",
-                "aliases": ["require sponsorship", "visa sponsorship"],
-            },
-            {
-                "question": "How many years of experience do you have with SQL?",
-                "answer": "6",
-                "aliases": ["years of sql", "sql experience"],
-            },
-            {
-                "question": "How many years of experience do you have with Python?",
-                "answer": "5",
-                "aliases": ["years of python", "python experience"],
-            },
-            {
-                "question": "Are you willing to relocate?",
-                "answer": "Yes",
-                "aliases": ["relocate", "relocation"],
-            },
-            {
-                "question": "What are your salary expectations?",
-                "answer": "120000",
-                "aliases": ["salary expectation", "desired salary", "compensation"],
-            },
-            {
-                "question": "Do you have a Bachelor's degree or higher?",
-                "answer": "Yes",
-                "aliases": ["bachelor", "degree"],
-            },
-        ]
+        "Are you legally authorized to work in the United States?": "Yes",
+        "Are you authorized to work in this country?": "Yes",
+        "Will you now or in the future require sponsorship for employment visa status?": "No",
+        "Do you require visa sponsorship?": "No",
+        "How many years of experience do you have with SQL?": "6",
+        "How many years of experience do you have with Python?": "5",
+        "How many years of experience do you have with Tableau?": "4",
+        "How many years of experience do you have with dbt?": "3",
+        "Years of experience with SQL": "6",
+        "Years of experience with Python": "5",
+        "Are you willing to relocate?": "Yes",
+        "Relocation": "Yes",
+        "What are your salary expectations?": "120000",
+        "Desired salary": "120000",
+        "Salary expectation": "120000",
+        "Do you have a Bachelor's degree or higher?": "Yes",
+        "Highest level of education": "Bachelor's degree",
+        "Have you previously worked for this company?": "No",
+        "What is your earliest start date?": "",  # filled by contextual matcher
+        "How did you hear about this position?": "",  # filled by contextual matcher
+        "Are you at least 18 years of age?": "Yes",
+        "Do you have a valid driver's license?": "Yes",
+        "Are you willing to undergo a background check?": "Yes",
+        "What is your notice period at your current job?": "Two weeks",
+        "Are you open to contract positions?": "Yes",
+        "What is your preferred work arrangement?": "Remote",
+        "What languages do you speak?": "English",
     }
     path = DATA / "answers.json"
     path.write_text(json.dumps(answers, indent=2), encoding="utf-8")

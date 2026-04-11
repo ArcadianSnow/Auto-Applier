@@ -10,6 +10,10 @@ class EventEmitter:
     def __init__(self):
         self._handlers: dict[str, list[Callable]] = defaultdict(list)
         self._pending_futures: dict[str, asyncio.Future] = {}
+        # Track which asyncio loop each pending future belongs to so
+        # cross-thread resolution can schedule set_result via
+        # call_soon_threadsafe on the owning loop.
+        self._pending_loops: dict[str, asyncio.AbstractEventLoop] = {}
 
     def on(self, event: str, handler: Callable) -> None:
         """Subscribe to an event."""
@@ -34,10 +38,17 @@ class EventEmitter:
         Used when the orchestrator needs user input (e.g., job review decision).
         The GUI handler should call resolve_event() with the response.
         Times out after ``timeout`` seconds (default 5 minutes).
+
+        The current running asyncio loop is captured here so
+        :meth:`resolve_event` can schedule the future's set_result
+        back ONTO that loop via call_soon_threadsafe. Without this,
+        GUI threads that resolve events live-lock the awaiter
+        because future.set_result is not thread-safe.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         future = loop.create_future()
         self._pending_futures[event] = future
+        self._pending_loops[event] = loop
 
         # Notify handlers
         self.emit(event, **data)
@@ -48,12 +59,31 @@ class EventEmitter:
             return None
         finally:
             self._pending_futures.pop(event, None)
+            self._pending_loops.pop(event, None)
 
     def resolve_event(self, event: str, result: Any) -> None:
-        """Resolve a pending emit_and_wait with a result."""
+        """Resolve a pending emit_and_wait with a result.
+
+        Thread-safe: the future's set_result is scheduled via
+        call_soon_threadsafe on the loop that owned the future, so
+        GUI callbacks running on the Tk main thread can resolve
+        asyncio futures without undefined behavior or hangs.
+        """
         future = self._pending_futures.get(event)
-        if future and not future.done():
-            future.set_result(result)
+        loop = self._pending_loops.get(event)
+        if future is None or future.done():
+            return
+        if loop is None or loop.is_closed():
+            # Fall back to a direct set — not thread-safe but better
+            # than losing the resolution entirely.
+            try:
+                future.set_result(result)
+            except Exception:
+                pass
+            return
+        loop.call_soon_threadsafe(
+            lambda: future.set_result(result) if not future.done() else None
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +98,10 @@ SEARCH_STARTED = "search_started"
 JOBS_FOUND = "jobs_found"
 JOB_SCORED = "job_scored"
 USER_REVIEW_NEEDED = "user_review_needed"
+# Fired after ALL platforms finish if the pending_review queue has
+# items. Carries the full list so the dashboard can open a batch
+# review panel instead of blocking mid-pipeline.
+REVIEW_QUEUE_READY = "review_queue_ready"
 APPLICATION_STARTED = "application_started"
 APPLICATION_COMPLETE = "application_complete"
 PLATFORM_ERROR = "platform_error"

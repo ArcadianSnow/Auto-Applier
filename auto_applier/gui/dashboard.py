@@ -25,6 +25,7 @@ from auto_applier.orchestrator.events import (
     JOBS_FOUND,
     JOB_SCORED,
     USER_REVIEW_NEEDED,
+    REVIEW_QUEUE_READY,
     APPLICATION_STARTED,
     APPLICATION_COMPLETE,
     PLATFORM_ERROR,
@@ -249,6 +250,7 @@ class DashboardWindow(tk.Toplevel):
         self.events.on(JOBS_FOUND, self._on_jobs_found)
         self.events.on(JOB_SCORED, self._on_job_scored)
         self.events.on(USER_REVIEW_NEEDED, self._on_user_review)
+        self.events.on(REVIEW_QUEUE_READY, self._on_review_queue_ready)
         self.events.on(APPLICATION_STARTED, self._on_application_started)
         self.events.on(APPLICATION_COMPLETE, self._on_application_complete)
         self.events.on(PLATFORM_ERROR, self._on_platform_error)
@@ -311,10 +313,25 @@ class DashboardWindow(tk.Toplevel):
             self.after(0, lambda: self._update_score(s))
 
     def _on_user_review(self, **kw):
-        """Open the review panel for the user to decide."""
+        """Increment the pending-review counter and update the log.
+
+        The engine now QUEUES borderline jobs for a batch review at
+        the end of the run instead of blocking the pipeline on each
+        one. This handler just displays a running count so users
+        see how many jobs are waiting for them.
+        """
         job = kw.get("job")
-        score = kw.get("score")
-        self.after(0, lambda: self._open_review_panel(job, score))
+        title = getattr(job, "title", "Unknown") if job else "Unknown"
+        self.after(0, lambda t=title: self.log(
+            f"  Queued for review: {t}", "info",
+        ))
+
+    def _on_review_queue_ready(self, **kw):
+        """Open the batch review panel when all platforms finish."""
+        queue = kw.get("queue", [])
+        if not queue:
+            return
+        self.after(0, lambda q=list(queue): self._open_batch_review(q))
 
     def _on_application_started(self, **kw):
         job = kw.get("job")
@@ -564,7 +581,13 @@ class DashboardWindow(tk.Toplevel):
     # ------------------------------------------------------------------
 
     def _open_review_panel(self, job, score) -> None:
-        """Open the job review panel and resolve the event with the decision."""
+        """Open the job review panel and resolve the event with the decision.
+
+        NOTE: This method is kept for backward compatibility but is
+        no longer wired to USER_REVIEW_NEEDED. The engine queues
+        borderline jobs and opens _open_batch_review at the end of
+        the run instead.
+        """
         from auto_applier.gui.panels.job_review import JobReviewPanel
 
         def on_decision(decision: str):
@@ -573,6 +596,63 @@ class DashboardWindow(tk.Toplevel):
             self.events.resolve_event(USER_REVIEW_NEEDED, decision)
 
         JobReviewPanel(self, job, score, on_decision)
+
+    def _open_batch_review(self, queue: list[dict]) -> None:
+        """Walk the user through all queued review jobs in one sitting.
+
+        Shows one JobReviewPanel at a time, collects apply/skip
+        decisions into a dict keyed by job_id, and resolves the
+        REVIEW_QUEUE_READY event with the full dict once the user
+        finishes the last one (or closes the panel).
+        """
+        from auto_applier.gui.panels.job_review import JobReviewPanel
+
+        if not queue:
+            self.events.resolve_event(REVIEW_QUEUE_READY, {})
+            return
+
+        decisions: dict[str, str] = {}
+        state = {"index": 0}
+        total = len(queue)
+
+        self.log(
+            f"Review queue: {total} job(s) to review — "
+            f"a panel will open for each one.",
+            "info",
+        )
+
+        def show_next():
+            idx = state["index"]
+            if idx >= total:
+                # All done — resolve the event with the full decision map
+                self.log(
+                    f"Review complete: {sum(1 for v in decisions.values() if v == 'apply')} "
+                    f"approved, {sum(1 for v in decisions.values() if v == 'skip')} skipped.",
+                    "info",
+                )
+                self.events.resolve_event(REVIEW_QUEUE_READY, decisions)
+                return
+
+            item = queue[idx]
+            job = item["job"]
+            score = item["score"]
+
+            # Log progress so the dashboard shows "reviewing 2 of 5"
+            self.log(
+                f"  Reviewing {idx + 1}/{total}: {getattr(job, 'title', 'Unknown')}",
+                "info",
+            )
+
+            def on_decision(decision: str):
+                decisions[job.job_id] = decision
+                state["index"] += 1
+                # Small delay then open the next one so the user sees
+                # the old panel close cleanly before the next opens.
+                self.after(150, show_next)
+
+            JobReviewPanel(self, job, score, on_decision)
+
+        show_next()
 
     # ------------------------------------------------------------------
     # Close / Stop

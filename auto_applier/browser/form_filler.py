@@ -13,6 +13,7 @@ native date input pickers.
 import difflib
 import json
 import logging
+import re
 from datetime import date, timedelta
 
 from playwright.async_api import Page
@@ -98,7 +99,22 @@ SOURCE_QUESTION_KEYWORDS = [
     "source of application",
     "referral source",
     "where did you learn",
+    "how did you discover",
+    "where did you discover",
+    "how did you come across",
+    "source of this application",
+    "job source",
+    "application source",
 ]
+
+# A looser regex fallback for source-attribution questions — catches
+# variants like 'where did you FIRST hear about this role' and 'how
+# did you eventually find this job' that the fixed keyword list
+# above misses because of extra words between the verbs.
+SOURCE_QUESTION_REGEX = re.compile(
+    r"(how|where)\s+(?:did|do)\s+you\s+(?:\w+\s+){0,3}(hear|find|discover|learn|come\s+across)",
+    re.IGNORECASE,
+)
 
 PREVIOUSLY_WORKED_KEYWORDS = [
     "previously worked",
@@ -253,10 +269,11 @@ class FormFiller:
           it for whatever date widget the site is using.
         """
         # Source attribution — only if we know which platform we're on
-        if self.platform_display_name and any(
-            kw in label_lower for kw in SOURCE_QUESTION_KEYWORDS
-        ):
-            return self.platform_display_name
+        if self.platform_display_name:
+            if any(kw in label_lower for kw in SOURCE_QUESTION_KEYWORDS):
+                return self.platform_display_name
+            if SOURCE_QUESTION_REGEX.search(label_lower):
+                return self.platform_display_name
 
         # Previously worked for this company
         if any(kw in label_lower for kw in PREVIOUSLY_WORKED_KEYWORDS):
@@ -301,22 +318,60 @@ class FormFiller:
     # ------------------------------------------------------------------
 
     def _match_answers(self, label: str) -> str:
-        """Match field label against answers.json (exact then fuzzy)."""
-        answers = self._load_answers()
+        """Match field label against answers.json.
 
-        # Exact match (case-insensitive)
+        Two-pass match:
+        1. Exact case-insensitive match against the question or any
+           of its aliases. Aliases let the user register short
+           keyword variants (e.g. 'work authorization' as an alias
+           for 'Are you authorized to work in this country?').
+        2. Substring containment in either direction — the field
+           label contains the question, or vice versa. Handles
+           forms that pad questions with extra boilerplate.
+        3. Fuzzy match (SequenceMatcher, 60% threshold) as a last
+           resort.
+        """
+        answers = self._load_answers()
+        label_lower = label.lower().strip()
+
+        # Pass 1: exact match on question or any alias
         for entry in answers:
-            if entry.get("question", "").lower() == label.lower():
+            q = entry.get("question", "").lower().strip()
+            if q and q == label_lower:
                 logger.debug("Exact answers.json match for: '%s'", label)
                 return entry.get("answer", "")
+            for alias in entry.get("aliases", []) or []:
+                if alias and alias.lower().strip() == label_lower:
+                    logger.debug(
+                        "Alias match '%s' -> '%s'", alias, entry.get("question"),
+                    )
+                    return entry.get("answer", "")
 
-        # Fuzzy match (60% threshold)
+        # Pass 2: substring containment (either direction)
+        for entry in answers:
+            q = entry.get("question", "").lower().strip()
+            if not q:
+                continue
+            if q in label_lower or label_lower in q:
+                logger.debug(
+                    "Substring answers.json match for '%s' against '%s'",
+                    label, entry.get("question"),
+                )
+                return entry.get("answer", "")
+            # Alias substring too
+            for alias in entry.get("aliases", []) or []:
+                a = alias.lower().strip()
+                if a and (a in label_lower or label_lower in a):
+                    return entry.get("answer", "")
+
+        # Pass 3: fuzzy
         best_match = ""
         best_ratio = 0.0
         for entry in answers:
-            ratio = difflib.SequenceMatcher(
-                None, label.lower(), entry.get("question", "").lower()
-            ).ratio()
+            q = entry.get("question", "").lower()
+            if not q:
+                continue
+            ratio = difflib.SequenceMatcher(None, label_lower, q).ratio()
             if ratio > best_ratio and ratio >= 0.6:
                 best_ratio = ratio
                 best_match = entry.get("answer", "")
@@ -594,11 +649,79 @@ class FormFiller:
 
     @staticmethod
     def _load_answers() -> list[dict]:
-        """Load pre-configured answers from answers.json."""
-        if ANSWERS_FILE.exists():
-            try:
-                with open(ANSWERS_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, Exception):
-                pass
+        """Load pre-configured answers from answers.json.
+
+        Historically the file has been written in three different
+        shapes by different parts of the codebase:
+
+        1. Flat dict (what the wizard's save_answers produces)::
+
+            {"Q1": "A1", "Q2": "A2"}
+
+        2. List of entries (what the form filler originally
+           assumed)::
+
+            [{"question": "Q1", "answer": "A1"}, ...]
+
+        3. Wrapped-list (what the fixture generator produces)::
+
+            {"questions": [{"question": "Q1", "answer": "A1",
+                            "aliases": [...]}]}
+
+        This loader accepts all three and returns a canonical list
+        of ``{"question": str, "answer": str, "aliases": [str]}``
+        dicts. When the shape is unrecognized, returns an empty
+        list and logs a warning once per run.
+        """
+        if not ANSWERS_FILE.exists():
+            return []
+        try:
+            with open(ANSWERS_FILE, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return []
+
+        normalized: list[dict] = []
+
+        # Shape 1: flat {question: answer}
+        if isinstance(raw, dict) and "questions" not in raw:
+            for q, a in raw.items():
+                if not isinstance(q, str):
+                    continue
+                normalized.append({
+                    "question": q,
+                    "answer": str(a) if a is not None else "",
+                    "aliases": [],
+                })
+            return normalized
+
+        # Shape 3: {"questions": [...]}
+        if isinstance(raw, dict) and "questions" in raw:
+            raw = raw.get("questions", [])
+
+        # Shape 2: list of entries
+        if isinstance(raw, list):
+            for entry in raw:
+                if not isinstance(entry, dict):
+                    continue
+                question = str(entry.get("question", "")).strip()
+                answer = str(entry.get("answer", "")).strip()
+                if not question:
+                    continue
+                aliases_raw = entry.get("aliases", [])
+                if not isinstance(aliases_raw, list):
+                    aliases_raw = []
+                aliases = [str(a).strip() for a in aliases_raw if str(a).strip()]
+                normalized.append({
+                    "question": question,
+                    "answer": answer,
+                    "aliases": aliases,
+                })
+            return normalized
+
+        logger.warning(
+            "answers.json has an unrecognized format (type=%s); "
+            "no pre-canned answers will be used this run",
+            type(raw).__name__,
+        )
         return []

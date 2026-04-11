@@ -27,6 +27,7 @@ from auto_applier.orchestrator.events import (
     JOBS_FOUND,
     JOB_SCORED,
     USER_REVIEW_NEEDED,
+    REVIEW_QUEUE_READY,
     APPLICATION_STARTED,
     APPLICATION_COMPLETE,
     PLATFORM_ERROR,
@@ -61,6 +62,10 @@ class ApplicationEngine:
 
         # Stats
         self.applied_count = 0
+        # USER_REVIEW jobs collected during the run for batch review
+        # after all platforms finish. Each entry is a dict of
+        # {job, score, platform_key, resume_label}.
+        self.pending_review: list[dict] = []
         self.skipped_count = 0
         self.failed_count = 0
         self.reviewed_count = 0
@@ -178,6 +183,14 @@ class ApplicationEngine:
                 finally:
                     self.events.emit(PLATFORM_FINISHED, platform=platform_key)
 
+            # Batch-review step: if any platforms produced jobs in
+            # the USER_REVIEW score band, open them now as a single
+            # queue that the user walks through at the end. This is
+            # much better UX than blocking each time a borderline
+            # score comes up mid-pipeline.
+            if self.pending_review:
+                await self._process_review_queue()
+
             # Check for evolution triggers after the run
             triggers = self.evolution.check_triggers()
             if triggers:
@@ -195,6 +208,126 @@ class ApplicationEngine:
                 skipped=self.skipped_count,
                 failed=self.failed_count,
             )
+
+    # ------------------------------------------------------------------
+    # Batch review queue
+    # ------------------------------------------------------------------
+
+    async def _process_review_queue(self) -> None:
+        """Let the user batch-review all USER_REVIEW jobs at once.
+
+        Emits REVIEW_QUEUE_READY with the full queue so the
+        dashboard can open a single batch-review panel. Then waits
+        on an event carrying the user's decisions. The GUI is
+        expected to resolve the event with a list of ``job_id``
+        strings that the user approved for apply; everything else
+        is treated as skipped.
+
+        CLI mode skips the batch review entirely (the CLI engine
+        already auto-skips USER_REVIEW jobs during the main loop).
+        Dry runs still process the queue so users can see how the
+        review UX works end-to-end.
+        """
+        self.events.emit(
+            REVIEW_QUEUE_READY,
+            queue=self.pending_review,
+            count=len(self.pending_review),
+        )
+
+        try:
+            decisions = await self.events.emit_and_wait(
+                REVIEW_QUEUE_READY,
+                queue=self.pending_review,
+                timeout=600.0,  # 10 minutes to work through the queue
+            )
+        except Exception:
+            decisions = None
+
+        # The GUI returns a dict of {job_id: "apply" | "skip"}, or
+        # None on timeout. Anything missing is treated as skip.
+        if not isinstance(decisions, dict):
+            decisions = {}
+
+        personal_info = self.config.get("personal_info", {})
+
+        for item in self.pending_review:
+            job = item["job"]
+            job_score = item["score"]
+            platform_key = item["platform_key"]
+
+            decision = decisions.get(job.job_id, "skip")
+            if decision != "apply":
+                self.skipped_count += 1
+                save(
+                    Application(
+                        job_id=job.job_id,
+                        status="skipped",
+                        source=platform_key,
+                        resume_used=job_score.resume_label,
+                        score=job_score.score,
+                    )
+                )
+                continue
+
+            # User approved — run the apply step now. This
+            # re-uses the platform instance if it's still alive,
+            # otherwise creates a fresh one. The browser session
+            # persists across platforms, so cookies still work.
+            platform_cls = PLATFORM_REGISTRY.get(platform_key)
+            if not platform_cls:
+                self.failed_count += 1
+                continue
+            platform = platform_cls(
+                context=self.browser.context,
+                config=self.config,
+            )
+            resume_info = self.resume_manager.get_resume(job_score.resume_label)
+            if not resume_info:
+                self.failed_count += 1
+                continue
+            resume_text = self.resume_manager.get_resume_text(
+                job_score.resume_label
+            )
+
+            self.events.emit(
+                APPLICATION_STARTED, job=job, resume=job_score.resume_label,
+            )
+            try:
+                app = await apply_to_job(
+                    platform=platform,
+                    job=job,
+                    resume_path=str(resume_info.file_path),
+                    resume_text=resume_text,
+                    resume_label=job_score.resume_label,
+                    personal_info=personal_info,
+                    router=self.router,
+                    dry_run=self.dry_run,
+                )
+                app.score = job_score.score
+                if app.status in ("applied", "dry_run"):
+                    self.applied_count += 1
+                else:
+                    self.failed_count += 1
+                self.events.emit(
+                    APPLICATION_COMPLETE, job=job, application=app,
+                )
+            except Exception as exc:
+                self.failed_count += 1
+                self.events.emit(
+                    APPLICATION_COMPLETE,
+                    job=job,
+                    application=Application(
+                        job_id=job.job_id,
+                        status="failed",
+                        source=platform_key,
+                        resume_used=job_score.resume_label,
+                        score=job_score.score,
+                        failure_reason=str(exc),
+                    ),
+                )
+
+        # Clear the queue so a second call is a no-op.
+        self.pending_review.clear()
 
     # ------------------------------------------------------------------
     # Per-platform pipeline
@@ -333,16 +466,23 @@ class ApplicationEngine:
                         )
                         continue
                     else:
-                        # In GUI mode, wait for user decision
-                        decision = await self.events.emit_and_wait(
-                            USER_REVIEW_NEEDED,
-                            job=job,
-                            score=job_score,
-                            timeout=300.0,
+                        # In GUI mode, QUEUE the job for batch review
+                        # at the end of the run. Blocking mid-pipeline
+                        # on every borderline score made the run feel
+                        # glacial AND starved later platforms of time.
+                        # Users now see a single review queue after
+                        # all platforms finish scraping + scoring.
+                        self.pending_review.append({
+                            "job": job,
+                            "score": job_score,
+                            "platform_key": platform_key,
+                            "resume_label": job_score.resume_label,
+                        })
+                        # Emit event so dashboard can update a counter
+                        self.events.emit(
+                            USER_REVIEW_NEEDED, job=job, score=job_score,
                         )
-                        if decision != "apply":
-                            self.skipped_count += 1
-                            continue
+                        continue
 
                 # Get the best resume info
                 resume_info = self.resume_manager.get_resume(job_score.resume_label)

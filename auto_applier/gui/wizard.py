@@ -178,6 +178,21 @@ class WizardApp(tk.Tk):
         if llm.get("gemini_api_key"):
             self.data["gemini_api_key"].set(llm["gemini_api_key"])
 
+        # Resumes — reload any previously added resumes so the
+        # user doesn't have to re-label them on every wizard open.
+        # Only include entries whose file still exists on disk.
+        from pathlib import Path as _Path
+        for entry in cfg.get("resumes", []):
+            if not isinstance(entry, dict):
+                continue
+            label = entry.get("label", "").strip()
+            path = entry.get("path", "").strip()
+            if not label or not path:
+                continue
+            if not _Path(path).exists():
+                continue
+            self.resume_list.append((label, path))
+
     # ------------------------------------------------------------------
     # Window layout
     # ------------------------------------------------------------------
@@ -401,17 +416,41 @@ class WizardApp(tk.Tk):
             json.dump(config, f, indent=2)
 
     def save_answers(self) -> None:
-        """Write collected answers to answers.json."""
-        from auto_applier.config import ANSWERS_FILE
+        """Write collected answers to answers.json.
 
-        answers = {}
+        Merges with the existing file instead of overwriting, so
+        that:
+        - Questions the wizard didn't show this session keep their
+          saved answers.
+        - Edits from this session update their questions in place.
+        - Blanking a field in the wizard removes that entry.
+
+        Uses the form_filler loader to canonicalize whatever shape
+        is on disk, then writes back the merged result as a flat
+        {question: answer} dict.
+        """
+        from auto_applier.config import ANSWERS_FILE
+        from auto_applier.browser.form_filler import FormFiller
+
+        # Load existing as canonical list of {question, answer}
+        existing_entries = FormFiller._load_answers()
+        merged: dict[str, str] = {
+            e["question"]: e["answer"] for e in existing_entries
+            if e.get("question")
+        }
+
+        # Apply wizard-session edits. Empty values in the session
+        # are treated as 'delete this question' so users can
+        # remove stale answers from the Answers step.
         for question, var in self.answer_vars.items():
             value = var.get().strip()
             if value:
-                answers[question] = value
+                merged[question] = value
+            elif question in merged:
+                del merged[question]
 
         with open(ANSWERS_FILE, "w", encoding="utf-8") as f:
-            json.dump(answers, f, indent=2)
+            json.dump(merged, f, indent=2)
 
 
 def launch_wizard() -> None:

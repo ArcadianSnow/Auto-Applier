@@ -162,15 +162,35 @@ class AnswersStep(ttk.Frame):
 
     @staticmethod
     def _load_saved_answers() -> dict[str, str]:
-        """Load previously saved answers from answers.json."""
+        """Load previously saved answers from answers.json.
+
+        Tolerates all three historical shapes: flat dict, list of
+        entries, and {"questions": [...]} wrapped. Returns a flat
+        {question: answer} dict in every case so the rest of the
+        answers step can stay simple.
+        """
         if not ANSWERS_FILE.exists():
             return {}
         try:
             with open(ANSWERS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            return data if isinstance(data, dict) else {}
         except (json.JSONDecodeError, OSError):
             return {}
+
+        out: dict[str, str] = {}
+        if isinstance(data, dict) and "questions" not in data:
+            # Flat dict — already canonical
+            return {str(k): str(v) for k, v in data.items() if isinstance(k, str)}
+        if isinstance(data, dict) and "questions" in data:
+            data = data.get("questions", [])
+        if isinstance(data, list):
+            for entry in data:
+                if isinstance(entry, dict):
+                    q = str(entry.get("question", "")).strip()
+                    a = str(entry.get("answer", "")).strip()
+                    if q:
+                        out[q] = a
+        return out
 
     @staticmethod
     def _load_unanswered() -> list[str]:
