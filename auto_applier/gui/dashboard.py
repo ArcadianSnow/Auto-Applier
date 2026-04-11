@@ -45,6 +45,7 @@ class DashboardWindow(tk.Toplevel):
         self.config = config
         self.events = EventEmitter()
         self._running = False
+        self._engine = None  # set when a run starts, cleared on finish
         self._start_time: float | None = None
         self._timer_id: str | None = None
 
@@ -545,9 +546,13 @@ class DashboardWindow(tk.Toplevel):
             self.after(0, lambda: self.log("Processing resumes...", "info"))
             loop.run_until_complete(self._process_resumes(config))
 
-            # Run the engine
+            # Run the engine. Store a reference on the dashboard
+            # so _on_stop can request a cooperative stop via the
+            # engine's own flag — the old 'dashboard._running = False'
+            # did nothing because the engine never read it.
             from auto_applier.orchestrator.engine import ApplicationEngine
             engine = ApplicationEngine(config, self.events, cli_mode=False)
+            self._engine = engine
             loop.run_until_complete(engine.run())
         except Exception as e:
             self.after(0, lambda: self.log(f"Error: {e}", "error"))
@@ -726,11 +731,23 @@ class DashboardWindow(tk.Toplevel):
     # ------------------------------------------------------------------
 
     def _on_stop(self) -> None:
-        """Request the run to stop."""
+        """Request the run to stop cooperatively.
+
+        Sets a flag on the engine that gets checked between jobs
+        and between platforms. The CURRENT application finishes
+        (you can't cleanly abort a mid-form fill) but nothing new
+        starts after it.
+        """
         if self._running:
-            self.log("Stop requested -- finishing current action...", "warning")
-            # The engine will stop after current operation due to event loop
-            self._running = False
+            self.log(
+                "Stop requested — will stop after the current application finishes.",
+                "warning",
+            )
+            if self._engine is not None:
+                try:
+                    self._engine.request_stop()
+                except Exception as exc:
+                    self.log(f"  stop request error: {exc}", "error")
             self._stop_btn.configure(state="disabled")
 
     def _on_close(self) -> None:

@@ -218,6 +218,23 @@ class IndeedPlatform(JobPlatform):
         "/cloudflare/challenge",
     ]
 
+    async def check_is_external(self, job: Job) -> bool:
+        """Fast-skip hook: inspect the already-loaded job page for
+        'Apply on company site' signals. Called from
+        ``pipeline.fetch_description`` right after the liveness
+        check, so we can early-exit external jobs before spending
+        LLM cycles on scoring them.
+
+        Delegates to the existing _is_external_apply method (same
+        detection logic the apply flow uses, just called earlier).
+        """
+        try:
+            page = await self.get_page()
+            return await self._is_external_apply(page)
+        except Exception as e:
+            logger.debug("check_is_external raised: %s", e)
+            return False
+
     # ------------------------------------------------------------------
     # Login
     # ------------------------------------------------------------------

@@ -232,6 +232,26 @@ class ZipRecruiterPlatform(JobPlatform):
         "/verify",
     ]
 
+    async def check_is_external(self, job: Job) -> bool:
+        """On ZipRecruiter, external jobs redirect to the company's
+        ATS and don't show a Quick Apply button. Detect by absence
+        of APPLY_BUTTON_SELECTORS on the already-loaded job page.
+        """
+        try:
+            page = await self.get_page()
+            for sel in APPLY_BUTTON_SELECTORS:
+                el = await page.query_selector(sel)
+                if el:
+                    try:
+                        if await el.is_visible():
+                            return False
+                    except Exception:
+                        return False
+            return True
+        except Exception as e:
+            logger.debug("ZipRecruiter check_is_external raised: %s", e)
+            return False
+
     # ------------------------------------------------------------------
     # Login
     # ------------------------------------------------------------------

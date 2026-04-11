@@ -170,6 +170,22 @@ class JobPlatform(ABC):
     # Shared Helpers -- Detection
     # ------------------------------------------------------------------
 
+    async def check_is_external(self, job: Job) -> bool:
+        """Return True if the currently-loaded job page is an 'external'
+        listing — i.e. the apply click will redirect the user to a
+        third-party ATS instead of an on-platform application form.
+
+        Default implementation returns False. Platforms override
+        this to run their own external-detection logic against the
+        ALREADY-LOADED page so we can early-skip before wasting
+        scoring cycles.
+
+        On a match, the caller (``fetch_description`` in the
+        pipeline) sets ``job.liveness = "external"`` so the engine
+        can drop it alongside dead listings before any LLM work.
+        """
+        return False
+
     async def check_liveness(self, job: Job, navigate: bool = True) -> str:
         """Return "live", "dead", or "unknown" for a job listing.
 

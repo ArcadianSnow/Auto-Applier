@@ -77,11 +77,24 @@ async def discover_jobs(
 
 
 async def fetch_description(platform, job: Job) -> Job:
-    """Fetch the full job description and liveness in one navigation.
+    """Fetch description + liveness + external check in one navigation.
 
-    We're already navigating to the job URL to read the description —
-    check liveness from the same loaded page so dead listings can be
-    skipped without a second round-trip.
+    Stacking three page inspections on the single get_job_description
+    navigation means external jobs are skipped before any LLM cycles
+    are spent on them. Previously external-only jobs burned 20-70
+    seconds on ghost check + archetype classify + multi-dim scoring
+    before the apply step discovered they were external and bailed.
+
+    Order:
+    1. Load the page via get_job_description (required for
+       everything else)
+    2. Liveness check — is this listing alive?
+    3. External check — can we even apply to this via the platform's
+       flow, or is the only apply route a third-party ATS?
+
+    Both liveness and external are stored on the Job's ``liveness``
+    field so the engine's existing skip gate picks them up with
+    no downstream changes. Values: "live" | "dead" | "external" | "unknown".
     """
     if not job.description:
         job.description = await platform.get_job_description(job)
@@ -91,6 +104,16 @@ async def fetch_description(platform, job: Job) -> Job:
         await platform.check_liveness(job, navigate=False)
     except Exception:
         job.liveness = "unknown"
+    # If it's dead, don't waste time checking external.
+    if job.liveness == "dead":
+        return job
+    # Fast-skip external-only listings (Apply on company site, etc.)
+    # before any scoring happens.
+    try:
+        if await platform.check_is_external(job):
+            job.liveness = "external"
+    except Exception:
+        pass
     return job
 
 

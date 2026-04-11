@@ -1,5 +1,8 @@
 """Application engine -- orchestrates the full discover -> score -> apply pipeline."""
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 from auto_applier.browser.session import BrowserSession
 from auto_applier.browser.platforms import PLATFORM_REGISTRY
@@ -66,6 +69,17 @@ class ApplicationEngine:
         # after all platforms finish. Each entry is a dict of
         # {job, score, platform_key, resume_label}.
         self.pending_review: list[dict] = []
+        # Cooperative stop flag. Set by request_stop() from the GUI's
+        # Stop button. Checked at every natural stopping point:
+        # between platforms, between keywords, between jobs. The
+        # CURRENT application finishes cleanly but nothing new
+        # starts after the flag is set.
+        self._stop_requested: bool = False
+
+    def request_stop(self) -> None:
+        """Signal the engine to stop after the current job finishes."""
+        self._stop_requested = True
+        logger.info("Stop requested — will finish current job and exit.")
         self.skipped_count = 0
         self.failed_count = 0
         self.reviewed_count = 0
@@ -175,6 +189,13 @@ class ApplicationEngine:
 
             # Run each platform with error isolation
             for platform_key in enabled:
+                # Honor the stop flag — if the user clicked Stop,
+                # don't start a new platform.
+                if self._stop_requested:
+                    logger.info(
+                        "Stop requested, skipping remaining platforms",
+                    )
+                    break
                 # Per-platform budget check. Dry runs always get the
                 # full cap; real runs subtract today's real applies
                 # for this source from the cap.
@@ -284,6 +305,9 @@ class ApplicationEngine:
         personal_info = self.config.get("personal_info", {})
 
         for item in self.pending_review:
+            if self._stop_requested:
+                logger.info("Stop requested, aborting remaining reviews")
+                break
             job = item["job"]
             job_score = item["score"]
             platform_key = item["platform_key"]
@@ -387,6 +411,12 @@ class ApplicationEngine:
         for keyword in keywords:
             if applied_this_platform >= budget:
                 break
+            if self._stop_requested:
+                logger.info(
+                    "Stop requested, skipping remaining keywords on %s",
+                    platform_key,
+                )
+                break
 
             self.events.emit(
                 SEARCH_STARTED, platform=platform_key, keyword=keyword
@@ -403,6 +433,12 @@ class ApplicationEngine:
             for job in jobs:
                 if applied_this_platform >= budget:
                     break
+                if self._stop_requested:
+                    logger.info(
+                        "Stop requested, finishing %s after current job",
+                        platform_key,
+                    )
+                    break
 
                 # Fetch description (also checks liveness on the same page)
                 job = await fetch_description(platform, job)
@@ -413,9 +449,18 @@ class ApplicationEngine:
                     self.events.emit(CAPTCHA_DETECTED, platform=platform_key)
                     return  # Hard stop
 
-                # Skip dead listings — don't waste LLM calls or apply quota
-                if job.liveness == "dead":
+                # Skip dead listings and external-only jobs before
+                # any scoring runs. Both states are set by
+                # fetch_description from the already-loaded page, so
+                # this block saves the 20-70 second scoring cost
+                # on jobs we already know can't be applied to via
+                # this platform.
+                if job.liveness in ("dead", "external"):
                     self.skipped_count += 1
+                    reason = (
+                        "dead listing" if job.liveness == "dead"
+                        else "external-only listing (no in-platform apply)"
+                    )
                     save(
                         Application(
                             job_id=job.job_id,
@@ -423,7 +468,7 @@ class ApplicationEngine:
                             source=platform_key,
                             resume_used="",
                             score=0,
-                            failure_reason="dead listing",
+                            failure_reason=reason,
                         )
                     )
                     continue

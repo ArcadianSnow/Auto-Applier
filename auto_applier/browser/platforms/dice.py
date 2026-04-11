@@ -211,6 +211,31 @@ class DicePlatform(JobPlatform):
         "/challenge",
     ]
 
+    async def check_is_external(self, job: Job) -> bool:
+        """On Dice, 'external' means the job has no Easy Apply button
+        — so the only way to apply is via the employer's own ATS.
+        These are the 'Easy Apply button not found -- job may require
+        external application' failures we used to discover AFTER
+        scoring. Check during fetch_description instead so we skip
+        them before any LLM work.
+        """
+        try:
+            page = await self.get_page()
+            for sel in EASY_APPLY_BUTTON_SELECTORS:
+                el = await page.query_selector(sel)
+                if el:
+                    try:
+                        if await el.is_visible():
+                            return False  # Easy Apply is present
+                    except Exception:
+                        return False
+            # No Easy Apply button found anywhere on the page →
+            # this is an external-only listing.
+            return True
+        except Exception as e:
+            logger.debug("Dice check_is_external raised: %s", e)
+            return False
+
     # ------------------------------------------------------------------
     # Login
     # ------------------------------------------------------------------
