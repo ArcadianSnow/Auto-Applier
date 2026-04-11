@@ -31,12 +31,10 @@ class JobScorer:
         - score >= review_min -> USER_REVIEW
         - score < review_min -> SKIP
         """
-        # Score all resumes against this job
         resume_scores = await self.resume_manager.score_all(job_description)
 
         if not resume_scores:
             return JobScore(
-                score=0,
                 decision=ScoreDecision.SKIP,
                 resume_label="",
                 explanation="No resumes loaded",
@@ -45,7 +43,6 @@ class JobScorer:
         best = resume_scores[0]
         threshold = self.cli_auto_apply_min if cli_mode else self.auto_apply_min
 
-        # Determine decision
         if best.score >= threshold:
             decision = ScoreDecision.AUTO_APPLY
         elif best.score >= self.review_min:
@@ -54,13 +51,13 @@ class JobScorer:
             decision = ScoreDecision.SKIP
 
         return JobScore(
-            score=best.score,
             decision=decision,
             resume_label=best.resume.label,
+            dimensions=best.dimensions,
             explanation=best.explanation,
             matched_skills=best.matched_skills,
             missing_skills=best.missing_skills,
-            deal_breakers=[],  # Could be extracted from LLM response
+            deal_breakers=[],
             all_resume_scores=resume_scores,
         )
 

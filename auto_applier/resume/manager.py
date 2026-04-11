@@ -19,7 +19,13 @@ from pathlib import Path
 from auto_applier.config import RESUMES_DIR, PROFILES_DIR
 from auto_applier.resume.parser import extract_text
 from auto_applier.llm.router import LLMRouter
-from auto_applier.llm.prompts import RESUME_SELECT, SKILL_EXTRACT_RESUME
+from auto_applier.llm.prompts import (
+    RESUME_SELECT, SCORE_DIMENSIONS, SKILL_EXTRACT_RESUME,
+)
+from auto_applier.scoring.models import (
+    DEFAULT_DIMENSIONS, DimensionScore, legacy_dimensions_from_score,
+    weighted_total,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +48,27 @@ class ResumeInfo:
 
 @dataclass
 class ResumeScore:
-    """Score of a single resume against a job description."""
+    """Score of a single resume against a job description.
+
+    Stores the full dimension breakdown. The legacy ``score`` attribute
+    is preserved as an int 1-10 derived from the weighted total so
+    existing comparators (``sorted(..., key=lambda s: s.score)``)
+    continue to work.
+    """
 
     resume: ResumeInfo
-    score: int  # 1-10
+    dimensions: list[DimensionScore] = field(default_factory=list)
     explanation: str = ""
     matched_skills: list = field(default_factory=list)
     missing_skills: list = field(default_factory=list)
+
+    @property
+    def total(self) -> float:
+        return weighted_total(self.dimensions)
+
+    @property
+    def score(self) -> int:
+        return max(1, min(10, round(self.total)))
 
 
 # ------------------------------------------------------------------
@@ -292,31 +312,96 @@ class ResumeManager:
     async def _score_single(
         self, resume: ResumeInfo, job_description: str
     ) -> ResumeScore:
-        """Score a single resume against a job description via LLM."""
+        """Score a single resume against a job description via LLM.
+
+        Uses the multi-dimensional prompt when the LLM supports JSON
+        output. Falls back to the legacy single-dimension prompt if
+        the JSON response is malformed, then falls back again to a
+        neutral score if scoring is entirely unavailable.
+        """
         resume_text = self.get_resume_text(resume.label)
 
+        # Try the multi-dimensional prompt first
+        try:
+            result = await self.router.complete_json(
+                prompt=SCORE_DIMENSIONS.format(
+                    resume_label=resume.label,
+                    resume_text=resume_text[:3000],
+                    job_description=job_description[:2000],
+                ),
+                system_prompt=SCORE_DIMENSIONS.system,
+            )
+            dimensions = self._parse_dimensions(result)
+            if dimensions:
+                return ResumeScore(
+                    resume=resume,
+                    dimensions=dimensions,
+                    explanation=result.get("summary", ""),
+                    matched_skills=result.get("matched_skills", []),
+                    missing_skills=result.get("missing_skills", []),
+                )
+        except Exception as exc:
+            logger.debug(
+                "Multi-dim scoring failed for '%s', trying legacy: %s",
+                resume.label, exc,
+            )
+
+        # Fall back to legacy single-score prompt
         try:
             result = await self.router.complete_json(
                 prompt=RESUME_SELECT.format(
                     resume_label=resume.label,
-                    resume_text=resume_text[:3000],  # Truncate to fit context
+                    resume_text=resume_text[:3000],
                     job_description=job_description[:2000],
                 ),
                 system_prompt=RESUME_SELECT.system,
             )
+            legacy_score = min(10, max(1, int(result.get("score", 5))))
             return ResumeScore(
                 resume=resume,
-                score=min(10, max(1, int(result.get("score", 5)))),
+                dimensions=legacy_dimensions_from_score(legacy_score),
                 explanation=result.get("explanation", ""),
                 matched_skills=result.get("matched_skills", []),
                 missing_skills=result.get("missing_skills", []),
             )
         except Exception as exc:
-            # On LLM failure, return neutral score so we can still proceed
             logger.warning("Resume scoring failed for '%s': %s", resume.label, exc)
             return ResumeScore(
-                resume=resume, score=5, explanation="Scoring unavailable"
+                resume=resume,
+                dimensions=legacy_dimensions_from_score(5),
+                explanation="Scoring unavailable",
             )
+
+    @staticmethod
+    def _parse_dimensions(result: dict) -> list[DimensionScore]:
+        """Convert a SCORE_DIMENSIONS JSON response to DimensionScore list.
+
+        Returns an empty list if no recognised dimension fields are
+        present — callers treat that as "LLM gave us garbage, try the
+        legacy prompt".
+        """
+        dimensions: list[DimensionScore] = []
+        for name, weight in DEFAULT_DIMENSIONS:
+            cell = result.get(name)
+            if not isinstance(cell, dict):
+                continue
+            raw_score = cell.get("score")
+            try:
+                score_val = float(raw_score)
+            except (TypeError, ValueError):
+                continue
+            score_val = max(0.0, min(10.0, score_val))
+            dimensions.append(DimensionScore(
+                name=name,
+                score=score_val,
+                weight=weight,
+                explanation=str(cell.get("reason", "")),
+            ))
+        # Require at least a majority of axes to consider the parse
+        # successful — avoids accepting a single fluke field.
+        if len(dimensions) < max(3, len(DEFAULT_DIMENSIONS) // 2):
+            return []
+        return dimensions
 
     async def _extract_skills(self, resume_text: str) -> dict:
         """Extract skills from resume text via LLM."""

@@ -87,6 +87,7 @@ class JobReviewPanel(tk.Toplevel):
         matched = getattr(score, "matched_skills", []) if score else []
         missing = getattr(score, "missing_skills", []) if score else []
         resume_label = getattr(score, "resume_label", "") if score else ""
+        dimensions = getattr(score, "dimensions", []) if score else []
 
         # --- Header ---
         header = tk.Frame(self, bg=BG_CARD, padx=PAD_X, pady=12)
@@ -158,6 +159,50 @@ class JobReviewPanel(tk.Toplevel):
                 exp_card, text=explanation, font=FONT_BODY,
                 fg=TEXT, bg=BG_CARD, wraplength=520, justify="left",
             ).pack(anchor="w")
+
+        # Dimension breakdown (multi-dimensional scoring)
+        if dimensions and len(dimensions) > 1:
+            dim_card = tk.Frame(
+                body, bg=BG_CARD, highlightbackground=BORDER,
+                highlightthickness=1, padx=16, pady=12,
+            )
+            dim_card.pack(fill="x", padx=PAD_X, pady=(0, 8))
+
+            tk.Label(
+                dim_card, text="Score Breakdown", font=FONT_SUBHEADING,
+                fg=PRIMARY, bg=BG_CARD,
+            ).pack(anchor="w", pady=(0, 6))
+
+            for d in sorted(dimensions, key=lambda x: x.weighted, reverse=True):
+                row = tk.Frame(dim_card, bg=BG_CARD)
+                row.pack(fill="x", pady=2)
+
+                tk.Label(
+                    row, text=f"{d.name.title():14s}", font=FONT_BODY,
+                    fg=TEXT, bg=BG_CARD, anchor="w",
+                ).pack(side="left")
+
+                bar_len = int(d.score * 4)  # 0-40 chars
+                bar = "#" * bar_len + "." * (40 - bar_len)
+                tk.Label(
+                    row, text=bar, font=("Consolas", 9),
+                    fg=self._score_color(d.score),
+                    bg=BG_CARD,
+                ).pack(side="left", padx=(4, 4))
+
+                tk.Label(
+                    row, text=f"{d.score:.1f}  (w={d.weight:.2f})",
+                    font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
+                ).pack(side="left")
+
+                if d.explanation:
+                    reason_row = tk.Frame(dim_card, bg=BG_CARD)
+                    reason_row.pack(fill="x", pady=(0, 2))
+                    tk.Label(
+                        reason_row, text=f"                {d.explanation}",
+                        font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD,
+                        anchor="w", wraplength=480, justify="left",
+                    ).pack(anchor="w")
 
         # Matched skills
         if matched:

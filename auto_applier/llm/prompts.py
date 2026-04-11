@@ -119,7 +119,45 @@ RESUME_BULLET = PromptTemplate(
 )
 
 # ------------------------------------------------------------------
-# Resume selection / scoring (per-resume)
+# Multi-dimensional resume scoring
+# ------------------------------------------------------------------
+
+SCORE_DIMENSIONS = PromptTemplate(
+    system=(
+        "You evaluate how well a resume matches a job along seven axes. "
+        "Return a 0-10 float for each axis PLUS a one-sentence reason. "
+        "Judge by skills and experience, NOT by job title. If the job "
+        "description omits information for an axis (e.g. no compensation "
+        "mentioned), score that axis 5.0 and say 'not specified'.\n\n"
+        "Axes:\n"
+        "- skills: do the required technical skills match the resume?\n"
+        "- experience: does the candidate's years and relevance match?\n"
+        "- seniority: does the candidate's level match the role level?\n"
+        "- location: is remote / geography compatible?\n"
+        "- compensation: if stated, does the salary range match expectations?\n"
+        "- culture: does the company culture / values fit the candidate?\n"
+        "- growth: does the role offer career trajectory / learning?\n\n"
+        "Respond ONLY with this JSON schema (no other text, no code fences):\n"
+        '{"skills": {"score": float, "reason": str}, '
+        '"experience": {"score": float, "reason": str}, '
+        '"seniority": {"score": float, "reason": str}, '
+        '"location": {"score": float, "reason": str}, '
+        '"compensation": {"score": float, "reason": str}, '
+        '"culture": {"score": float, "reason": str}, '
+        '"growth": {"score": float, "reason": str}, '
+        '"matched_skills": [str], '
+        '"missing_skills": [str], '
+        '"summary": str}'
+    ),
+    template=(
+        "Resume ({resume_label}):\n{resume_text}\n\n"
+        "Job Description:\n{job_description}"
+    ),
+)
+
+
+# ------------------------------------------------------------------
+# Resume selection / scoring (legacy single-dimension)
 # ------------------------------------------------------------------
 
 RESUME_SELECT = PromptTemplate(

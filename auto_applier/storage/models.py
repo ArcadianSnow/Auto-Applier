@@ -48,6 +48,7 @@ class Application:
     source: str = ""
     resume_used: str = ""  # label of the resume that was selected
     score: int = 0
+    dimensions_json: str = ""  # JSON-encoded list of DimensionScore dicts
     cover_letter_generated: bool = False
     failure_reason: str = ""
     fields_filled: int = 0

@@ -317,6 +317,17 @@ class ApplicationEngine:
                     dry_run=self.dry_run,
                 )
                 app.score = job_score.score
+                if job_score.dimensions:
+                    import json as _json
+                    app.dimensions_json = _json.dumps([
+                        {
+                            "name": d.name,
+                            "score": d.score,
+                            "weight": d.weight,
+                            "explanation": d.explanation,
+                        }
+                        for d in job_score.dimensions
+                    ])
 
                 if app.status in ("applied", "dry_run"):
                     self.applied_count += 1
