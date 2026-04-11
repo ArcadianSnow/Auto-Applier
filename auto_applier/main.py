@@ -234,6 +234,49 @@ def doctor():
     _sys.exit(doctor_module.run())
 
 
+@cli.command()
+def fsck():
+    """Check CSV data for integrity issues (read-only)."""
+    from auto_applier.storage.integrity import fsck as run_fsck
+
+    report = run_fsck()
+    click.echo(
+        f"\nData health check:\n"
+        f"  {report['jobs']:5d} jobs\n"
+        f"  {report['applications']:5d} applications\n"
+        f"  {report['skill_gaps']:5d} skill gaps\n"
+        f"  {report['followups']:5d} follow-ups"
+    )
+    if report["healthy"]:
+        click.echo("\n  No issues found.")
+        return
+    click.echo(f"\n  {len(report['issues'])} issue(s):")
+    for issue in report["issues"][:50]:
+        click.echo(f"    - {issue}")
+    if len(report["issues"]) > 50:
+        click.echo(f"    ... and {len(report['issues']) - 50} more")
+    click.echo("\nRun `auto-applier normalize` to auto-fix alias statuses and duplicates.")
+
+
+@cli.command()
+@click.confirmation_option(prompt="This will rewrite CSV files in place (backups created). Continue?")
+def normalize():
+    """Repair common CSV inconsistencies in place (creates backups)."""
+    from auto_applier.storage.integrity import normalize as run_normalize
+
+    changes = run_normalize()
+    click.echo("\nNormalization complete:")
+    for k, v in changes.items():
+        if k == "total":
+            continue
+        click.echo(f"  {k:32s} {v}")
+    if changes["total"] == 0:
+        click.echo("\nNothing to fix — data already clean.")
+    else:
+        click.echo(f"\nTotal changes: {changes['total']}")
+        click.echo("Backups written to data/.backups/")
+
+
 @cli.group()
 def archetype():
     """Manage job archetypes for resume routing."""
