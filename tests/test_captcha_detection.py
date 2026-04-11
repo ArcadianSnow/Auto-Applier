@@ -32,20 +32,40 @@ class _FakePlatform(JobPlatform):
     async def apply_to_job(self, job, resume_path, dry_run=False): return None
 
 
+def _fake_element(visible: bool = True):
+    """Build a mock element that supports is_visible()."""
+    el = MagicMock()
+    el.is_visible = AsyncMock(return_value=visible)
+    return el
+
+
 def _fake_page(
     url: str = "https://example.com/normal",
     body_text: str = "",
     selector_hits: dict | None = None,
 ):
-    """Build a MagicMock page that mimics Playwright's async API."""
+    """Build a MagicMock page that mimics Playwright's async API.
+
+    ``selector_hits`` maps CSS selectors to either a MagicMock element
+    (backward compat — treated as visible) or a _fake_element instance.
+    """
     page = MagicMock()
     page.url = url
     page.inner_text = AsyncMock(return_value=body_text)
 
     hits = selector_hits or {}
+    # Back-compat: wrap plain MagicMock values into visible fake elements
+    normalized = {}
+    for sel, val in hits.items():
+        if val is None:
+            normalized[sel] = None
+        elif hasattr(val, "is_visible"):
+            normalized[sel] = val
+        else:
+            normalized[sel] = _fake_element(visible=True)
 
     async def _query_selector(sel):
-        return hits.get(sel)
+        return normalized.get(sel)
 
     page.query_selector = _query_selector
     return page
@@ -60,24 +80,32 @@ def _detect(platform, page) -> bool:
 
 
 class TestStrongIframeSignal:
-    def test_recaptcha_iframe_triggers(self):
+    def test_visible_recaptcha_iframe_triggers(self):
         p = _FakePlatform(context=None, config={})
         page = _fake_page(
-            selector_hits={"iframe[src*='recaptcha']": MagicMock()},
+            selector_hits={"iframe[src*='recaptcha']": _fake_element(visible=True)},
         )
         assert _detect(p, page) is True
+
+    def test_hidden_recaptcha_iframe_does_not_trigger(self):
+        """The Indeed real-world bug: invisible reCAPTCHA v3 tracker."""
+        p = _FakePlatform(context=None, config={})
+        page = _fake_page(
+            selector_hits={"iframe[src*='recaptcha']": _fake_element(visible=False)},
+        )
+        assert _detect(p, page) is False
 
     def test_hcaptcha_iframe_triggers(self):
         p = _FakePlatform(context=None, config={})
         page = _fake_page(
-            selector_hits={"iframe[src*='hcaptcha']": MagicMock()},
+            selector_hits={"iframe[src*='hcaptcha']": _fake_element(visible=True)},
         )
         assert _detect(p, page) is True
 
     def test_arkose_iframe_triggers(self):
         p = _FakePlatform(context=None, config={})
         page = _fake_page(
-            selector_hits={"iframe[src*='arkoselabs']": MagicMock()},
+            selector_hits={"iframe[src*='arkoselabs']": _fake_element(visible=True)},
         )
         assert _detect(p, page) is True
 

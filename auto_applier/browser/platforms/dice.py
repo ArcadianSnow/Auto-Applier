@@ -344,9 +344,35 @@ class DicePlatform(JobPlatform):
                 continue
 
         if not cards:
-            # Dump diagnostic info so we can see WHY zero cards were
-            # found — is it a captcha, a zero-results banner, or a
-            # DOM change that broke our selectors?
+            # CSS selectors missed. Fall back to anchor-based finder.
+            logger.info(
+                "Dice: no CSS selectors matched, trying anchor-based "
+                "fallback for /job-detail/ links"
+            )
+            anchor_hits = await self.find_jobs_by_anchors(
+                page, href_pattern="/job-detail/",
+            )
+            if not anchor_hits:
+                # Dice also uses /jobs/ and /jobid paths on some layouts
+                anchor_hits = await self.find_jobs_by_anchors(
+                    page, href_pattern="/jobs/",
+                )
+            if anchor_hits:
+                logger.info(
+                    "Dice: anchor fallback recovered %d jobs",
+                    len(anchor_hits),
+                )
+                for title, url in anchor_hits:
+                    jobs.append(Job(
+                        job_id=f"dice-{abs(hash(url)) % 10**10}",
+                        title=title,
+                        company="",
+                        url=url,
+                        search_keyword=keyword,
+                        source=self.source_id,
+                    ))
+                return jobs
+
             try:
                 current_url = page.url
                 title = await page.title()
@@ -357,7 +383,8 @@ class DicePlatform(JobPlatform):
                 body = ""
             snippet = body.strip()[:400].replace("\n", " | ")
             logger.warning(
-                "Dice: 0 job cards found.\n"
+                "Dice: 0 job cards found and anchor fallback came up "
+                "empty too.\n"
                 "  url=%s\n"
                 "  title=%s\n"
                 "  page snippet: %s",

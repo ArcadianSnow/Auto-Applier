@@ -363,11 +363,38 @@ class IndeedPlatform(JobPlatform):
                 continue
 
         if not cards:
-            # No cards found — dump some diagnostic info so we can
-            # tell WHY. Is the page showing a captcha? A 'no results'
-            # banner? A redirect? A country-specific variant of Indeed
-            # that uses different class names? Without this log line
-            # the user just sees '0 jobs found' and can't debug.
+            # CSS selectors missed. Fall back to anchor-based finder.
+            logger.info(
+                "Indeed: no CSS selectors matched, trying anchor-based "
+                "fallback for /viewjob links"
+            )
+            anchor_hits = await self.find_jobs_by_anchors(
+                page, href_pattern="/viewjob",
+            )
+            if anchor_hits:
+                logger.info(
+                    "Indeed: anchor fallback recovered %d jobs",
+                    len(anchor_hits),
+                )
+                for title, url in anchor_hits:
+                    # Pull the jk= parameter out of the href for a
+                    # deterministic job_id
+                    import re as _re
+                    jk_match = _re.search(r"jk=([a-f0-9]+)", url)
+                    if jk_match:
+                        job_id = f"ind-{jk_match.group(1)}"
+                    else:
+                        job_id = f"ind-{abs(hash(url)) % 10**10}"
+                    jobs.append(Job(
+                        job_id=job_id,
+                        title=title,
+                        company="",
+                        url=url,
+                        search_keyword=keyword,
+                        source=self.source_id,
+                    ))
+                return jobs
+
             try:
                 current_url = page.url
                 title = await page.title()

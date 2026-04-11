@@ -51,13 +51,20 @@ LOGGED_IN_SELECTORS = [
 ]
 
 # Job card selectors on the search results page. Newest ZR layouts
-# at the top, historical ones kept as fallbacks.
+# at the top, historical ones kept as fallbacks. We cast a wide net
+# because ZR changes its class names every few months — see
+# _parse_job_cards for the anchor-based fallback that kicks in when
+# none of these match.
 JOB_CARD_SELECTORS = [
     # 2024+ layouts
     "article[data-testid='job-card']",
     "div[data-testid='job-card']",
+    "article[data-testid*='job']",
     "article.jobList-item",
     "li[class*='JobList'] article",
+    # Broad semantic fallbacks — ZR uses <article> for each card
+    "article:has(h2)",
+    "article:has(a[href*='/jobs/'])",
     # Historical
     ".job_content",
     ".job-listing",
@@ -364,6 +371,33 @@ class ZipRecruiterPlatform(JobPlatform):
                 continue
 
         if not cards:
+            # CSS selectors missed. Fall back to the anchor-based
+            # finder before giving up — ZR can rebuild its DOM
+            # without our selectors catching up, but job cards always
+            # link to /jobs/<id> so we can locate them structurally.
+            logger.info(
+                "ZipRecruiter: no CSS selectors matched, trying "
+                "anchor-based fallback for /jobs/ links"
+            )
+            anchor_hits = await self.find_jobs_by_anchors(
+                page, href_pattern="/jobs/",
+            )
+            if anchor_hits:
+                logger.info(
+                    "ZipRecruiter: anchor fallback recovered %d jobs",
+                    len(anchor_hits),
+                )
+                for title, url in anchor_hits:
+                    jobs.append(Job(
+                        job_id=f"zr-{abs(hash(url)) % 10**10}",
+                        title=title,
+                        company="",  # Filled in by get_job_description later
+                        url=url,
+                        search_keyword=keyword,
+                        source=self.source_id,
+                    ))
+                return jobs
+
             try:
                 current_url = page.url
                 title = await page.title()
@@ -374,7 +408,8 @@ class ZipRecruiterPlatform(JobPlatform):
                 body = ""
             snippet = body.strip()[:400].replace("\n", " | ")
             logger.warning(
-                "ZipRecruiter: 0 job cards found.\n"
+                "ZipRecruiter: 0 job cards found and anchor fallback "
+                "also came up empty.\n"
                 "  url=%s\n"
                 "  title=%s\n"
                 "  page snippet: %s",

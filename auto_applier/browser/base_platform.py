@@ -237,6 +237,18 @@ class JobPlatform(ABC):
         ``captcha_url_patterns`` class attribute.
         """
         # 1. CAPTCHA iframes / vendor containers.
+        #
+        # IMPORTANT: check VISIBILITY, not just presence. Modern sites
+        # embed invisible reCAPTCHA v3 iframes as a behavior-tracking
+        # widget — they're present on every page but never shown and
+        # never require solving. Indeed, LinkedIn, and many others use
+        # this pattern. A naive query_selector match fires on every
+        # navigation and hard-stops the pipeline for nothing.
+        #
+        # A reCAPTCHA challenge that actually needs solving is ALWAYS
+        # visible — is_visible() returns True only for elements with
+        # non-zero size and no display:none / visibility:hidden /
+        # aria-hidden in the ancestor chain.
         strong_selectors = [
             "iframe[src*='recaptcha']",
             "iframe[src*='hcaptcha']",
@@ -248,9 +260,21 @@ class JobPlatform(ABC):
         for sel in strong_selectors:
             try:
                 el = await page.query_selector(sel)
-                if el:
-                    logger.warning("CAPTCHA detected via selector: %s", sel)
-                    return True
+                if not el:
+                    continue
+                # Skip invisible / zero-size / hidden widgets.
+                try:
+                    visible = await el.is_visible()
+                except Exception:
+                    visible = False
+                if not visible:
+                    logger.debug(
+                        "Ignoring hidden CAPTCHA element '%s' "
+                        "(likely invisible reCAPTCHA v3 tracker)", sel,
+                    )
+                    continue
+                logger.warning("CAPTCHA detected via selector: %s", sel)
+                return True
             except Exception:
                 continue
 
@@ -268,6 +292,70 @@ class JobPlatform(ABC):
                 return True
 
         return False
+
+    async def find_jobs_by_anchors(
+        self,
+        page: Page,
+        href_pattern: str,
+        min_title_length: int = 5,
+        max_title_length: int = 200,
+        exclude_texts: tuple[str, ...] = (
+            "jobs", "my jobs", "home", "search", "profile",
+            "sign in", "sign up", "log in", "log out",
+            "new", "apply", "quick apply", "easy apply",
+            "next", "previous", "more", "back",
+        ),
+    ) -> list[tuple[str, str]]:
+        """Find job-looking anchor elements as a selector-free fallback.
+
+        When CSS-class-based card selectors stop matching (because the
+        site shipped a new React build) we can almost always still
+        find jobs by looking at the structural guarantee: every job
+        card contains an anchor that points to the job detail page.
+
+        Returns a list of ``(title, url)`` tuples for anchors whose
+        ``href`` contains ``href_pattern`` (e.g. ``'/jobs/'``) and
+        whose visible text looks like a job title (length in range,
+        not a navigation word). Deduplicates by href.
+
+        Callers then look up the company / location from the nearest
+        ancestor container.
+        """
+        out: list[tuple[str, str]] = []
+        seen_hrefs: set[str] = set()
+
+        try:
+            anchors = await page.query_selector_all(f"a[href*='{href_pattern}']")
+        except Exception:
+            return out
+
+        for a in anchors:
+            try:
+                href = await a.get_attribute("href") or ""
+                text = (await a.inner_text() or "").strip()
+            except Exception:
+                continue
+            if not href or not text:
+                continue
+            if not (min_title_length <= len(text) <= max_title_length):
+                continue
+            if text.lower() in exclude_texts:
+                continue
+            # Normalize href to absolute so dedup is consistent
+            if href.startswith("/"):
+                try:
+                    base = page.url.split("/", 3)
+                    href = f"{base[0]}//{base[2]}{href}"
+                except Exception:
+                    pass
+            # Strip tracking fragments so dedup works across the run
+            key = href.split("#")[0].split("?")[0]
+            if key in seen_hrefs:
+                continue
+            seen_hrefs.add(key)
+            out.append((text, href))
+
+        return out
 
     async def check_and_abort_on_captcha(
         self, page: Page, retry_seconds: float = 12.0,
