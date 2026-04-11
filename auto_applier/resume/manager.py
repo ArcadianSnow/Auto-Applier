@@ -9,6 +9,7 @@ Resume files live in ``data/resumes/``.  Per-resume enhanced profiles
 ``data/profiles/<label>.json``.
 """
 
+import asyncio
 import json
 import logging
 import shutil
@@ -96,13 +97,30 @@ class ResumeManager:
     # Add / remove
     # ------------------------------------------------------------------
 
-    async def add_resume(self, source_path: str | Path, label: str) -> ResumeInfo:
+    async def add_resume(
+        self,
+        source_path: str | Path,
+        label: str,
+        skill_extract_timeout: float = 60.0,
+    ) -> ResumeInfo:
         """Add a resume: copy to data/resumes/, parse text, create profile via LLM.
+
+        Writes the profile in two passes so a slow or failing LLM
+        never leaves the user without a usable resume:
+
+        1. Immediately save a minimal profile (label, raw text,
+           empty skills lists) so scoring can still run even if
+           skill extraction times out.
+        2. Call ``_extract_skills`` under an ``asyncio.wait_for``
+           timeout (default 60s). On success, update the profile
+           with the extracted skills. On timeout or failure, leave
+           the minimal profile in place and log a warning.
 
         Args:
             source_path: Path to the original PDF/DOCX file.
-            label: Human-readable label (e.g. ``"data_analyst"``).  Used as
-                the filename stem for both the copied file and the profile.
+            label: Human-readable label (e.g. ``"data_analyst"``).
+            skill_extract_timeout: Max seconds to wait for the LLM
+                to extract skills. Set to 0 to skip extraction.
 
         Returns:
             A :class:`ResumeInfo` with metadata about the newly added resume.
@@ -153,28 +171,57 @@ class ResumeManager:
         # Parse text
         raw_text = extract_text(dest)
 
-        # Extract skills via LLM
-        skills_data = await self._extract_skills(raw_text)
-
-        # Build and save profile
+        # Pass 1: save a minimal profile immediately. The scoring
+        # pipeline only truly needs ``raw_text`` — skills improve
+        # routing but aren't load-bearing. Writing this now means
+        # a hanging LLM can't leave the user with nothing.
         profile = {
             "label": label,
             "source_file": dest.name,
             "parsed_at": datetime.now(timezone.utc).isoformat(),
             "raw_text": raw_text,
-            "summary": "",  # Could be enriched by LLM later
-            "skills": skills_data.get("technical_skills", []),
-            "tools": skills_data.get("tools", []),
-            "certifications": skills_data.get("certifications", []),
-            "soft_skills": skills_data.get("soft_skills", []),
+            "summary": "",
+            "skills": [],
+            "tools": [],
+            "certifications": [],
+            "soft_skills": [],
             "experience": [],
             "education": [],
             "confirmed_skills": [],
         }
-
         profile_path = PROFILES_DIR / f"{label}.json"
         with open(profile_path, "w", encoding="utf-8") as f:
             json.dump(profile, f, indent=2)
+        logger.info("Saved minimal profile for '%s' (raw text only)", label)
+
+        # Pass 2: try to enrich with LLM skill extraction under a
+        # timeout. Failure here is logged and swallowed — the
+        # minimal profile from Pass 1 is still usable.
+        if skill_extract_timeout > 0:
+            try:
+                skills_data = await asyncio.wait_for(
+                    self._extract_skills(raw_text),
+                    timeout=skill_extract_timeout,
+                )
+                profile["skills"] = skills_data.get("technical_skills", [])
+                profile["tools"] = skills_data.get("tools", [])
+                profile["certifications"] = skills_data.get("certifications", [])
+                profile["soft_skills"] = skills_data.get("soft_skills", [])
+                with open(profile_path, "w", encoding="utf-8") as f:
+                    json.dump(profile, f, indent=2)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Skill extraction for '%s' timed out after %.0fs — "
+                    "keeping minimal profile. The tool will still work "
+                    "but archetype routing may be less precise.",
+                    label, skill_extract_timeout,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Skill extraction for '%s' failed: %s — keeping "
+                    "minimal profile.", label, exc,
+                )
+
         logger.info(
             "Created profile for '%s' (%d skills, %d tools)",
             label,
@@ -456,11 +503,17 @@ class ResumeManager:
         return dimensions
 
     async def _extract_skills(self, resume_text: str) -> dict:
-        """Extract skills from resume text via LLM."""
+        """Extract skills from resume text via LLM.
+
+        Truncates to 2500 chars to keep gemma4:e4b CPU inference
+        latency reasonable — skill extraction doesn't need the full
+        resume text, just the top-matter skills section + the first
+        few job entries.
+        """
         try:
             return await self.router.complete_json(
                 prompt=SKILL_EXTRACT_RESUME.format(
-                    resume_text=resume_text[:4000]
+                    resume_text=resume_text[:2500]
                 ),
                 system_prompt=SKILL_EXTRACT_RESUME.system,
             )

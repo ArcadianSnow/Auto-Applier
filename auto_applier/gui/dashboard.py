@@ -491,7 +491,14 @@ class DashboardWindow(tk.Toplevel):
             self.after(0, self._on_run_finished)
 
     async def _process_resumes(self, config: dict) -> None:
-        """Add resumes to the ResumeManager (requires LLM for skill extraction)."""
+        """Add resumes to the ResumeManager (requires LLM for skill extraction).
+
+        Emits periodic 'still working' heartbeats while each resume
+        is being processed so a slow LLM call on CPU doesn't look
+        like a hang. A minimal profile is always saved first, so
+        even a hard timeout leaves the user with a usable resume.
+        """
+        import asyncio as _asyncio
         from auto_applier.llm.router import LLMRouter
         from auto_applier.resume.manager import ResumeManager
 
@@ -502,16 +509,45 @@ class DashboardWindow(tk.Toplevel):
         for resume_info in config.get("resumes", []):
             label = resume_info["label"]
             path = resume_info["path"]
-            self.after(0, lambda l=label: self.log(f"Processing resume: {l}...", "info"))
+            self.after(0, lambda l=label: self.log(
+                f"Processing resume: {l}... (this can take 30–60 seconds "
+                f"on CPU while the AI reads it)",
+                "info",
+            ))
+
+            # Heartbeat task: log a reassurance line every 10 seconds
+            # while add_resume is in flight so users know we're alive.
+            stop_event = _asyncio.Event()
+
+            async def _heartbeat(label=label, stop=stop_event):
+                elapsed = 0
+                while not stop.is_set():
+                    try:
+                        await _asyncio.wait_for(stop.wait(), timeout=10.0)
+                    except _asyncio.TimeoutError:
+                        elapsed += 10
+                        self.after(0, lambda e=elapsed, l=label: self.log(
+                            f"  ... still reading '{l}' ({e}s elapsed)",
+                            "info",
+                        ))
+
+            hb = _asyncio.create_task(_heartbeat())
             try:
                 await manager.add_resume(path, label)
                 self.after(0, lambda l=label: self.log(
                     f"Resume '{l}' processed successfully.", "success"
                 ))
             except Exception as e:
-                self.after(0, lambda l=label, err=e: self.log(
-                    f"Failed to process resume '{l}': {err}", "error"
+                err_msg = str(e)
+                self.after(0, lambda l=label, msg=err_msg: self.log(
+                    f"Failed to process resume '{l}': {msg}", "error"
                 ))
+            finally:
+                stop_event.set()
+                try:
+                    await hb
+                except Exception:
+                    pass
 
     def _on_run_finished(self) -> None:
         """Called when the run completes (on main thread)."""
