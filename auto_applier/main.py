@@ -767,6 +767,84 @@ def followup_dismiss(job_id: str, source: str):
     click.echo(f"Dismissed {n} follow-up(s) for job {job_id}.")
 
 
+@followup.command("draft")
+@click.argument("job_id")
+@click.option(
+    "--attempt", "-a", default=1, type=int,
+    help="1=warm check-in, 2=direct with new signal, 3=closing the loop",
+)
+@click.option(
+    "--resume", default=None,
+    help="Resume label to use (defaults to best match for the job)",
+)
+def followup_draft(job_id: str, attempt: int, resume: str):
+    """Generate a tailored follow-up email body for a stored job."""
+    import asyncio as _asyncio
+    from datetime import datetime, timezone
+    from auto_applier.llm.router import LLMRouter
+    from auto_applier.resume.followup_writer import FollowupEmailWriter
+    from auto_applier.resume.manager import ResumeManager
+    from auto_applier.storage.models import Application, Job
+    from auto_applier.storage.repository import load_all
+
+    jobs = [j for j in load_all(Job) if j.job_id == job_id]
+    if not jobs:
+        click.echo(f"No job found with id '{job_id}'.")
+        return
+    job = jobs[0]
+
+    # Figure out days since the application was sent
+    apps = [
+        a for a in load_all(Application)
+        if a.job_id == job_id and a.status in ("applied", "dry_run")
+    ]
+    if apps:
+        try:
+            applied_at = datetime.fromisoformat(apps[0].applied_at)
+            days_since = max(0, (datetime.now(timezone.utc) - applied_at).days)
+        except ValueError:
+            days_since = 7
+    else:
+        days_since = 7
+
+    async def _gen():
+        router = LLMRouter()
+        await router.initialize()
+        mgr = ResumeManager(router)
+        label = resume or (apps[0].resume_used if apps else "")
+        if not label:
+            resumes = mgr.list_resumes()
+            if not resumes:
+                return None, "No resumes loaded."
+            label = resumes[0].label
+        resume_text = mgr.get_resume_text(label)
+        if not resume_text:
+            return None, f"Resume '{label}' has no parsed text."
+        writer = FollowupEmailWriter(router)
+        body = await writer.generate(
+            resume_text=resume_text,
+            job_description=job.description,
+            company_name=job.company,
+            job_title=job.title,
+            attempt=attempt,
+            days_since=days_since,
+        )
+        return body, None
+
+    body, err = _asyncio.run(_gen())
+    if err:
+        click.echo(err)
+        return
+    if not body:
+        click.echo("LLM failed to produce a follow-up. Check `cli doctor`.")
+        return
+    click.echo(
+        f"\n--- attempt {attempt}, {days_since} days since application ---"
+    )
+    click.echo(body)
+    click.echo("-------------------")
+
+
 @cli.command()
 def migrations():
     """Show CSV schema migration history."""

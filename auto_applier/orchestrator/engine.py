@@ -240,6 +240,44 @@ class ApplicationEngine:
                     )
                     continue
 
+                # Ghost-job check: does this posting look real? Runs a
+                # short LLM call to spot recycled/fake listings. Fails
+                # open — an unavailable check never blocks real jobs.
+                from auto_applier.analysis.ghost_check import (
+                    GhostJobChecker, should_skip_ghost,
+                )
+                from auto_applier.config import GHOST_SKIP_THRESHOLD
+                try:
+                    ghost_result = await GhostJobChecker(self.router).check(
+                        job_description=job.description,
+                        company_name=job.company,
+                        job_title=job.title,
+                    )
+                except Exception:
+                    ghost_result = None
+                if ghost_result is not None:
+                    job.ghost_score = ghost_result.score
+                    job.ghost_verdict = ghost_result.verdict
+                    if should_skip_ghost(
+                        ghost_result.score,
+                        ghost_result.confidence,
+                        GHOST_SKIP_THRESHOLD,
+                    ):
+                        self.skipped_count += 1
+                        save(
+                            Application(
+                                job_id=job.job_id,
+                                status="skipped",
+                                source=platform_key,
+                                resume_used="",
+                                score=0,
+                                failure_reason=(
+                                    f"likely ghost listing: {ghost_result.verdict}"
+                                ),
+                            )
+                        )
+                        continue
+
                 # Score the job against all resumes
                 job_score = await self.scorer.score(
                     job.description, cli_mode=self.cli_mode

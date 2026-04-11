@@ -61,6 +61,12 @@ DEFAULT_CLI_AUTO_APPLY_MIN = 7
 DEFAULT_REVIEW_MIN = 4
 DEFAULT_EVOLUTION_TRIGGER_THRESHOLD = 3
 
+# Ghost-job skip threshold. Jobs scoring at or above this on the 0-10
+# ghost scale are skipped before apply without wasting scoring cycles
+# on them. Override via GHOST_SKIP_THRESHOLD env var — set it to 11
+# to disable the skip gate entirely.
+GHOST_SKIP_THRESHOLD = int(os.getenv("GHOST_SKIP_THRESHOLD", "8"))
+
 # Follow-up cadence: days after applied_at when reminders fall due.
 # Override via FOLLOWUP_CADENCE_DAYS (comma-separated integers).
 _cadence_env = os.getenv("FOLLOWUP_CADENCE_DAYS", "7,14,21")

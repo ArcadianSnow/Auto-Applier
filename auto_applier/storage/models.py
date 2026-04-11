@@ -32,6 +32,8 @@ class Job:
     source: str = ""  # "linkedin", "indeed", etc.
     canonical_hash: str = ""  # cross-source dedup key (see storage/dedup.py)
     liveness: str = "unknown"  # "live" | "dead" | "unknown" (see browser/liveness.py)
+    ghost_score: int = -1  # 0-10 ghost-likelihood, -1 = unchecked
+    ghost_verdict: str = ""  # One-line human-readable explanation
     found_at: str = field(default_factory=_now_iso)
 
     def __post_init__(self) -> None:

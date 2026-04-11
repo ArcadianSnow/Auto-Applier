@@ -243,6 +243,47 @@ COMPANY_RESEARCH = PromptTemplate(
 
 
 # ------------------------------------------------------------------
+# Ghost job / posting legitimacy detection
+# ------------------------------------------------------------------
+
+GHOST_JOB_CHECK = PromptTemplate(
+    system=(
+        "You analyze a job posting and rate how likely it is to be "
+        "a 'ghost listing' — a posting that's left up without real "
+        "intent to hire. Examples: companies collecting resumes, "
+        "recycled postings that rotate back every quarter, agency "
+        "postings with vague details, listings with absurd "
+        "requirements (12 years React, 8 years Kubernetes), postings "
+        "with no company name or a suspiciously generic description.\n\n"
+        "Signals of a REAL posting (lower ghost score):\n"
+        "- Specific team, product, or project mentioned by name\n"
+        "- Concrete outcomes the hire will own\n"
+        "- Realistic years of experience relative to the tech stack\n"
+        "- Clear salary range\n"
+        "- Named hiring manager or team lead\n"
+        "- References to recent company news or milestones\n\n"
+        "Signals of a GHOST posting (higher ghost score):\n"
+        "- Very generic description that could apply to any company\n"
+        "- Impossible seniority requirements (10+ years on 3-year-old tech)\n"
+        "- Laundry-list 'must have' stack (15+ tools, every buzzword)\n"
+        "- No company name, no team name, no concrete deliverables\n"
+        "- Vague 'competitive salary', no range\n"
+        "- Copy-paste legal boilerplate and nothing specific\n\n"
+        "Respond ONLY with this JSON (no preamble, no code fences):\n"
+        '{"ghost_score": int 0-10 (0=clearly real, 10=clearly ghost), '
+        '"confidence": "low"|"medium"|"high", '
+        '"signals": [str] (specific evidence you saw, 1-4 items), '
+        '"verdict": str (one short sentence for the user)}'
+    ),
+    template=(
+        "Company: {company_name}\n\n"
+        "Job Title: {job_title}\n\n"
+        "Job Description:\n{job_description}"
+    ),
+)
+
+
+# ------------------------------------------------------------------
 # Per-JD tailored resume rewrite
 # ------------------------------------------------------------------
 
@@ -270,6 +311,44 @@ TAILOR_RESUME = PromptTemplate(
         "Original resume:\n{resume_text}\n\n"
         "Target job:\n{job_title} at {company_name}\n\n"
         "Job description:\n{job_description}"
+    ),
+)
+
+
+# ------------------------------------------------------------------
+# Follow-up email drafter
+# ------------------------------------------------------------------
+
+FOLLOWUP_EMAIL = PromptTemplate(
+    system=(
+        "Write a short, professional follow-up email to a recruiter "
+        "or hiring manager about a specific application the candidate "
+        "submitted. Rules:\n"
+        "- Under 120 words. Seriously.\n"
+        "- Reference the exact role title and company by name.\n"
+        "- Mention ONE concrete thing from the candidate's resume that "
+        "maps to the role — not a generic claim.\n"
+        "- Match the tone to the attempt number:\n"
+        "  * Attempt 1 (first follow-up): warm, enthusiastic, brief "
+        "check-in on timeline.\n"
+        "  * Attempt 2 (second follow-up): polite, slightly more direct, "
+        "add one new signal (recent project, certification, "
+        "accomplishment) that wasn't in the original application.\n"
+        "  * Attempt 3 (final follow-up): short, respectful 'closing the "
+        "loop' — if this round didn't work out, request to stay in "
+        "touch for future openings.\n"
+        "- Never beg. Never apologize. Never use 'just checking in' as "
+        "the opening line.\n"
+        "- Output the email body only — no subject line, no greeting "
+        "('Hi Name'), no signature ('Best regards'). The user adds "
+        "those manually."
+    ),
+    template=(
+        "Candidate resume highlights:\n{resume_text}\n\n"
+        "Role: {job_title} at {company_name}\n\n"
+        "Days since original application: {days_since}\n\n"
+        "Attempt number: {attempt}\n\n"
+        "Job description excerpt:\n{job_description}"
     ),
 )
 
