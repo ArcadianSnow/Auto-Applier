@@ -9,26 +9,38 @@ from auto_applier.gui.styles import (
 )
 
 # Platform metadata: (key, display_name, description)
+# Order matters — we show the most reliable-to-automate sites first
+# and push LinkedIn to the bottom because its anti-bot defenses are
+# the most aggressive of the four.
 PLATFORMS = [
     (
-        "linkedin",
-        "LinkedIn",
-        "The largest professional network. Best for white-collar and tech roles.",
-    ),
-    (
         "indeed",
-        "Indeed",
-        "High-volume job board with listings across all industries and levels.",
+        "Indeed  (recommended for your first run)",
+        "High-volume job board covering every industry and level. "
+        "The friendliest to automation, so start here while you're "
+        "still learning the tool.",
     ),
     (
         "dice",
         "Dice",
-        "Specialized in technology and engineering positions.",
+        "Specialized in technology and engineering roles. Also "
+        "automation-friendly.",
     ),
     (
         "ziprecruiter",
         "ZipRecruiter",
-        "AI-powered matching with a broad range of employers.",
+        "AI-powered matching, broad employer range. Moderate "
+        "anti-bot — works well once you've confirmed the basics.",
+    ),
+    (
+        "linkedin",
+        "LinkedIn  (advanced — expect challenges)",
+        "Largest professional network, but by far the hardest site "
+        "to automate. LinkedIn actively challenges anything that "
+        "looks unusual — fresh browser profile, brand-new account, "
+        "too-fast navigation. If you want to try LinkedIn, make "
+        "sure the account is verified and has been used manually "
+        "from this browser at least once.",
     ),
 ]
 

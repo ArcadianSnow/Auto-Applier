@@ -218,11 +218,34 @@ class LinkedInPlatform(JobPlatform):
     async def search_jobs(self, keyword: str, location: str) -> list[Job]:
         """Search LinkedIn Jobs with Easy Apply filter enabled.
 
+        Anti-detection strategy:
+        1. Warm up by landing on the feed and doing human-like scrolling
+           before hitting the jobs search URL. A cold navigation directly
+           to /jobs/search from a fresh tab is one of LinkedIn's biggest
+           automation signals.
+        2. Use longer inter-page delays than the other platforms.
+        3. Organic noise (scroll, hover, mouse wander) between pages.
+
         Paginates through up to MAX_SEARCH_PAGES pages and parses
         job cards from the results.
         """
         page = await self.get_page()
         await self.check_and_abort_on_captcha(page)
+
+        # Warm-up: visit the feed first and scroll a bit so the
+        # session looks like a logged-in user browsing normally
+        # before they decide to check job postings.
+        try:
+            if "/feed" not in page.url.lower():
+                logger.info("LinkedIn: warm-up via feed before jobs search")
+                await page.goto(
+                    "https://www.linkedin.com/feed/",
+                    wait_until="domcontentloaded",
+                )
+                await reading_pause(page)
+                await simulate_organic_behavior(page)
+        except Exception as exc:
+            logger.debug("LinkedIn warm-up skipped: %s", exc)
 
         jobs: list[Job] = []
         encoded_kw = quote_plus(keyword)
@@ -247,6 +270,7 @@ class LinkedInPlatform(JobPlatform):
             )
             await page.goto(search_url, wait_until="domcontentloaded")
             await reading_pause(page)
+            await simulate_organic_behavior(page)
             await self.check_and_abort_on_captcha(page)
 
             # Parse job cards from this page

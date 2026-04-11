@@ -100,9 +100,18 @@ class WizardApp(tk.Tk):
 
     def _init_variables(self) -> None:
         """Create all shared tk.Variable instances."""
-        # Platform toggles
-        for key in ("linkedin", "indeed", "dice", "ziprecruiter"):
-            self.data[f"{key}_enabled"] = tk.BooleanVar(value=True)
+        # Platform toggles. LinkedIn is opt-in by default because its
+        # automation defenses are aggressive enough that starting with
+        # it tends to block new users before they get a single real
+        # application through. The other three work out of the box.
+        platform_defaults = {
+            "linkedin": False,
+            "indeed": True,
+            "dice": True,
+            "ziprecruiter": True,
+        }
+        for key, default in platform_defaults.items():
+            self.data[f"{key}_enabled"] = tk.BooleanVar(value=default)
 
         # Personal info
         for key in ("first_name", "last_name", "email", "phone", "city",
