@@ -1,25 +1,27 @@
-"""Step 8: Summary and launch."""
+"""Step 8: Summary + inline preflight + launch."""
 import asyncio
-import json
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from auto_applier.config import DATA_DIR
 from auto_applier.gui.styles import (
-    BG, BG_CARD, PRIMARY, ACCENT, DANGER, TEXT, TEXT_LIGHT, TEXT_MUTED,
+    BG, BG_CARD, PRIMARY, DANGER, TEXT, TEXT_LIGHT, TEXT_MUTED,
     BORDER, STATUS_SUCCESS, STATUS_ERROR,
-    FONT_HEADING, FONT_SUBHEADING, FONT_BODY, FONT_SMALL, FONT_MONO,
+    FONT_SUBHEADING, FONT_BODY, FONT_SMALL,
     PAD_X, PAD_Y, make_scrollable,
 )
 
 
 class ReadyStep(ttk.Frame):
-    """Final step: configuration summary and launch buttons."""
+    """Final step: configuration summary, inline doctor check, and launch buttons."""
 
     def __init__(self, parent: tk.Widget, wizard) -> None:
         super().__init__(parent, style="TFrame")
         self.wizard = wizard
+        self._preflight_card: tk.Widget | None = None
+        self._preflight_rows: list[tk.Widget] = []
+        self._run_button: ttk.Button | None = None
+        self._has_fails = False
         self._build()
 
     def _build(self) -> None:
@@ -43,10 +45,11 @@ class ReadyStep(ttk.Frame):
         btn_frame = tk.Frame(self, bg=BG)
         btn_frame.pack(fill="x", padx=PAD_X, pady=(0, PAD_Y))
 
-        ttk.Button(
+        self._run_button = ttk.Button(
             btn_frame, text="Run", style="Primary.TButton",
             command=lambda: self._launch(dry_run=False),
-        ).pack(side="left", padx=(0, 8))
+        )
+        self._run_button.pack(side="left", padx=(0, 8))
 
         ttk.Button(
             btn_frame, text="Dry Run", style="Accent.TButton",
@@ -54,9 +57,24 @@ class ReadyStep(ttk.Frame):
         ).pack(side="left", padx=(0, 8))
 
         ttk.Button(
+            btn_frame, text="Recheck",
+            command=self._recheck,
+        ).pack(side="left", padx=(0, 8))
+
+        ttk.Button(
             btn_frame, text="Exit",
             command=self.wizard.destroy,
         ).pack(side="right")
+
+    def _recheck(self) -> None:
+        """Re-run the preflight checks without rebuilding the summary."""
+        for w in self._preflight_rows:
+            w.destroy()
+        self._preflight_rows.clear()
+        self._preflight_status_label.configure(
+            text="Running preflight checks...", fg=TEXT_LIGHT,
+        )
+        self._start_preflight()
 
     def on_show(self) -> None:
         """Rebuild the summary when this step is shown."""
@@ -64,9 +82,13 @@ class ReadyStep(ttk.Frame):
         for w in self._inner.winfo_children():
             w.destroy()
         self._render_summary()
+        self._start_preflight()
 
     def _render_summary(self) -> None:
         """Build the configuration summary cards."""
+        # Preflight card goes first so users see it before scrolling.
+        self._build_preflight_card()
+
         config = self.wizard.get_config()
 
         # --- Platforms ---
@@ -152,6 +174,128 @@ class ReadyStep(ttk.Frame):
                 row, text=value, font=FONT_BODY,
                 fg=TEXT, bg=BG_CARD, anchor="w",
             ).pack(side="left", fill="x")
+
+    # ------------------------------------------------------------------
+    # Preflight (inline doctor)
+    # ------------------------------------------------------------------
+
+    def _build_preflight_card(self) -> None:
+        """Render the System Check card with a 'Running...' placeholder."""
+        self._preflight_card = tk.Frame(
+            self._inner, bg=BG_CARD, highlightbackground=BORDER,
+            highlightthickness=1, padx=16, pady=12,
+        )
+        self._preflight_card.pack(fill="x", padx=4, pady=4)
+
+        tk.Label(
+            self._preflight_card, text="System Check", font=FONT_SUBHEADING,
+            fg=PRIMARY, bg=BG_CARD,
+        ).pack(anchor="w", pady=(0, 6))
+
+        self._preflight_status_label = tk.Label(
+            self._preflight_card,
+            text="Running preflight checks...",
+            font=FONT_BODY, fg=TEXT_LIGHT, bg=BG_CARD,
+            anchor="w", justify="left",
+        )
+        self._preflight_status_label.pack(anchor="w", pady=(0, 4))
+
+        self._preflight_results_frame = tk.Frame(self._preflight_card, bg=BG_CARD)
+        self._preflight_results_frame.pack(fill="x")
+
+        self._preflight_rows = []
+
+    def _start_preflight(self) -> None:
+        """Kick off a doctor run in a background thread."""
+        def worker():
+            try:
+                from auto_applier import doctor as doctor_module
+                results = asyncio.run(doctor_module._run_all())
+            except Exception as e:
+                self.after(0, lambda err=e: self._on_preflight_error(err))
+                return
+            self.after(0, lambda r=results: self._on_preflight_done(r))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_preflight_error(self, err: Exception) -> None:
+        self._preflight_status_label.configure(
+            text=f"Preflight crashed: {err}", fg=DANGER,
+        )
+
+    def _on_preflight_done(self, results: list) -> None:
+        """Render the doctor results as a compact list."""
+        from auto_applier import doctor as doctor_module
+
+        # Clear any stale rows
+        for w in self._preflight_rows:
+            w.destroy()
+        self._preflight_rows.clear()
+
+        passes = sum(1 for r in results if r.status == doctor_module.PASS)
+        warns = sum(1 for r in results if r.status == doctor_module.WARN)
+        fails = sum(1 for r in results if r.status == doctor_module.FAIL)
+        self._has_fails = fails > 0
+
+        if fails:
+            summary = f"{passes} pass · {warns} warn · {fails} FAIL"
+            summary_color = DANGER
+        elif warns:
+            summary = f"{passes} pass · {warns} warn · ready (warnings are optional)"
+            summary_color = TEXT_LIGHT
+        else:
+            summary = f"{passes} pass · everything ready"
+            summary_color = STATUS_SUCCESS
+        self._preflight_status_label.configure(text=summary, fg=summary_color)
+
+        # Render one row per check
+        for r in results:
+            row = tk.Frame(self._preflight_results_frame, bg=BG_CARD)
+            row.pack(fill="x", pady=1)
+            self._preflight_rows.append(row)
+
+            color_map = {
+                doctor_module.PASS: STATUS_SUCCESS,
+                doctor_module.WARN: TEXT_LIGHT,
+                doctor_module.FAIL: STATUS_ERROR,
+            }
+            icon_map = {
+                doctor_module.PASS: "OK",
+                doctor_module.WARN: "!",
+                doctor_module.FAIL: "X",
+            }
+            color = color_map[r.status]
+            icon = icon_map[r.status]
+
+            tk.Label(
+                row, text=f"  {icon:>3s}  ", font=FONT_BODY,
+                fg=color, bg=BG_CARD, width=6, anchor="w",
+            ).pack(side="left")
+
+            tk.Label(
+                row, text=f"{r.name}", font=FONT_BODY,
+                fg=TEXT, bg=BG_CARD, width=22, anchor="w",
+            ).pack(side="left")
+
+            tk.Label(
+                row, text=r.message, font=FONT_SMALL,
+                fg=TEXT_LIGHT, bg=BG_CARD, anchor="w",
+            ).pack(side="left")
+
+            if r.fix and r.status != doctor_module.PASS:
+                fix_row = tk.Frame(self._preflight_results_frame, bg=BG_CARD)
+                fix_row.pack(fill="x", pady=(0, 2))
+                self._preflight_rows.append(fix_row)
+                tk.Label(
+                    fix_row, text=f"            fix: {r.fix}",
+                    font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD,
+                    anchor="w", wraplength=540, justify="left",
+                ).pack(anchor="w")
+
+        # Update Run button state based on FAIL count
+        if self._run_button is not None:
+            state = "disabled" if self._has_fails else "normal"
+            self._run_button.configure(state=state)
 
     # ------------------------------------------------------------------
     # Launch

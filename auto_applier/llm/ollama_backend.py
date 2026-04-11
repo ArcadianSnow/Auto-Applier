@@ -92,6 +92,109 @@ class OllamaBackend(LLMBackend):
         except (httpx.ConnectError, httpx.TimeoutException, Exception):
             return []
 
+    async def pull_model(self, on_progress=None) -> bool:
+        """Pull ``self.model`` from the Ollama registry with streaming progress.
+
+        ``on_progress`` is an optional callback ``fn(status, pct)`` where
+        ``status`` is a human-readable string like "pulling manifest" or
+        "downloading 2.3 GB / 9.6 GB" and ``pct`` is a float 0-100 (or
+        None if indeterminate). Called repeatedly from the download loop.
+
+        Returns True on success, False on any failure. The Ollama server
+        must be running — callers should ``start_ollama_server`` first.
+        """
+        import json as _json
+
+        payload = {"name": self.model, "stream": True}
+        try:
+            # Use a fresh long-lived client — pulls can take minutes.
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(
+                    "POST", f"{self.base_url}/api/pull", json=payload,
+                ) as resp:
+                    if resp.status_code != 200:
+                        if on_progress:
+                            on_progress(f"pull failed: HTTP {resp.status_code}", None)
+                        return False
+                    async for line in resp.aiter_lines():
+                        if not line.strip():
+                            continue
+                        try:
+                            event = _json.loads(line)
+                        except _json.JSONDecodeError:
+                            continue
+                        if "error" in event:
+                            if on_progress:
+                                on_progress(f"pull failed: {event['error']}", None)
+                            return False
+                        status = event.get("status", "")
+                        total = event.get("total")
+                        completed = event.get("completed")
+                        pct = None
+                        if total and completed is not None:
+                            try:
+                                pct = 100.0 * float(completed) / float(total)
+                            except (TypeError, ValueError, ZeroDivisionError):
+                                pct = None
+                            # Human-readable byte counts
+                            gb = 1024 ** 3
+                            status = (
+                                f"{status}: {completed / gb:.2f} GB / "
+                                f"{total / gb:.2f} GB"
+                            )
+                        if on_progress:
+                            on_progress(status, pct)
+                        if status.startswith("success"):
+                            return True
+            return True
+        except Exception as e:
+            if on_progress:
+                on_progress(f"pull error: {e}", None)
+            return False
+
+
+def start_ollama_server() -> bool:
+    """Start ``ollama serve`` as a detached background process.
+
+    Cross-platform: looks for the ``ollama`` binary on PATH and
+    launches it without waiting. On Windows this spawns a hidden
+    console window; on macOS/Linux the process is daemonized via
+    the standard subprocess.Popen mechanics.
+
+    Returns True if the binary was found and launched, False if
+    Ollama isn't installed. Does NOT verify that the server actually
+    came up — callers should poll ``get_version()`` after a short
+    delay.
+    """
+    import shutil
+    import subprocess
+    import sys
+
+    binary = shutil.which("ollama")
+    if not binary:
+        return False
+
+    try:
+        kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        if sys.platform == "win32":
+            # CREATE_NO_WINDOW + DETACHED_PROCESS so we don't spawn a
+            # visible console and the server survives the wizard exit.
+            CREATE_NO_WINDOW = 0x08000000
+            DETACHED_PROCESS = 0x00000008
+            kwargs["creationflags"] = CREATE_NO_WINDOW | DETACHED_PROCESS
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen([binary, "serve"], **kwargs)
+        return True
+    except Exception:
+        return False
+
+
+def ollama_binary_installed() -> bool:
+    """Return True if the ``ollama`` CLI is on PATH."""
+    import shutil
+    return shutil.which("ollama") is not None
+
     # ------------------------------------------------------------------
     # Text completion
     # ------------------------------------------------------------------
