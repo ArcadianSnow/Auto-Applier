@@ -50,8 +50,15 @@ LOGGED_IN_SELECTORS = [
     "[aria-label='Account menu']",
 ]
 
-# Job card selectors on the search results page
+# Job card selectors on the search results page. Newest ZR layouts
+# at the top, historical ones kept as fallbacks.
 JOB_CARD_SELECTORS = [
+    # 2024+ layouts
+    "article[data-testid='job-card']",
+    "div[data-testid='job-card']",
+    "article.jobList-item",
+    "li[class*='JobList'] article",
+    # Historical
     ".job_content",
     ".job-listing",
     "article[data-job-id]",
@@ -64,6 +71,11 @@ JOB_CARD_SELECTORS = [
 
 # Job title within a card
 JOB_TITLE_SELECTORS = [
+    # 2024+
+    "h2[data-testid='job-title'] a",
+    "a[data-testid='job-title']",
+    "h2 a[class*='job_title']",
+    # Historical
     ".job_title a",
     "h2.job_title a",
     "[data-testid='job-title'] a",
@@ -75,8 +87,10 @@ JOB_TITLE_SELECTORS = [
 
 # Company name within a card
 JOB_COMPANY_SELECTORS = [
-    ".job_company",
+    "a[data-testid='job-card-company']",
+    "[data-testid='job-card-company']",
     "[data-testid='company-name']",
+    ".job_company",
     "a.company-name",
     ".jobList-company",
     ".job-company-name",
@@ -257,14 +271,28 @@ class ZipRecruiterPlatform(JobPlatform):
     # ------------------------------------------------------------------
 
     async def search_jobs(self, keyword: str, location: str) -> list[Job]:
-        """Search ZipRecruiter Jobs with Quick Apply filter enabled.
+        """Search ZipRecruiter Jobs and return job cards from results.
 
-        Uses ``days=14`` for last 14 days and
-        ``refine_by_quick_apply=true`` for Quick Apply filter.
-        Paginates through up to MAX_SEARCH_PAGES pages.
+        Uses a minimal search URL — the older days=14 + Quick Apply
+        filter combo was over-narrow and produced zero cards on most
+        real queries. Scoring and _is_external_apply downstream still
+        filter non-applicable jobs at apply time.
         """
         page = await self.get_page()
         await self.check_and_abort_on_captcha(page)
+
+        # Warm-up via homepage before hitting the search URL.
+        try:
+            if "ziprecruiter.com" not in page.url.lower():
+                logger.info("ZipRecruiter: warm-up via homepage before search")
+                await page.goto(
+                    "https://www.ziprecruiter.com/",
+                    wait_until="domcontentloaded",
+                )
+                await reading_pause(page)
+                await simulate_organic_behavior(page)
+        except Exception as exc:
+            logger.debug("ZipRecruiter warm-up skipped: %s", exc)
 
         jobs: list[Job] = []
         encoded_kw = quote_plus(keyword)
@@ -276,8 +304,6 @@ class ZipRecruiterPlatform(JobPlatform):
                 f"https://www.ziprecruiter.com/jobs-search"
                 f"?search={encoded_kw}"
                 f"&location={encoded_loc}"
-                f"&days=14"
-                f"&refine_by_quick_apply=true"
                 f"&page={page_num + 1}"
             )
 
@@ -338,7 +364,33 @@ class ZipRecruiterPlatform(JobPlatform):
                 continue
 
         if not cards:
-            logger.warning("ZipRecruiter: No job cards found on page")
+            try:
+                current_url = page.url
+                title = await page.title()
+                body = await page.inner_text("body")
+            except Exception:
+                current_url = "?"
+                title = "?"
+                body = ""
+            snippet = body.strip()[:400].replace("\n", " | ")
+            logger.warning(
+                "ZipRecruiter: 0 job cards found.\n"
+                "  url=%s\n"
+                "  title=%s\n"
+                "  page snippet: %s",
+                current_url, title, snippet,
+            )
+            body_lower = body.lower()
+            if "no results" in body_lower or "no jobs" in body_lower:
+                logger.warning(
+                    "ZipRecruiter shows zero results for this search — "
+                    "try broader keywords or location."
+                )
+            elif "verify" in body_lower or "unusual" in body_lower:
+                logger.warning(
+                    "ZipRecruiter page contains 'verify' / 'unusual' text "
+                    "— may need manual captcha solve in the browser window."
+                )
             return jobs
 
         for card in cards:

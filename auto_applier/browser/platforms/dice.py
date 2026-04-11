@@ -50,11 +50,18 @@ LOGGED_IN_SELECTORS = [
     ".avatar-img",
 ]
 
-# Job card selectors on the search results page
+# Job card selectors on the search results page. Newest Dice layout
+# selectors at the top, historical ones kept as fallbacks so old
+# profiles keep working.
 JOB_CARD_SELECTORS = [
+    # 2024+ layouts
+    "div[data-testid='job-search-serp-card']",
+    "div[data-cy='card']",
+    "[data-testid='job-search-job-detail-link']",
+    "dhi-search-card",
+    # Historical
     "[data-cy='search-card']",
     ".search-card",
-    "dhi-search-card",
     ".card.search-card",
     "[data-testid='search-card']",
     "div.search-result-card",
@@ -63,6 +70,11 @@ JOB_CARD_SELECTORS = [
 
 # Job title within a card
 JOB_TITLE_SELECTORS = [
+    # 2024+
+    "a[data-testid='job-search-job-detail-link']",
+    "a[data-cy='card-title-link']",
+    "h5 a[data-cy='card-title-link']",
+    # Historical
     "a.card-title-link",
     "[data-cy='card-title-link']",
     "h5 a.card-title-link",
@@ -74,6 +86,7 @@ JOB_TITLE_SELECTORS = [
 
 # Company name within a card
 JOB_COMPANY_SELECTORS = [
+    "a[data-cy='search-result-company-name']",
     "[data-cy='search-result-company-name']",
     ".card-company a",
     ".card-company",
@@ -241,14 +254,30 @@ class DicePlatform(JobPlatform):
     # ------------------------------------------------------------------
 
     async def search_jobs(self, keyword: str, location: str) -> list[Job]:
-        """Search Dice Jobs with Easy Apply filter enabled.
+        """Search Dice Jobs and return job cards from the results.
 
-        Uses ``filters.postedDate=SEVEN`` for last 7 days and
-        ``filters.easyApply=true`` for Easy Apply filter.
-        Paginates through up to MAX_SEARCH_PAGES pages.
+        Uses a minimal search URL — the older filters.postedDate=SEVEN
+        and filters.easyApply=true combo filtered out real matches
+        aggressively, and Dice's current site renders zero results
+        with them active on most queries. Scoring + _is_external_apply
+        downstream still filter non-applicable jobs at click time.
         """
         page = await self.get_page()
         await self.check_and_abort_on_captcha(page)
+
+        # Warm-up via homepage before the search URL, same pattern
+        # as the other platforms.
+        try:
+            if "dice.com" not in page.url.lower():
+                logger.info("Dice: warm-up via homepage before search")
+                await page.goto(
+                    "https://www.dice.com/",
+                    wait_until="domcontentloaded",
+                )
+                await reading_pause(page)
+                await simulate_organic_behavior(page)
+        except Exception as exc:
+            logger.debug("Dice warm-up skipped: %s", exc)
 
         jobs: list[Job] = []
         encoded_kw = quote_plus(keyword)
@@ -260,8 +289,6 @@ class DicePlatform(JobPlatform):
                 f"https://www.dice.com/jobs"
                 f"?q={encoded_kw}"
                 f"&location={encoded_loc}"
-                f"&filters.postedDate=SEVEN"
-                f"&filters.easyApply=true"
                 f"&page={page_num + 1}"
             )
 
@@ -317,7 +344,36 @@ class DicePlatform(JobPlatform):
                 continue
 
         if not cards:
-            logger.warning("Dice: No job cards found on page")
+            # Dump diagnostic info so we can see WHY zero cards were
+            # found — is it a captcha, a zero-results banner, or a
+            # DOM change that broke our selectors?
+            try:
+                current_url = page.url
+                title = await page.title()
+                body = await page.inner_text("body")
+            except Exception:
+                current_url = "?"
+                title = "?"
+                body = ""
+            snippet = body.strip()[:400].replace("\n", " | ")
+            logger.warning(
+                "Dice: 0 job cards found.\n"
+                "  url=%s\n"
+                "  title=%s\n"
+                "  page snippet: %s",
+                current_url, title, snippet,
+            )
+            body_lower = body.lower()
+            if "no results" in body_lower or "no jobs found" in body_lower:
+                logger.warning(
+                    "Dice is telling us zero jobs match the search — "
+                    "try broader keywords or location."
+                )
+            elif "verify" in body_lower or "unusual" in body_lower:
+                logger.warning(
+                    "Dice page contains 'verify' / 'unusual' text — may "
+                    "need a manual captcha solve in the browser window."
+                )
             return jobs
 
         for card in cards:

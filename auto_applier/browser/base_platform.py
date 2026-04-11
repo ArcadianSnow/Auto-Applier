@@ -269,16 +269,51 @@ class JobPlatform(ABC):
 
         return False
 
-    async def check_and_abort_on_captcha(self, page: Page) -> None:
+    async def check_and_abort_on_captcha(
+        self, page: Page, retry_seconds: float = 12.0,
+    ) -> None:
         """Raise CaptchaDetectedError if a CAPTCHA is present.
 
-        Call this between major actions to implement the hard-stop rule.
+        Transient Cloudflare JS challenges briefly embed an hcaptcha
+        iframe before auto-resolving (3-8 seconds typically). Hard-
+        stopping the first time we see one means we fail on every
+        Cloudflare-protected site during the first navigation. The
+        retry loop waits up to ``retry_seconds`` for the challenge
+        to clear on its own, re-probing every 2 seconds. If the
+        challenge is still there at the end of the window, it's a
+        real CAPTCHA and we stop.
+
+        Pass ``retry_seconds=0`` to preserve the old instant-abort
+        behavior (useful for callers that already know they're not
+        mid-navigation).
         """
-        if await self.detect_captcha(page):
+        if not await self.detect_captcha(page):
+            return
+
+        if retry_seconds <= 0:
             raise CaptchaDetectedError(
                 f"CAPTCHA detected on {self.display_name}. "
                 "Stopping immediately to protect the account."
             )
+
+        logger.info(
+            "%s: Challenge detected, waiting up to %.0fs in case it's "
+            "a transient Cloudflare JS challenge...",
+            self.display_name, retry_seconds,
+        )
+        deadline = asyncio.get_event_loop().time() + retry_seconds
+        while asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(2.0)
+            if not await self.detect_captcha(page):
+                logger.info(
+                    "%s: Challenge cleared, proceeding.", self.display_name,
+                )
+                return
+
+        raise CaptchaDetectedError(
+            f"CAPTCHA detected on {self.display_name} and didn't clear "
+            f"after {retry_seconds:.0f}s. Stopping to protect the account."
+        )
 
     # ------------------------------------------------------------------
     # Shared Helpers -- Manual Login
