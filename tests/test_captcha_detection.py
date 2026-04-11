@@ -101,34 +101,32 @@ class TestStrongUrlSignal:
         assert _detect(p, page) is False
 
 
-class TestWeakPhraseRequiresContainer:
+class TestStrongOnlyNoFalsePositives:
+    """Regression tests: the detector must be strong-signal-only now."""
+
     def test_phrase_alone_does_not_trigger(self):
-        """The old detector would flag this. The new one must not."""
         p = _FakePlatform(context=None, config={})
-        # A normal LinkedIn footer-ish page mentioning 'security check'
         page = _fake_page(
             body_text=(
                 "Welcome to LinkedIn. We run an ongoing security check "
-                "on all accounts to keep your data safe. By clicking "
-                "continue you agree to our privacy policy."
+                "on all accounts. Please verify you are a human — no "
+                "unusual activity from your account has been detected."
             ),
         )
+        # Even with THREE strong phrases in the body text, no
+        # vendor iframe and no challenge URL means no stop.
         assert _detect(p, page) is False
 
-    def test_phrase_plus_challenge_container_triggers(self):
-        p = _FakePlatform(context=None, config={})
-        page = _fake_page(
-            body_text="Please verify you are a human to continue",
-            selector_hits={
-                "[class*='challenge']": MagicMock(),
-            },
-        )
-        assert _detect(p, page) is True
+    def test_challenge_class_on_random_element_does_not_trigger(self):
+        """The old weak-container path matched React components.
 
-    def test_challenge_container_without_phrase_does_not_trigger(self):
+        LinkedIn has plenty of normal DOM nodes with 'challenge' in
+        their class name ('daily-challenge-widget', etc.) — those
+        must not fire the detector.
+        """
         p = _FakePlatform(context=None, config={})
         page = _fake_page(
-            body_text="Normal page content with nothing unusual",
+            body_text="verify you are a human",
             selector_hits={"[class*='challenge']": MagicMock()},
         )
         assert _detect(p, page) is False
@@ -147,8 +145,6 @@ class TestLinkedInFalsePositives:
                 "account will be flagged. Are you a robot? No thank you."
             ),
         )
-        # None of those phrases appear as strong phrases AND there's
-        # no challenge container — must not trigger.
         assert _detect(p, page) is False
 
     def test_feed_page_clean(self):
@@ -158,6 +154,57 @@ class TestLinkedInFalsePositives:
             body_text="Your feed is empty. Connect with more people.",
         )
         assert _detect(p, page) is False
+
+
+class TestLinkedInRealLoginFlow:
+    """Guard against re-adding URL patterns that match normal login endpoints."""
+
+    def _linkedin_platform(self):
+        """Build a real LinkedIn platform instance for its actual URL list."""
+        from auto_applier.browser.platforms.linkedin import LinkedInPlatform
+        p = LinkedInPlatform.__new__(LinkedInPlatform)
+        # Skip __init__ to avoid needing a context — we only touch
+        # the class attribute captcha_url_patterns.
+        return p
+
+    def test_authwall_is_not_a_challenge(self):
+        """
+        LinkedIn redirects logged-out users to /authwall when they
+        click a job/profile link. It's where users go to log in
+        MANUALLY — not a challenge.
+        """
+        p = self._linkedin_platform()
+        page = _fake_page(
+            url="https://www.linkedin.com/authwall?session_redirect=...",
+        )
+        assert _detect(p, page) is False
+
+    def test_login_submit_is_not_a_challenge(self):
+        """
+        /checkpoint/lg/login-submit is the POST target for LinkedIn's
+        login form. The browser briefly navigates through it during
+        a normal manual login — must not fire the detector.
+        """
+        p = self._linkedin_platform()
+        page = _fake_page(
+            url="https://www.linkedin.com/checkpoint/lg/login-submit",
+        )
+        assert _detect(p, page) is False
+
+    def test_uas_login_submit_is_not_a_challenge(self):
+        p = self._linkedin_platform()
+        page = _fake_page(
+            url="https://www.linkedin.com/uas/login-submit",
+        )
+        assert _detect(p, page) is False
+
+    def test_real_checkpoint_challenge_still_fires(self):
+        """The genuine challenge path must still trigger."""
+        p = self._linkedin_platform()
+        page = _fake_page(
+            url="https://www.linkedin.com/checkpoint/challenge/verify",
+        )
+        assert _detect(p, page) is True
 
 
 class TestErrorHandling:

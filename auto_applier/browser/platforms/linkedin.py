@@ -158,16 +158,23 @@ class LinkedInPlatform(JobPlatform):
         "the job you were looking for has been closed",
     ]
 
-    # LinkedIn's account-verification and challenge paths. Hitting any
-    # of these means LinkedIn is about to ask for 2FA, a phone number,
-    # or a CAPTCHA — we should stop before the pipeline makes it worse.
+    # LinkedIn challenge paths. Be careful here — several URLs that
+    # look like challenges are actually normal login-flow endpoints:
+    #
+    #   /checkpoint/lg/login-submit  → POST target for the login form
+    #   /uas/login-submit            → legacy login POST endpoint
+    #   /authwall                    → the page shown to logged-out
+    #                                   users who click a job/profile
+    #                                   link (they'll manually log in
+    #                                   from there — NOT a challenge)
+    #
+    # Only flag URLs that are exclusively used for real challenges.
+    # /checkpoint/challenge is the actual CAPTCHA / 2FA / phone
+    # verification path.
     captcha_url_patterns = [
         "/captcha",
         "/recaptcha",
         "/checkpoint/challenge",
-        "/checkpoint/lg/login-submit",
-        "/uas/login-submit",
-        "/authwall",
     ]
 
     # ------------------------------------------------------------------

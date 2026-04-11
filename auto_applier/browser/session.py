@@ -65,13 +65,22 @@ class BrowserSession:
                 "--enable-automation",
                 "--no-sandbox",
             ],
+            # Keep this list SMALL. Every extra flag is either a
+            # Chrome warning trigger, a fingerprint signal, or both:
+            #
+            # - --disable-blink-features=AutomationControlled was the
+            #   classic 'hide webdriver' trick, but recent Chrome
+            #   versions reject the flag (showing a warning infobar)
+            #   AND treat its presence as a detection signal itself.
+            #   Dropped.
+            # - --disable-infobars is a legacy flag that does nothing
+            #   in current Chrome. Dropped.
+            #
+            # What's left: only the two flags needed to suppress the
+            # first-run dialogs that would otherwise trap the user.
             "args": [
-                "--disable-blink-features=AutomationControlled",
                 "--no-first-run",
                 "--no-default-browser-check",
-                # Belt and braces — also drop the infobar that advertises
-                # 'Chrome is being controlled by automated test software'.
-                "--disable-infobars",
             ],
         }
 
