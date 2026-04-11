@@ -158,6 +158,18 @@ class LinkedInPlatform(JobPlatform):
         "the job you were looking for has been closed",
     ]
 
+    # LinkedIn's account-verification and challenge paths. Hitting any
+    # of these means LinkedIn is about to ask for 2FA, a phone number,
+    # or a CAPTCHA — we should stop before the pipeline makes it worse.
+    captcha_url_patterns = [
+        "/captcha",
+        "/recaptcha",
+        "/checkpoint/challenge",
+        "/checkpoint/lg/login-submit",
+        "/uas/login-submit",
+        "/authwall",
+    ]
+
     # ------------------------------------------------------------------
     # Login
     # ------------------------------------------------------------------

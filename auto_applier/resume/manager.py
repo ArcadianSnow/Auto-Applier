@@ -110,14 +110,45 @@ class ResumeManager:
         Raises:
             FileNotFoundError: If *source_path* does not exist.
         """
-        source = Path(source_path)
+        source = Path(source_path).resolve()
         if not source.exists():
             raise FileNotFoundError(f"Resume not found: {source}")
 
-        # Copy to resumes directory with label-based name
-        dest = RESUMES_DIR / f"{label}{source.suffix}"
-        shutil.copy2(source, dest)
-        logger.info("Copied resume to %s", dest)
+        # Resolve both paths so 'already in data/resumes/' is detected
+        # reliably on Windows' case-insensitive filesystem.
+        dest = (RESUMES_DIR / f"{label}{source.suffix}").resolve()
+
+        if source == dest:
+            # User picked a file that's already sitting in data/resumes/
+            # under the same label — nothing to copy, just re-parse.
+            logger.info("Resume already in place at %s, skipping copy", dest)
+        else:
+            # If the destination exists from a previous add, it may
+            # still have a stale file handle open from a prior parse.
+            # Try to remove it first so shutil.copy2 doesn't hit a
+            # WinError 32 sharing violation. If the unlink fails
+            # (genuinely locked), let the copy error surface.
+            if dest.exists():
+                try:
+                    dest.unlink()
+                except OSError as exc:
+                    logger.warning(
+                        "Could not remove existing %s before copy: %s",
+                        dest, exc,
+                    )
+            try:
+                shutil.copy2(source, dest)
+            except (OSError, shutil.SameFileError) as exc:
+                # SameFileError can still fire even after the resolve()
+                # check above when junctions or symlinks are involved.
+                if isinstance(exc, shutil.SameFileError):
+                    logger.info(
+                        "Source and destination are the same file, "
+                        "skipping copy: %s", source,
+                    )
+                else:
+                    raise
+            logger.info("Copied resume to %s", dest)
 
         # Parse text
         raw_text = extract_text(dest)

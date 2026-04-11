@@ -37,8 +37,16 @@ def _extract_from_pdf(path: Path) -> str:
 
 
 def _extract_from_docx(path: Path) -> str:
-    """Extract text from a DOCX file using python-docx."""
+    """Extract text from a DOCX file using python-docx.
+
+    Opens the file through an explicit ``open()`` context manager
+    instead of letting python-docx hold onto the path, so the OS
+    file handle is released as soon as this function returns.
+    Without this, Windows can hit WinError 32 ('sharing violation')
+    on the next operation that touches the same file.
+    """
     from docx import Document
 
-    doc = Document(str(path))
-    return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    with open(path, "rb") as f:
+        doc = Document(f)
+        return "\n".join(p.text for p in doc.paragraphs if p.text.strip())

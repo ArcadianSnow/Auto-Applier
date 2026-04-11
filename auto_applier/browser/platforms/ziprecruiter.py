@@ -204,6 +204,13 @@ class ZipRecruiterPlatform(JobPlatform):
         "this posting is no longer accepting",
     ]
 
+    captcha_url_patterns = [
+        "/captcha",
+        "/recaptcha",
+        "/challenge",
+        "/verify",
+    ]
+
     # ------------------------------------------------------------------
     # Login
     # ------------------------------------------------------------------

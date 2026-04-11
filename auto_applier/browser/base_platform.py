@@ -48,6 +48,14 @@ class JobPlatform(ABC):
     dead_listing_selectors: list[str] = []
     dead_listing_phrases: list[str] = []
 
+    # URL patterns (substring-matched, case-insensitive) that signal
+    # the user has been redirected to a CAPTCHA or account-verification
+    # flow. Subclasses add platform-specific paths.
+    captcha_url_patterns: list[str] = [
+        "/captcha",
+        "/recaptcha",
+    ]
+
     def __init__(self, context, config: dict, form_filler=None) -> None:
         self.context = context  # Browser context from BrowserSession
         self.config = config  # Platform-specific config dict
@@ -210,18 +218,36 @@ class JobPlatform(ABC):
     async def detect_captcha(self, page: Page) -> bool:
         """Check if a CAPTCHA or bot-detection challenge is present.
 
-        Checks both iframe-based CAPTCHAs and page-text detection phrases.
+        Uses a layered evidence model to avoid false positives on
+        legitimate pages that happen to contain ambiguous phrases
+        ('security check' appears in LinkedIn's cookie banner, etc.):
+
+        1. **Strong signals** (any ONE triggers a stop):
+           - A real CAPTCHA iframe (recaptcha, hcaptcha, arkose, px).
+           - URL matches a known challenge path for the current
+             platform (e.g. LinkedIn's ``/checkpoint/challenge``).
+
+        2. **Weak signals** (text phrases) only trigger a stop when
+           combined with an explicit challenge container element.
+           On their own they're evidence of nothing — those words
+           appear in privacy footers, cookie banners, and login help
+           text all the time.
+
+        Subclasses can extend the URL pattern list via the
+        ``captcha_url_patterns`` class attribute.
         """
-        captcha_selectors = [
-            "iframe[src*='captcha']",
+        # 1a. Strong signal: real CAPTCHA iframes / containers
+        strong_selectors = [
             "iframe[src*='recaptcha']",
             "iframe[src*='hcaptcha']",
-            "#captcha",
-            "[data-testid='captcha']",
-            ".g-recaptcha",
+            "iframe[src*='arkoselabs']",
+            "iframe[src*='funcaptcha']",
+            "#captcha-challenge",
             "#px-captcha",
+            ".g-recaptcha",
+            "[data-testid='captcha-challenge']",
         ]
-        for sel in captcha_selectors:
+        for sel in strong_selectors:
             try:
                 el = await page.query_selector(sel)
                 if el:
@@ -230,25 +256,56 @@ class JobPlatform(ABC):
             except Exception:
                 continue
 
-        # Check page text for common detection phrases
+        # 1b. Strong signal: challenge URL
+        try:
+            url = page.url.lower()
+        except Exception:
+            url = ""
+        for pat in self.captcha_url_patterns:
+            if pat in url:
+                logger.warning("CAPTCHA detected via URL pattern: %s (url=%s)", pat, url)
+                return True
+
+        # 2. Weak signal: phrase in page text PLUS a challenge container
+        # element. Phrases alone are too noisy — they fire on normal
+        # LinkedIn / Indeed pages that talk about security in their
+        # cookie or privacy text.
+        weak_container_selectors = [
+            "[class*='challenge']",
+            "[class*='captcha']",
+            "[id*='challenge']",
+            "[id*='captcha']",
+        ]
+        has_challenge_container = False
+        for sel in weak_container_selectors:
+            try:
+                el = await page.query_selector(sel)
+                if el:
+                    has_challenge_container = True
+                    break
+            except Exception:
+                continue
+        if not has_challenge_container:
+            return False
+
         try:
             body_text = await page.inner_text("body")
-            detection_phrases = [
-                "unusual activity",
-                "suspicious activity",
-                "verify you're human",
-                "security check",
-                "are you a robot",
-                "challenge validation",
-                "bot detection",
-            ]
             body_lower = body_text.lower()
-            for phrase in detection_phrases:
-                if phrase in body_lower:
-                    logger.warning("Detection phrase found: '%s'", phrase)
-                    return True
         except Exception:
-            pass
+            return False
+        strong_phrases = [
+            "verify you are a human",
+            "verify you're a human",
+            "prove you are not a robot",
+            "complete the security check",
+            "unusual activity from your",
+        ]
+        for phrase in strong_phrases:
+            if phrase in body_lower:
+                logger.warning(
+                    "CAPTCHA detected via phrase+container: '%s'", phrase,
+                )
+                return True
 
         return False
 

@@ -192,6 +192,12 @@ class DicePlatform(JobPlatform):
         "job has been closed",
     ]
 
+    captcha_url_patterns = [
+        "/captcha",
+        "/recaptcha",
+        "/challenge",
+    ]
+
     # ------------------------------------------------------------------
     # Login
     # ------------------------------------------------------------------

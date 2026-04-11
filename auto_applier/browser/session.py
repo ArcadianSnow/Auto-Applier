@@ -52,10 +52,26 @@ class BrowserSession:
             "user_data_dir": str(BROWSER_PROFILE_DIR),
             "headless": False,
             "no_viewport": True,  # Let browser use natural viewport size
+            # Ensure the sandbox is active — without this, Playwright
+            # quietly adds --no-sandbox to Chrome's command line, which
+            # pops the 'unsupported command-line flag' warning bar AND
+            # is a major automation-detection signal on LinkedIn.
+            "chromium_sandbox": True,
+            # Strip the two Playwright defaults that LinkedIn fingerprints
+            # most aggressively: --enable-automation (flips
+            # navigator.webdriver to true) and --no-sandbox. Everything
+            # else Playwright needs still passes through.
+            "ignore_default_args": [
+                "--enable-automation",
+                "--no-sandbox",
+            ],
             "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-first-run",
                 "--no-default-browser-check",
+                # Belt and braces — also drop the infobar that advertises
+                # 'Chrome is being controlled by automated test software'.
+                "--disable-infobars",
             ],
         }
 

@@ -191,6 +191,13 @@ class IndeedPlatform(JobPlatform):
         "job posting has expired",
     ]
 
+    captcha_url_patterns = [
+        "/captcha",
+        "/recaptcha",
+        "/account/login/challenge",
+        "/hcaptcha",
+    ]
+
     # ------------------------------------------------------------------
     # Login
     # ------------------------------------------------------------------
