@@ -193,6 +193,17 @@ class ZipRecruiterPlatform(JobPlatform):
     source_id = "ziprecruiter"
     display_name = "ZipRecruiter"
 
+    dead_listing_selectors = [
+        ".job_unavailable",
+        "[data-testid='job-expired']",
+        ".expired-job-notice",
+    ]
+    dead_listing_phrases = [
+        "this job is no longer available",
+        "this job has been filled",
+        "this posting is no longer accepting",
+    ]
+
     # ------------------------------------------------------------------
     # Login
     # ------------------------------------------------------------------

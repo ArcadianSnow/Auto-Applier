@@ -147,6 +147,17 @@ class LinkedInPlatform(JobPlatform):
     source_id = "linkedin"
     display_name = "LinkedIn"
 
+    dead_listing_selectors = [
+        ".jobs-details-top-card__apply-error",
+        ".jobs-details__no-longer-accepting",
+        "[data-test-modal='job-closed']",
+    ]
+    dead_listing_phrases = [
+        "no longer accepting applications",
+        "this job is no longer",
+        "the job you were looking for has been closed",
+    ]
+
     # ------------------------------------------------------------------
     # Login
     # ------------------------------------------------------------------

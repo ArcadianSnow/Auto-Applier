@@ -31,6 +31,7 @@ class Job:
     search_keyword: str = ""
     source: str = ""  # "linkedin", "indeed", etc.
     canonical_hash: str = ""  # cross-source dedup key (see storage/dedup.py)
+    liveness: str = "unknown"  # "live" | "dead" | "unknown" (see browser/liveness.py)
     found_at: str = field(default_factory=_now_iso)
 
     def __post_init__(self) -> None:

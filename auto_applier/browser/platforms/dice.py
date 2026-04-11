@@ -181,6 +181,17 @@ class DicePlatform(JobPlatform):
     source_id = "dice"
     display_name = "Dice"
 
+    dead_listing_selectors = [
+        "[data-cy='job-closed-notice']",
+        ".job-closed",
+        ".expired-job",
+    ]
+    dead_listing_phrases = [
+        "this job is no longer available",
+        "this position is no longer open",
+        "job has been closed",
+    ]
+
     # ------------------------------------------------------------------
     # Login
     # ------------------------------------------------------------------

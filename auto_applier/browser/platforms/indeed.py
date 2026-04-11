@@ -180,6 +180,17 @@ class IndeedPlatform(JobPlatform):
     source_id = "indeed"
     display_name = "Indeed"
 
+    dead_listing_selectors = [
+        "[data-testid='expiredJobNotice']",
+        ".expired-job-banner",
+        ".jobsearch-JobMetadataFooter-item:has-text('expired')",
+    ]
+    dead_listing_phrases = [
+        "this job has expired",
+        "sorry, this job is no longer available",
+        "job posting has expired",
+    ]
+
     # ------------------------------------------------------------------
     # Login
     # ------------------------------------------------------------------

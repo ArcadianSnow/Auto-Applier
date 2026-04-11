@@ -221,7 +221,7 @@ class ApplicationEngine:
                 if applied_this_platform >= budget:
                     break
 
-                # Fetch description
+                # Fetch description (also checks liveness on the same page)
                 job = await fetch_description(platform, job)
 
                 # Check for CAPTCHA before proceeding
@@ -229,6 +229,21 @@ class ApplicationEngine:
                 if await platform.detect_captcha(page):
                     self.events.emit(CAPTCHA_DETECTED, platform=platform_key)
                     return  # Hard stop
+
+                # Skip dead listings — don't waste LLM calls or apply quota
+                if job.liveness == "dead":
+                    self.skipped_count += 1
+                    save(
+                        Application(
+                            job_id=job.job_id,
+                            status="skipped",
+                            source=platform_key,
+                            resume_used="",
+                            score=0,
+                            failure_reason="dead listing",
+                        )
+                    )
+                    continue
 
                 # Score the job against all resumes
                 job_score = await self.scorer.score(

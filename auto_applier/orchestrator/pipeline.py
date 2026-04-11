@@ -37,9 +37,20 @@ async def discover_jobs(platform, keyword: str, location: str) -> list[Job]:
 
 
 async def fetch_description(platform, job: Job) -> Job:
-    """Fetch the full job description if not already present."""
+    """Fetch the full job description and liveness in one navigation.
+
+    We're already navigating to the job URL to read the description —
+    check liveness from the same loaded page so dead listings can be
+    skipped without a second round-trip.
+    """
     if not job.description:
         job.description = await platform.get_job_description(job)
+    # Liveness inspection uses the page already loaded by
+    # get_job_description — no second navigation.
+    try:
+        await platform.check_liveness(job, navigate=False)
+    except Exception:
+        job.liveness = "unknown"
     return job
 
 

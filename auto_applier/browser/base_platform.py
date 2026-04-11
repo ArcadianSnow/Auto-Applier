@@ -43,6 +43,11 @@ class JobPlatform(ABC):
     source_id: str  # "linkedin", "indeed", etc.
     display_name: str  # "LinkedIn", "Indeed", etc.
 
+    # Liveness detection — subclasses override to tighten detection.
+    # See browser/liveness.py for how these are used.
+    dead_listing_selectors: list[str] = []
+    dead_listing_phrases: list[str] = []
+
     def __init__(self, context, config: dict, form_filler=None) -> None:
         self.context = context  # Browser context from BrowserSession
         self.config = config  # Platform-specific config dict
@@ -156,6 +161,51 @@ class JobPlatform(ABC):
     # ------------------------------------------------------------------
     # Shared Helpers -- Detection
     # ------------------------------------------------------------------
+
+    async def check_liveness(self, job: Job, navigate: bool = True) -> str:
+        """Return "live", "dead", or "unknown" for a job listing.
+
+        When ``navigate`` is True (default) the platform loads
+        ``job.url`` before inspecting. Pass ``navigate=False`` when
+        the caller has already navigated to the job page (e.g. the
+        pipeline calls this right after ``get_job_description`` which
+        already loaded it) — this avoids a wasted round-trip and
+        stays anti-detection friendly.
+
+        Delegates to :func:`browser.liveness.check_liveness_on_page`
+        using the subclass's ``dead_listing_selectors`` and
+        ``dead_listing_phrases`` class attributes. Platforms with
+        unusual flows may override this entirely.
+
+        Sets ``job.liveness`` in place and also returns the string.
+        """
+        from auto_applier.browser.liveness import (
+            Liveness, check_liveness_on_page,
+        )
+
+        try:
+            page = await self.get_page()
+            status: int | None = None
+            if navigate:
+                try:
+                    response = await page.goto(
+                        job.url, wait_until="domcontentloaded", timeout=15000,
+                    )
+                    status = response.status if response else None
+                except Exception:
+                    pass
+            result = await check_liveness_on_page(
+                page,
+                self.dead_listing_selectors,
+                self.dead_listing_phrases,
+                response_status=status,
+            )
+        except Exception as e:
+            logger.debug("check_liveness raised, returning UNKNOWN: %s", e)
+            result = Liveness.UNKNOWN
+
+        job.liveness = result.value
+        return result.value
 
     async def detect_captcha(self, page: Page) -> bool:
         """Check if a CAPTCHA or bot-detection challenge is present.
