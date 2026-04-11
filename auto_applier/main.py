@@ -322,6 +322,57 @@ def normalize():
         click.echo("Backups written to data/.backups/")
 
 
+@cli.command()
+@click.argument("job_id")
+@click.option("--resume", default=None, help="Resume label to use (defaults to first loaded)")
+def outreach(job_id: str, resume: str):
+    """Generate a LinkedIn connection-request message for a specific job."""
+    import asyncio as _asyncio
+    from auto_applier.llm.router import LLMRouter
+    from auto_applier.resume.manager import ResumeManager
+    from auto_applier.resume.outreach import OutreachWriter
+    from auto_applier.storage.models import Job
+    from auto_applier.storage.repository import load_all
+
+    jobs = [j for j in load_all(Job) if j.job_id == job_id]
+    if not jobs:
+        click.echo(f"No job found with id '{job_id}'.")
+        return
+    job = jobs[0]
+
+    async def _gen():
+        router = LLMRouter()
+        mgr = ResumeManager(router)
+        label = resume
+        if not label:
+            resumes = mgr.list_resumes()
+            if not resumes:
+                return None, "No resumes loaded — add one via the GUI wizard first."
+            label = resumes[0].label
+        resume_text = mgr.get_resume_text(label)
+        if not resume_text:
+            return None, f"Resume '{label}' has no parsed text."
+        writer = OutreachWriter(router)
+        msg = await writer.generate(
+            resume_text=resume_text,
+            job_description=job.description,
+            company_name=job.company,
+            job_title=job.title,
+        )
+        return msg, None
+
+    message, err = _asyncio.run(_gen())
+    if err:
+        click.echo(err)
+        return
+    if not message:
+        click.echo("LLM could not produce a message. Check `cli doctor`.")
+        return
+    click.echo(f"\n--- {len(message)} chars ---")
+    click.echo(message)
+    click.echo("-------------------")
+
+
 @cli.group()
 def story():
     """Manage the STAR+Reflection interview story bank."""

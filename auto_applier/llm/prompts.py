@@ -198,6 +198,30 @@ CLASSIFY_JOB_ARCHETYPE = PromptTemplate(
 
 
 # ------------------------------------------------------------------
+# LinkedIn outreach / connection message
+# ------------------------------------------------------------------
+
+OUTREACH_MESSAGE = PromptTemplate(
+    system=(
+        "Write a short, warm LinkedIn connection-request message (under "
+        "280 characters — LinkedIn's hard limit). The candidate is "
+        "reaching out to a recruiter or hiring manager at a specific "
+        "company about a specific job. Reference the role by title, "
+        "mention one concrete skill or experience from the resume that "
+        "maps to the role, and ask a genuine question or express "
+        "specific interest. Do NOT use the word 'synergy', 'circle "
+        "back', 'touch base', or any corporate cliché. Output the "
+        "message body only — no 'Hi {{name}}' header, no signature."
+    ),
+    template=(
+        "Resume highlights:\n{resume_text}\n\n"
+        "Job:\n{job_title} at {company_name}\n\n"
+        "Job description excerpt:\n{job_description}"
+    ),
+)
+
+
+# ------------------------------------------------------------------
 # STAR+Reflection interview story generation
 # ------------------------------------------------------------------
 
