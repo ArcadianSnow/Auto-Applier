@@ -338,6 +338,63 @@ def patterns():
             click.echo(f"  {count:4d}x  {field}")
 
 
+@cli.command("reset-history")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt")
+def reset_history(yes: bool):
+    """Wipe run history so dry runs have a clean slate.
+
+    Clears jobs.csv, applications.csv, skill_gaps.csv, and
+    followups.csv while preserving resume profiles, user_config,
+    archetypes, story bank, and research briefings. Useful when
+    iterating on the pipeline — every prior run's dedup state
+    goes away and subsequent runs see every job as fresh.
+
+    Backups go to data/.backups/ before anything is deleted.
+    """
+    from shutil import copy2
+    from auto_applier.config import (
+        APPLICATIONS_CSV, BACKUP_DIR, FOLLOWUPS_CSV, JOBS_CSV, SKILL_GAPS_CSV,
+    )
+    from datetime import datetime, timezone
+
+    targets = [
+        ("jobs.csv", JOBS_CSV),
+        ("applications.csv", APPLICATIONS_CSV),
+        ("skill_gaps.csv", SKILL_GAPS_CSV),
+        ("followups.csv", FOLLOWUPS_CSV),
+    ]
+    existing = [(n, p) for n, p in targets if p.exists()]
+    if not existing:
+        click.echo("Nothing to reset — no history CSVs exist.")
+        return
+
+    click.echo("The following CSV files will be cleared:")
+    for name, path in existing:
+        click.echo(f"  {name}")
+    click.echo(
+        "\nResume profiles, user_config.json, archetypes, and the story "
+        "bank are NOT touched."
+    )
+    if not yes:
+        click.confirm("Proceed?", abort=True)
+
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    for name, path in existing:
+        backup_path = BACKUP_DIR / f"{path.stem}.{timestamp}.reset{path.suffix}"
+        try:
+            copy2(path, backup_path)
+        except Exception as e:
+            click.echo(f"  warn: could not back up {name}: {e}")
+        try:
+            path.unlink()
+        except Exception as e:
+            click.echo(f"  error: could not delete {name}: {e}")
+            continue
+        click.echo(f"  cleared {name} (backup: {backup_path.name})")
+    click.echo("\nDone. Dry runs will now see every job as fresh.")
+
+
 @cli.command()
 def fsck():
     """Check CSV data for integrity issues (read-only)."""

@@ -1,35 +1,78 @@
 """Pipeline stages: discover -> score -> decide -> apply."""
+import logging
+
 from auto_applier.browser.anti_detect import random_delay, reading_pause
 from auto_applier.browser.form_filler import FormFiller
 from auto_applier.config import MIN_DELAY_BETWEEN_APPLICATIONS, MAX_DELAY_BETWEEN_APPLICATIONS
 from auto_applier.storage.models import Job, Application
 from auto_applier.storage import repository
 
+logger = logging.getLogger(__name__)
 
-async def discover_jobs(platform, keyword: str, location: str) -> list[Job]:
+
+async def discover_jobs(
+    platform, keyword: str, location: str, dry_run: bool = False,
+) -> list[Job]:
     """Search for jobs and filter out duplicates.
 
-    Filters at two levels:
+    Filters at two levels for real runs:
     1. Per-source: already-applied ``(job_id, source)`` pairs.
     2. Canonical: cross-source duplicates matched by ``canonical_hash``
        (same company + title normalized). Catches the same listing
        cross-posted to multiple platforms or discovered in a previous
        run under a different job_id.
+
+    Dry runs bypass BOTH dedup gates so the same jobs can be
+    re-processed across sessions. This is essential for iterative
+    testing — otherwise the first dry run saves every job to
+    ``jobs.csv`` and every subsequent run finds zero 'new' jobs,
+    making the pipeline look broken when it's just working exactly
+    as designed for real runs.
+
+    The log line at the end reports the exact fate of every job
+    so the 'Found 99 jobs, processed 0' mystery is always visible.
     """
     all_jobs = await platform.search_jobs(keyword, location)
+    raw = len(all_jobs)
     new_jobs: list[Job] = []
     seen_this_batch: set[str] = set()
+    filtered_applied = 0
+    filtered_canonical = 0
+    filtered_batch_dup = 0
+
     for job in all_jobs:
-        if repository.job_already_applied(job.job_id, job.source):
-            continue
-        if job.canonical_hash:
-            if job.canonical_hash in seen_this_batch:
+        if not dry_run:
+            if repository.job_already_applied(job.job_id, job.source):
+                filtered_applied += 1
                 continue
-            if repository.job_seen_canonically(job.canonical_hash):
+            if job.canonical_hash:
+                if job.canonical_hash in seen_this_batch:
+                    filtered_batch_dup += 1
+                    continue
+                if repository.job_seen_canonically(job.canonical_hash):
+                    filtered_canonical += 1
+                    continue
+                seen_this_batch.add(job.canonical_hash)
+        else:
+            # Dry-run path: only dedup within the current batch so
+            # we don't score the same listing twice in one run, but
+            # do NOT consult persisted state.
+            if job.canonical_hash and job.canonical_hash in seen_this_batch:
+                filtered_batch_dup += 1
                 continue
-            seen_this_batch.add(job.canonical_hash)
+            if job.canonical_hash:
+                seen_this_batch.add(job.canonical_hash)
         repository.save(job)
         new_jobs.append(job)
+
+    logger.info(
+        "discover_jobs[%s/%s]: raw=%d kept=%d filtered=%d "
+        "(already_applied=%d, canonical_dup=%d, batch_dup=%d) dry_run=%s",
+        platform.source_id, keyword,
+        raw, len(new_jobs),
+        filtered_applied + filtered_canonical + filtered_batch_dup,
+        filtered_applied, filtered_canonical, filtered_batch_dup, dry_run,
+    )
     return new_jobs
 
 
