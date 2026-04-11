@@ -437,6 +437,33 @@ class ZipRecruiterPlatform(JobPlatform):
                 logger.debug("Failed to parse a job card: %s", exc)
                 continue
 
+        # Cards detected but parser returned nothing — ZR ships new
+        # class names faster than the per-card parser can track.
+        # Fall back to anchor-based finder which only depends on
+        # the structural guarantee that every listing has a link.
+        if not jobs and cards:
+            logger.info(
+                "ZipRecruiter: %d cards detected but none parsed, "
+                "falling back to anchor-based finder", len(cards),
+            )
+            anchor_hits = await self.find_jobs_by_anchors(
+                page, href_pattern="/jobs/",
+            )
+            for title, url in anchor_hits:
+                jobs.append(Job(
+                    job_id=f"zr-{abs(hash(url)) % 10**10}",
+                    title=title,
+                    company="",
+                    url=url,
+                    search_keyword=keyword,
+                    source=self.source_id,
+                ))
+            if anchor_hits:
+                logger.info(
+                    "ZipRecruiter: anchor fallback recovered %d jobs",
+                    len(anchor_hits),
+                )
+
         return jobs
 
     async def _parse_single_card(

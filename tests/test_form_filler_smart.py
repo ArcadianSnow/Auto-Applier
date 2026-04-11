@@ -220,6 +220,113 @@ class TestPriorityChain:
         f.router.complete.assert_not_called()
 
 
+class TestHoneypot:
+    """Invisible anti-bot trap fields must never be filled."""
+
+    def test_leave_this_blank_label_skipped(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+        f = _filler()
+        field = _text_field("If you're a human, leave this blank")
+        field.element = MagicMock()
+        field.element.is_visible = AsyncMock(return_value=True)
+        # Must return False without calling the LLM or applying
+        result = asyncio.run(f.fill_field(MagicMock(), field))
+        assert result is False
+        f.router.complete.assert_not_called()
+
+    def test_leave_blank_variant_skipped(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+        f = _filler()
+        field = _text_field("Leave blank — do not fill")
+        field.element = MagicMock()
+        field.element.is_visible = AsyncMock(return_value=True)
+        result = asyncio.run(f.fill_field(MagicMock(), field))
+        assert result is False
+
+    def test_invisible_field_skipped(self):
+        """Even with a normal label, an invisible element is skipped."""
+        import asyncio
+        from unittest.mock import AsyncMock
+        f = _filler()
+        field = _text_field("email")  # normal label
+        field.element = MagicMock()
+        field.element.is_visible = AsyncMock(return_value=False)
+        result = asyncio.run(f.fill_field(MagicMock(), field))
+        assert result is False
+        f.router.complete.assert_not_called()
+
+    def test_visible_field_proceeds(self):
+        """Sanity: a visible non-honeypot field still gets processed."""
+        import asyncio
+        from unittest.mock import AsyncMock
+        f = _filler()
+        f.personal_info = {"email": "x@y.com"}
+        field = _text_field("Email address")
+        field.element = MagicMock()
+        field.element.is_visible = AsyncMock(return_value=True)
+        field.element.fill = AsyncMock()
+        field.element.get_attribute = AsyncMock(return_value=None)
+        # fill_field will try _apply_answer which calls fill(); we
+        # just need it to not crash and to hit the personal_info path
+        asyncio.run(f.fill_field(MagicMock(), field))
+        f.router.complete.assert_not_called()
+
+
+class TestUnansweredFormatTolerance:
+    """_record_unanswered crashed on str.get() when the file was a dict."""
+
+    def test_accepts_list_format(self, tmp_path, monkeypatch):
+        from auto_applier.browser import form_filler as ff
+        f = tmp_path / "unanswered.json"
+        f.write_text('[{"question": "Q1", "encountered": 2}]')
+        monkeypatch.setattr(ff, "UNANSWERED_FILE", f)
+        filler = _filler()
+        filler._record_unanswered("Q2")
+        import json
+        data = json.loads(f.read_text())
+        questions = [e["question"] for e in data]
+        assert "Q1" in questions
+        assert "Q2" in questions
+
+    def test_accepts_dict_format(self, tmp_path, monkeypatch):
+        """Historical wizard runs wrote this as a dict. Must not crash."""
+        from auto_applier.browser import form_filler as ff
+        f = tmp_path / "unanswered.json"
+        f.write_text('{"Q1": 2, "Q2": 1}')
+        monkeypatch.setattr(ff, "UNANSWERED_FILE", f)
+        filler = _filler()
+        # Previously crashed with 'str' object has no attribute 'get'
+        filler._record_unanswered("Q3")
+        import json
+        data = json.loads(f.read_text())
+        assert isinstance(data, list)
+        questions = [e["question"] for e in data]
+        assert set(questions) == {"Q1", "Q2", "Q3"}
+
+    def test_accepts_missing_file(self, tmp_path, monkeypatch):
+        from auto_applier.browser import form_filler as ff
+        f = tmp_path / "does-not-exist.json"
+        monkeypatch.setattr(ff, "UNANSWERED_FILE", f)
+        filler = _filler()
+        filler._record_unanswered("new question")
+        import json
+        data = json.loads(f.read_text())
+        assert data == [{"question": "new question", "encountered": 1}]
+
+    def test_accepts_garbage_file(self, tmp_path, monkeypatch):
+        from auto_applier.browser import form_filler as ff
+        f = tmp_path / "unanswered.json"
+        f.write_text("{ not json")
+        monkeypatch.setattr(ff, "UNANSWERED_FILE", f)
+        filler = _filler()
+        filler._record_unanswered("new")
+        import json
+        data = json.loads(f.read_text())
+        assert data == [{"question": "new", "encountered": 1}]
+
+
 class TestLocationFields:
     """Regression tests for the Indeed location form that triggered
     this expansion — zip, city/state, street address."""

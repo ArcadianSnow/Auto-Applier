@@ -88,6 +88,21 @@ RESUME_UPLOAD_KEYWORDS = [
     "upload your",
 ]
 
+# Honeypot / anti-bot trap fields that humans never see. These are
+# invisible inputs job sites add to their forms specifically to
+# catch automation — if a submission has a non-empty value in one
+# of these, the site knows it's a bot. NEVER fill.
+HONEYPOT_KEYWORDS = [
+    "leave this blank",
+    "leave blank",
+    "if you're a human",
+    "if you are a human",
+    "honeypot",
+    "bot trap",
+    "do not fill",
+    "anti-spam",
+]
+
 # Keywords for contextual auto-answers. Each group is matched
 # substring-wise against the lowercased label.
 SOURCE_QUESTION_KEYWORDS = [
@@ -207,6 +222,22 @@ class FormFiller:
             field.label, field.field_type,
             field.options if field.options else "none",
         )
+
+        # Honeypot check — skip invisible anti-bot trap fields before
+        # anything else. Match by label keyword OR by visibility: a
+        # field that isn't visible to the user is almost always a
+        # honeypot (the exception is progressive reveal, which these
+        # forms rarely use for text inputs).
+        if any(kw in label_lower for kw in HONEYPOT_KEYWORDS):
+            logger.debug("  → honeypot field by label, skipping")
+            return False
+        try:
+            is_visible = await field.element.is_visible()
+        except Exception:
+            is_visible = True  # assume visible if the check itself fails
+        if not is_visible:
+            logger.debug("  → hidden field, skipping (likely honeypot)")
+            return False
 
         # File upload fields are handled by the platform adapter
         if field.field_type == "file" and any(
@@ -634,22 +665,48 @@ class FormFiller:
         logger.debug("Recorded skill gap: '%s' (%s)", field.label, self.gaps[-1].category)
 
     def _record_unanswered(self, question: str) -> None:
-        """Record a new unanswered question for future wizard display."""
-        unanswered: list[dict] = []
+        """Record a new unanswered question for future wizard display.
+
+        Defensive loader: unanswered.json has occasionally been
+        written in the wrong shape (plain dict instead of a list of
+        entry dicts). Any iteration that assumes the list shape
+        crashes the platform's apply flow with 'str has no
+        attribute get'. Normalize whatever we find and keep going.
+        """
+        raw = None
         if UNANSWERED_FILE.exists():
             try:
                 with open(UNANSWERED_FILE, "r", encoding="utf-8") as f:
-                    unanswered = json.load(f)
-            except (json.JSONDecodeError, Exception):
-                pass
+                    raw = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                raw = None
 
-        existing = {q.get("question", "").lower() for q in unanswered}
-        if question.lower() not in existing:
+        # Normalize to list[{question, encountered}]
+        unanswered: list[dict] = []
+        if isinstance(raw, list):
+            for entry in raw:
+                if isinstance(entry, dict) and entry.get("question"):
+                    unanswered.append({
+                        "question": str(entry.get("question", "")),
+                        "encountered": int(entry.get("encountered", 1) or 1),
+                    })
+        elif isinstance(raw, dict):
+            # Someone wrote it as a {question: count} dict — convert.
+            for q, count in raw.items():
+                if isinstance(q, str) and q:
+                    try:
+                        n = int(count) if count else 1
+                    except (TypeError, ValueError):
+                        n = 1
+                    unanswered.append({"question": q, "encountered": n})
+
+        existing_lower = {u["question"].lower() for u in unanswered}
+        if question.lower() not in existing_lower:
             unanswered.append({"question": question, "encountered": 1})
         else:
-            for q in unanswered:
-                if q.get("question", "").lower() == question.lower():
-                    q["encountered"] = q.get("encountered", 0) + 1
+            for u in unanswered:
+                if u["question"].lower() == question.lower():
+                    u["encountered"] = u.get("encountered", 0) + 1
                     break
 
         try:

@@ -412,6 +412,37 @@ class DicePlatform(JobPlatform):
                 logger.debug("Failed to parse a job card: %s", exc)
                 continue
 
+        # Cards were detected but per-card parsing returned zero jobs
+        # — this happens when the "card" selector matches anchor
+        # links directly instead of wrapper divs, so titles/companies
+        # aren't inside each element. Fall back to anchor-based finder.
+        if not jobs and cards:
+            logger.info(
+                "Dice: %d cards detected but none parsed, falling back "
+                "to anchor-based finder", len(cards),
+            )
+            anchor_hits = await self.find_jobs_by_anchors(
+                page, href_pattern="/job-detail/",
+            )
+            if not anchor_hits:
+                anchor_hits = await self.find_jobs_by_anchors(
+                    page, href_pattern="/jobs/",
+                )
+            for title, url in anchor_hits:
+                jobs.append(Job(
+                    job_id=f"dice-{abs(hash(url)) % 10**10}",
+                    title=title,
+                    company="",
+                    url=url,
+                    search_keyword=keyword,
+                    source=self.source_id,
+                ))
+            if anchor_hits:
+                logger.info(
+                    "Dice: anchor fallback recovered %d jobs",
+                    len(anchor_hits),
+                )
+
         return jobs
 
     async def _parse_single_card(

@@ -376,11 +376,32 @@ class WizardApp(tk.Tk):
             if self.data[f"{key}_enabled"].get():
                 enabled.append(key)
 
-        # Personal info
-        personal = {}
+        # Personal info. Start from the on-disk user_config so fields
+        # the wizard UI doesn't edit (zip_code, state, street_address,
+        # etc.) survive the round-trip instead of being silently
+        # dropped on save. The wizard's UI-editable fields then
+        # overlay the loaded values.
+        personal: dict = {}
+        try:
+            if USER_CONFIG_FILE.exists():
+                with open(USER_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                saved_personal = existing.get("personal_info", {})
+                if isinstance(saved_personal, dict):
+                    personal.update(saved_personal)
+        except (json.JSONDecodeError, OSError):
+            pass
+
         for key in ("first_name", "last_name", "email", "phone", "city",
                      "linkedin_url", "website"):
             personal[key] = self.data[key].get().strip()
+
+        # Derive a combined 'name' so doctor's user_config check
+        # passes without requiring a separate full-name input.
+        fn = personal.get("first_name", "")
+        ln = personal.get("last_name", "")
+        if fn or ln:
+            personal["name"] = f"{fn} {ln}".strip()
 
         # Search keywords as list
         raw_kw = self.data["search_keywords"].get()
