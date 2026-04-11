@@ -146,8 +146,7 @@ COVER_LETTER = PromptTemplate(
         "Write a concise, professional cover letter under 300 words. Map "
         "the candidate's specific strengths to the job's requirements — "
         "reference concrete skills and responsibilities. Avoid generic "
-        "filler and clichés. Output the letter body only — no salutation "
-        "header, no signature block, no markdown."
+        "filler and clichés. Output plain prose only, no markdown."
     ),
     template=(
         "Resume:\n{resume_text}\n\n"
