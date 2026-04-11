@@ -218,3 +218,68 @@ class TestPriorityChain:
         )
         assert result == "Yes"
         f.router.complete.assert_not_called()
+
+
+class TestLocationFields:
+    """Regression tests for the Indeed location form that triggered
+    this expansion — zip, city/state, street address."""
+
+    def _with_location(self):
+        f = _filler()
+        f.personal_info = {
+            "city": "Seattle",
+            "state": "WA",
+            "city_state": "Seattle, WA",
+            "zip_code": "98101",
+            "postal_code": "98101",
+            "street_address": "1100 4th Avenue",
+            "address": "1100 4th Avenue, Seattle, WA 98101",
+            "country": "United States",
+        }
+        return f
+
+    def test_zip_code_matches(self):
+        f = self._with_location()
+        assert f._match_personal_info("zip code") == "98101"
+
+    def test_zipcode_one_word_matches(self):
+        f = self._with_location()
+        assert f._match_personal_info("zipcode") == "98101"
+
+    def test_postal_code_matches(self):
+        f = self._with_location()
+        assert f._match_personal_info("postal code") == "98101"
+
+    def test_city_state_compound_matches(self):
+        """The Indeed form label was literally 'City, State'."""
+        f = self._with_location()
+        assert f._match_personal_info("city, state") == "Seattle, WA"
+
+    def test_street_address_beats_plain_address(self):
+        """'Street address' should return the street-only value, not the
+        full single-line address."""
+        f = self._with_location()
+        assert f._match_personal_info("street address") == "1100 4th Avenue"
+
+    def test_plain_address_still_works(self):
+        f = self._with_location()
+        assert f._match_personal_info("mailing address") == "1100 4th Avenue, Seattle, WA 98101"
+
+    def test_state_alone_matches(self):
+        f = self._with_location()
+        assert f._match_personal_info("state") == "WA"
+
+    def test_country_matches(self):
+        f = self._with_location()
+        assert f._match_personal_info("country") == "United States"
+
+    def test_plain_city_still_matches(self):
+        """Bare 'city' shouldn't be hijacked by the compound keys."""
+        f = self._with_location()
+        assert f._match_personal_info("city") == "Seattle"
+
+    def test_missing_config_returns_empty(self):
+        """A label that matches a keyword the persona doesn't have
+        should return empty, letting the priority chain fall through."""
+        f = _filler()  # no personal_info at all
+        assert f._match_personal_info("zip code") == ""

@@ -29,20 +29,48 @@ from auto_applier.storage.models import SkillGap
 logger = logging.getLogger(__name__)
 
 
-# Keywords that identify specific personal info fields
+# Keywords that identify specific personal info fields.
+#
+# Order matters: more specific keys come first so "zip code" matches
+# before the generic "zip" substring, "city, state" before plain
+# "city", etc. Python dict iteration preserves insertion order.
 PERSONAL_INFO_KEYS: dict[str, str] = {
+    # Name
     "first name": "first_name",
     "last name": "last_name",
     "full name": "full_name",
+    # Contact
     "email": "email",
     "phone": "phone",
     "mobile": "phone",
+    # Location — compound labels FIRST so they beat the plain-word ones
+    "city, state": "city_state",
+    "city/state": "city_state",
+    "city state": "city_state",
+    "zip code": "zip_code",
+    "zipcode": "zip_code",
+    "postal code": "postal_code",
+    "postcode": "postal_code",
+    "street address": "street_address",
+    "mailing address": "address",
+    "home address": "address",
+    # Single-word location keys — last so compounds win
+    "address": "address",
+    "street": "street_address",
+    "zip": "zip_code",
+    "postal": "postal_code",
+    "state": "state",
+    "province": "state",
+    "region": "state",
+    "country": "country",
     "city": "city",
     "location": "city",
+    # Social / web
     "linkedin": "linkedin_url",
-    "website": "website",
-    "portfolio": "website",
-    "address": "address",
+    "github": "github_url",
+    "portfolio": "portfolio_url",
+    "website": "portfolio_url",
+    "personal site": "portfolio_url",
 }
 
 COVER_LETTER_KEYWORDS = [
