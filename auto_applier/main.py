@@ -234,6 +234,66 @@ def doctor():
     _sys.exit(doctor_module.run())
 
 
+@cli.group()
+def followup():
+    """Manage follow-up reminders for submitted applications."""
+    pass
+
+
+@followup.command("list")
+@click.option("--all", "show_all", is_flag=True, help="Show completed and dismissed too")
+@click.option("--due", is_flag=True, help="Only show items due today or overdue")
+def followup_list(show_all: bool, due: bool):
+    """List follow-up reminders."""
+    from auto_applier.storage.repository import list_followups, get_due_followups
+    from datetime import date
+
+    if due:
+        items = get_due_followups()
+    elif show_all:
+        items = list_followups()
+    else:
+        items = list_followups(status="pending")
+
+    if not items:
+        click.echo("No follow-ups to show.")
+        return
+
+    today = date.today().isoformat()
+    click.echo(f"\n{len(items)} follow-up(s):\n")
+    for f in sorted(items, key=lambda x: x.due_date):
+        marker = " (OVERDUE)" if f.status == "pending" and f.due_date < today else ""
+        marker = " (DUE TODAY)" if f.status == "pending" and f.due_date == today else marker
+        click.echo(
+            f"  {f.due_date}  [{f.status:9s}]  {f.source:12s}  "
+            f"{f.job_id}{marker}"
+        )
+        if f.notes:
+            click.echo(f"              notes: {f.notes}")
+
+
+@followup.command("done")
+@click.argument("job_id")
+@click.option("--source", default=None, help="Narrow to a specific platform")
+def followup_done(job_id: str, source: str):
+    """Mark follow-ups for a job as done."""
+    from auto_applier.storage.repository import update_followups_for_job
+
+    n = update_followups_for_job(job_id, "done", source=source)
+    click.echo(f"Marked {n} follow-up(s) as done for job {job_id}.")
+
+
+@followup.command("dismiss")
+@click.argument("job_id")
+@click.option("--source", default=None, help="Narrow to a specific platform")
+def followup_dismiss(job_id: str, source: str):
+    """Dismiss follow-ups for a job (stop reminding)."""
+    from auto_applier.storage.repository import update_followups_for_job
+
+    n = update_followups_for_job(job_id, "dismissed", source=source)
+    click.echo(f"Dismissed {n} follow-up(s) for job {job_id}.")
+
+
 @cli.command()
 def migrations():
     """Show CSV schema migration history."""

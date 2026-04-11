@@ -5,16 +5,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypeVar, Type
 
-from auto_applier.config import JOBS_CSV, APPLICATIONS_CSV, SKILL_GAPS_CSV
+from auto_applier.config import (
+    JOBS_CSV, APPLICATIONS_CSV, SKILL_GAPS_CSV, FOLLOWUPS_CSV,
+)
 from auto_applier.storage.migrations import migrate_csv, record_current_schema
-from auto_applier.storage.models import Job, Application, SkillGap
+from auto_applier.storage.models import Job, Application, SkillGap, Followup
 
-T = TypeVar("T", Job, Application, SkillGap)
+T = TypeVar("T", Job, Application, SkillGap, Followup)
 
 _CSV_MAP: dict[type, Path] = {
     Job: JOBS_CSV,
     Application: APPLICATIONS_CSV,
     SkillGap: SKILL_GAPS_CSV,
+    Followup: FOLLOWUPS_CSV,
 }
 
 
@@ -26,7 +29,7 @@ def _ensure_csv(path: Path, model_type: type) -> None:
             csv.DictWriter(f, fieldnames=headers).writeheader()
         # Record the baseline schema for first-time installs so future
         # drift is detectable. Safe to call repeatedly.
-        record_current_schema([Job, Application, SkillGap])
+        record_current_schema([Job, Application, SkillGap, Followup])
         return
     # Existing file: migrate in place if fields have shifted since last run.
     migrate_csv(path, model_type)
@@ -100,6 +103,98 @@ def job_seen_canonically(canonical_hash: str) -> bool:
     if not canonical_hash:
         return False
     return any(job.canonical_hash == canonical_hash for job in load_all(Job))
+
+
+def schedule_followups(
+    job_id: str,
+    source: str,
+    applied_at_iso: str,
+    cadence_days: list[int] | None = None,
+) -> list[Followup]:
+    """Create one Followup per cadence offset for a submitted application.
+
+    ``applied_at_iso`` is the full ISO timestamp from ``Application.applied_at``.
+    Each followup's due_date is computed by adding ``offset_days`` to the
+    date portion. Returns the list of created Followup records (already
+    persisted to ``followups.csv``).
+    """
+    from datetime import date, timedelta
+    from auto_applier.config import FOLLOWUP_CADENCE_DAYS
+
+    cadence = cadence_days if cadence_days is not None else FOLLOWUP_CADENCE_DAYS
+    try:
+        base = datetime.fromisoformat(applied_at_iso).date()
+    except ValueError:
+        base = date.today()
+
+    created: list[Followup] = []
+    for offset in cadence:
+        due = (base + timedelta(days=offset)).isoformat()
+        f = Followup(job_id=job_id, source=source, due_date=due)
+        save(f)
+        created.append(f)
+    return created
+
+
+def list_followups(status: str | None = None) -> list[Followup]:
+    """Return follow-ups, optionally filtered by status."""
+    items = load_all(Followup)
+    if status is None:
+        return items
+    return [f for f in items if f.status == status]
+
+
+def get_due_followups(as_of: str | None = None) -> list[Followup]:
+    """Return pending follow-ups whose due_date is on or before ``as_of``.
+
+    ``as_of`` is an ISO date string; defaults to today (UTC).
+    """
+    from datetime import date
+
+    cutoff = as_of or date.today().isoformat()
+    return [
+        f for f in load_all(Followup)
+        if f.status == "pending" and f.due_date <= cutoff
+    ]
+
+
+def update_followups_for_job(
+    job_id: str,
+    new_status: str,
+    source: str | None = None,
+) -> int:
+    """Set every pending follow-up for ``job_id`` to ``new_status``.
+
+    Rewrites the whole followups.csv in place. Returns the number of
+    records updated. ``source`` further narrows the match when given.
+    """
+    path = _CSV_MAP[Followup]
+    _ensure_csv(path, Followup)
+    followups = load_all(Followup)
+    updated = 0
+    for f in followups:
+        if f.status != "pending":
+            continue
+        if f.job_id != job_id:
+            continue
+        if source and f.source != source:
+            continue
+        f.status = new_status
+        updated += 1
+    # Rewrite the file
+    headers = [fld.name for fld in dc_fields(Followup)]
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=headers)
+        writer.writeheader()
+        for f in followups:
+            row = {k: v for k, v in asdict(f).items()}
+            for k, v in row.items():
+                if isinstance(v, bool):
+                    row[k] = str(v)
+                elif isinstance(v, list):
+                    row[k] = str(v)
+            writer.writerow(row)
+    return updated
 
 
 def get_todays_application_count() -> int:

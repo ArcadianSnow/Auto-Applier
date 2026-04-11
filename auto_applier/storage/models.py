@@ -67,6 +67,23 @@ class SkillGap:
 
 
 @dataclass
+class Followup:
+    """A scheduled follow-up reminder for a submitted application.
+
+    Created automatically when an Application is recorded with status
+    "applied". Default cadence is day 7, 14, 21 from the applied_at
+    date (configurable via FOLLOWUP_CADENCE_DAYS env var).
+    """
+    job_id: str
+    source: str
+    due_date: str  # ISO date string, e.g. "2026-04-18"
+    status: str = "pending"  # pending | done | dismissed
+    channel: str = "email"  # email | linkedin | phone | none
+    notes: str = ""
+    created_at: str = field(default_factory=_now_iso)
+
+
+@dataclass
 class ApplyResult:
     """Rich result from a platform apply attempt."""
     success: bool

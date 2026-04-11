@@ -106,6 +106,17 @@ async def apply_to_job(
     )
     repository.save(app)
 
+    # Schedule follow-up reminders on real submissions (not dry-run).
+    if status == "applied":
+        try:
+            repository.schedule_followups(
+                job_id=job.job_id,
+                source=platform.source_id,
+                applied_at_iso=app.applied_at,
+            )
+        except Exception:
+            pass
+
     # Random delay between applications
     await random_delay(MIN_DELAY_BETWEEN_APPLICATIONS, MAX_DELAY_BETWEEN_APPLICATIONS)
 

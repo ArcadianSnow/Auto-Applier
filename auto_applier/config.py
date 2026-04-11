@@ -17,6 +17,7 @@ SCHEMA_VERSION_FILE = DATA_DIR / ".schema_version.json"
 JOBS_CSV = DATA_DIR / "jobs.csv"
 APPLICATIONS_CSV = DATA_DIR / "applications.csv"
 SKILL_GAPS_CSV = DATA_DIR / "skill_gaps.csv"
+FOLLOWUPS_CSV = DATA_DIR / "followups.csv"
 USER_CONFIG_FILE = DATA_DIR / "user_config.json"
 ANSWERS_FILE = DATA_DIR / "answers.json"
 UNANSWERED_FILE = DATA_DIR / "unanswered.json"
@@ -57,3 +58,11 @@ DEFAULT_AUTO_APPLY_MIN = 7
 DEFAULT_CLI_AUTO_APPLY_MIN = 7
 DEFAULT_REVIEW_MIN = 4
 DEFAULT_EVOLUTION_TRIGGER_THRESHOLD = 3
+
+# Follow-up cadence: days after applied_at when reminders fall due.
+# Override via FOLLOWUP_CADENCE_DAYS (comma-separated integers).
+_cadence_env = os.getenv("FOLLOWUP_CADENCE_DAYS", "7,14,21")
+try:
+    FOLLOWUP_CADENCE_DAYS = [int(d.strip()) for d in _cadence_env.split(",") if d.strip()]
+except ValueError:
+    FOLLOWUP_CADENCE_DAYS = [7, 14, 21]
