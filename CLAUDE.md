@@ -26,9 +26,11 @@ python -m auto_applier --cli run
 python -m auto_applier --cli run --dry-run
 python -m auto_applier --cli run --platform linkedin
 python -m auto_applier --cli run --limit 5
+python -m auto_applier --cli doctor     # preflight — validates Ollama, Playwright, data, resumes, etc.
 python -m auto_applier --cli status
 python -m auto_applier --cli gaps
 python -m auto_applier --cli resumes
+python -m auto_applier --cli migrations # CSV schema migration history
 
 # Tests (asyncio_mode = "auto" in pyproject.toml)
 pip install -e ".[dev]"
@@ -54,6 +56,7 @@ Test suite currently covers `llm/`, `scoring/`, `storage/` models, and the repos
 - **`storage/`** — CSV-backed persistence (Excel-compatible). Dataclass models.
 - **`analysis/`** — Gap tracking and reporting.
 - **`gui/`** — Tkinter wizard + dashboard + panels. Knows about tkinter, nothing else.
+- **`doctor.py`** — Preflight runner (`cli doctor`). Each check is a small function returning a `CheckResult(PASS|WARN|FAIL)`. Runs read-only, fast (<5 s), fails closed. Every FAIL/WARN carries a `fix` hint. Exits non-zero on any FAIL so CI / scripts can gate on it.
 
 ### LLM Fallback Chain (`llm/router.py`)
 

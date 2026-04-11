@@ -227,6 +227,14 @@ def gaps():
 
 
 @cli.command()
+def doctor():
+    """Run preflight checks — verify everything is ready to run."""
+    from auto_applier import doctor as doctor_module
+    import sys as _sys
+    _sys.exit(doctor_module.run())
+
+
+@cli.command()
 def migrations():
     """Show CSV schema migration history."""
     from auto_applier.storage.migrations import list_migration_history
