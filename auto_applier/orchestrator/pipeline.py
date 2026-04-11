@@ -1,11 +1,8 @@
 """Pipeline stages: discover -> score -> decide -> apply."""
-import asyncio
-
-from auto_applier.browser.anti_detect import random_delay, reading_pause, simulate_organic_behavior
+from auto_applier.browser.anti_detect import random_delay, reading_pause
 from auto_applier.browser.form_filler import FormFiller
 from auto_applier.config import MIN_DELAY_BETWEEN_APPLICATIONS, MAX_DELAY_BETWEEN_APPLICATIONS
-from auto_applier.scoring.models import ScoreDecision
-from auto_applier.storage.models import Job, Application, SkillGap
+from auto_applier.storage.models import Job, Application
 from auto_applier.storage import repository
 
 

@@ -58,10 +58,13 @@ def check_python_version() -> CheckResult:
 def check_data_dirs_writable() -> CheckResult:
     from auto_applier.config import (
         DATA_DIR, BROWSER_PROFILE_DIR, RESUMES_DIR, PROFILES_DIR,
-        CACHE_DIR, BACKUP_DIR,
+        CACHE_DIR, BACKUP_DIR, GENERATED_RESUMES_DIR, RESEARCH_DIR,
     )
 
-    dirs = [DATA_DIR, BROWSER_PROFILE_DIR, RESUMES_DIR, PROFILES_DIR, CACHE_DIR, BACKUP_DIR]
+    dirs = [
+        DATA_DIR, BROWSER_PROFILE_DIR, RESUMES_DIR, PROFILES_DIR,
+        CACHE_DIR, BACKUP_DIR, GENERATED_RESUMES_DIR, RESEARCH_DIR,
+    ]
     for d in dirs:
         if not d.exists():
             return CheckResult(

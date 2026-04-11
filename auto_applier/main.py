@@ -1,12 +1,11 @@
 """CLI entry point for Auto Applier v2."""
 import asyncio
 import json
-import sys
 from collections import Counter
 
 import click
 
-from auto_applier.config import DATA_DIR, USER_CONFIG_FILE, MAX_APPLICATIONS_PER_DAY
+from auto_applier.config import USER_CONFIG_FILE
 
 
 def load_user_config() -> dict:
@@ -400,7 +399,7 @@ def research(company: str, from_file: str, show: bool):
     import asyncio as _asyncio
     from pathlib import Path as _Path
     from auto_applier.analysis.research import (
-        CompanyResearcher, load_briefing, save_briefing,
+        CompanyResearcher, save_briefing,
     )
     from auto_applier.llm.router import LLMRouter
 

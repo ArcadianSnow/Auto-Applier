@@ -22,7 +22,6 @@ import json
 import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 
 from auto_applier.config import DATA_DIR
 from auto_applier.llm.prompts import STAR_STORIES

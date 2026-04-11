@@ -3,11 +3,19 @@
 
 # Data files (contain personal info)
 data/browser_profile/
+data/cache/
+data/profiles/
+data/research/
+data/.backups/
 data/*.csv
 data/*.json
+data/.schema_version.json
 
 # Resumes (user uploads)
 data/resumes/
+
+# CLI-generated export artifacts
+auto_applier_export.json
 
 # PyInstaller
 dist/

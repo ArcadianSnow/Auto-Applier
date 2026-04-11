@@ -24,7 +24,6 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 
 from auto_applier.config import DATA_DIR
 

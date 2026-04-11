@@ -1,14 +1,10 @@
 """Application engine -- orchestrates the full discover -> score -> apply pipeline."""
-import asyncio
-import json
 import os
-from pathlib import Path
 
 from auto_applier.browser.session import BrowserSession
 from auto_applier.browser.platforms import PLATFORM_REGISTRY
 from auto_applier.config import (
     MAX_APPLICATIONS_PER_DAY,
-    USER_CONFIG_FILE,
     PROJECT_ROOT,
     DEFAULT_AUTO_APPLY_MIN,
     DEFAULT_CLI_AUTO_APPLY_MIN,
@@ -24,7 +20,6 @@ from auto_applier.storage.repository import get_todays_application_count, save
 from auto_applier.orchestrator.events import (
     EventEmitter,
     RUN_STARTED,
-    RESUME_PARSED,
     PLATFORM_STARTED,
     PLATFORM_LOGIN_NEEDED,
     PLATFORM_LOGIN_FAILED,

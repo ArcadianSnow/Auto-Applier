@@ -12,4 +12,5 @@ def main():
         launch_wizard()
 
 
-main()
+if __name__ == "__main__":
+    main()

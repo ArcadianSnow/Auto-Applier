@@ -24,7 +24,6 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import asdict, fields as dc_fields
-from datetime import datetime, timezone
 
 from auto_applier.storage import repository
 from auto_applier.storage.dedup import normalize_company
