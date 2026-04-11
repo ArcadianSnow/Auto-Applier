@@ -3,6 +3,17 @@
 Each template is a :class:`PromptTemplate` instance with a *system* prompt
 and a *template* string containing ``{placeholders}``.  Call
 ``template.format(**kwargs)`` to produce the filled user prompt.
+
+Prompts are tuned for instruction-following JSON-capable local models
+(Gemma 4 family by default). Key conventions:
+
+- JSON prompts always state the exact schema and demand JSON-only output
+  with no thinking preamble, markdown fences, or commentary. Ollama's
+  ``format: "json"`` mode enforces this at the server level, but we
+  reinforce it in the system prompt so Gemini/rule-based fallbacks behave.
+- System prompts are short and directive. Gemma follows short system
+  prompts more reliably than long ones.
+- Field names in schemas use snake_case to match Python consumers.
 """
 
 from dataclasses import dataclass
@@ -26,10 +37,11 @@ class PromptTemplate:
 
 FORM_FILL = PromptTemplate(
     system=(
-        "You help fill job application forms. Given a resume and job "
-        "description, answer the question concisely and professionally. "
-        "If the resume doesn't contain relevant info, respond with an "
-        "empty string."
+        "You fill job application form fields. Given a resume and job "
+        "description, answer the question concisely and professionally "
+        "in the candidate's voice. If the resume lacks relevant info, "
+        "reply with an empty string. Output the answer only — no "
+        "preamble, no quotes, no markdown."
     ),
     template=(
         "Resume:\n{resume_text}\n\n"
@@ -45,9 +57,12 @@ FORM_FILL = PromptTemplate(
 
 JOB_SCORE = PromptTemplate(
     system=(
-        "You evaluate job fit. Score 1-10 how well the resume matches "
-        "the job. Respond with JSON: {score, explanation, matched_skills, "
-        "missing_skills, deal_breakers}"
+        "You evaluate job fit. Score how well the resume matches the "
+        "job on a 1-10 integer scale. Respond ONLY with a JSON object "
+        "matching this schema (no other text, no code fences):\n"
+        '{"score": int 1-10, "explanation": str (<=2 sentences), '
+        '"matched_skills": [str], "missing_skills": [str], '
+        '"deal_breakers": [str]}'
     ),
     template=(
         "Resume:\n{resume_text}\n\n"
@@ -61,9 +76,11 @@ JOB_SCORE = PromptTemplate(
 
 SKILL_EXTRACT_RESUME = PromptTemplate(
     system=(
-        "Extract skills from this resume. Respond with JSON: "
-        "{technical_skills: [{name, level, years}], soft_skills: [str], "
-        "certifications: [str], tools: [str]}"
+        "Extract structured skills from this resume. Respond ONLY with a "
+        "JSON object matching this schema (no other text):\n"
+        '{"technical_skills": [{"name": str, "level": '
+        '"beginner"|"intermediate"|"advanced"|"expert", "years": int}], '
+        '"soft_skills": [str], "certifications": [str], "tools": [str]}'
     ),
     template="{resume_text}",
 )
@@ -74,8 +91,10 @@ SKILL_EXTRACT_RESUME = PromptTemplate(
 
 SKILL_EXTRACT_JD = PromptTemplate(
     system=(
-        "Extract required skills from this job description. Respond with "
-        "JSON: {required: [str], preferred: [str], experience_level: str}"
+        "Extract required skills from this job description. Respond ONLY "
+        "with a JSON object matching this schema (no other text):\n"
+        '{"required": [str], "preferred": [str], "experience_level": '
+        '"entry"|"mid"|"senior"|"lead"|"principal"}'
     ),
     template="{job_description}",
 )
@@ -87,7 +106,9 @@ SKILL_EXTRACT_JD = PromptTemplate(
 RESUME_BULLET = PromptTemplate(
     system=(
         "Generate 2-3 resume bullet points for a confirmed skill. Be "
-        "specific and use action verbs. Format as a JSON array of strings."
+        "specific, use strong action verbs, and quantify impact where "
+        "possible. Respond ONLY with a JSON array of strings (no other "
+        "text): [\"bullet 1\", \"bullet 2\", ...]"
     ),
     template=(
         "Skill: {skill_name}\n"
@@ -98,14 +119,17 @@ RESUME_BULLET = PromptTemplate(
 )
 
 # ------------------------------------------------------------------
-# Resume selection / scoring
+# Resume selection / scoring (per-resume)
 # ------------------------------------------------------------------
 
 RESUME_SELECT = PromptTemplate(
     system=(
-        "Score how well this resume matches the job description. Respond "
-        "with JSON: {score: 1-10, explanation: str, matched_skills: [str], "
-        "missing_skills: [str]}"
+        "Score how well this resume matches the job description on a 1-10 "
+        "integer scale. Judge by skills and experience, NOT by job title. "
+        "Respond ONLY with a JSON object matching this schema (no other "
+        "text, no code fences):\n"
+        '{"score": int 1-10, "explanation": str (<=2 sentences), '
+        '"matched_skills": [str], "missing_skills": [str]}'
     ),
     template=(
         "Resume ({resume_label}):\n{resume_text}\n\n"
@@ -119,10 +143,11 @@ RESUME_SELECT = PromptTemplate(
 
 COVER_LETTER = PromptTemplate(
     system=(
-        "Write a concise, professional cover letter (under 300 words). "
-        "Focus on mapping the candidate's specific strengths to the job "
-        "requirements. Do not be generic -- reference specific skills and "
-        "requirements."
+        "Write a concise, professional cover letter under 300 words. Map "
+        "the candidate's specific strengths to the job's requirements — "
+        "reference concrete skills and responsibilities. Avoid generic "
+        "filler and clichés. Output the letter body only — no salutation "
+        "header, no signature block, no markdown."
     ),
     template=(
         "Resume:\n{resume_text}\n\n"

@@ -118,7 +118,8 @@ class WizardApp(tk.Tk):
         self.data["review_min"] = tk.IntVar(value=4)
 
         # LLM settings
-        self.data["ollama_model"] = tk.StringVar(value="llama3.1:8b")
+        from auto_applier.config import OLLAMA_MODEL
+        self.data["ollama_model"] = tk.StringVar(value=OLLAMA_MODEL)
         self.data["gemini_api_key"] = tk.StringVar(value="")
 
         # Load saved config if it exists

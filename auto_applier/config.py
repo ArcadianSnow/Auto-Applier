@@ -28,9 +28,20 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 # LLM settings
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
+OLLAMA_MIN_VERSION = "0.8.0"  # Minimum Ollama version for Gemma 4 support
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+
+# Known-good Ollama model options shown in the wizard dropdown.
+# Listed fastest-to-biggest. Users can still type a custom tag.
+OLLAMA_MODEL_PRESETS = [
+    "gemma4:e2b",   # ~2.3B effective, text+image+audio, 128k ctx, CPU-friendly
+    "gemma4:e4b",   # ~4.5B effective, text+image+audio, 128k ctx, DEFAULT
+    "gemma4:31b",   # Full Gemma 4, 256k ctx, needs beefy hardware
+    "gemma3:4b",    # Legacy fallback if Gemma 4 unavailable
+    "llama3.1:8b",  # Legacy fallback (v1 default)
+]
 
 # Rate limiting / anti-detection defaults
 MAX_APPLICATIONS_PER_DAY = int(os.getenv("MAX_APPLICATIONS_PER_DAY", "10"))

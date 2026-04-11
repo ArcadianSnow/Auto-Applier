@@ -8,6 +8,28 @@ import httpx
 from auto_applier.llm.base import LLMBackend, LLMResponse
 
 
+def version_gte(actual: str, minimum: str) -> bool:
+    """Return True if ``actual`` dotted-numeric version is >= ``minimum``.
+
+    Non-numeric suffixes like '-rc1' are stripped. Returns False on
+    parse failure — callers should treat that as "version unknown,
+    fail closed".
+    """
+    def parts(v: str) -> tuple:
+        out = []
+        for chunk in v.split("."):
+            digits = "".join(c for c in chunk if c.isdigit())
+            if not digits:
+                return ()
+            out.append(int(digits))
+        return tuple(out)
+
+    a, b = parts(actual), parts(minimum)
+    if not a or not b:
+        return False
+    return a >= b
+
+
 class OllamaBackend(LLMBackend):
     """Local Ollama server backend.
 
@@ -35,13 +57,40 @@ class OllamaBackend(LLMBackend):
             if resp.status_code != 200:
                 return False
             models = resp.json().get("models", [])
-            # Allow prefix match so "llama3.1:8b" matches "llama3.1:8b-instruct-…"
-            prefix = self.model.split(":")[0]
-            return any(
-                m.get("name", "").startswith(prefix) for m in models
-            )
+            # Match on full tag first (e.g. "gemma4:e4b"), then fall back
+            # to family prefix ("gemma4") so variants like gemma4:e4b-instruct
+            # also count as available.
+            target = self.model
+            family = target.split(":")[0]
+            for m in models:
+                name = m.get("name", "")
+                if name == target or name.startswith(target + "-"):
+                    return True
+                if name.startswith(family + ":") or name.startswith(family + "-"):
+                    return True
+            return False
         except (httpx.ConnectError, httpx.TimeoutException, Exception):
             return False
+
+    async def get_version(self) -> str:
+        """Return the running Ollama server version, or '' if unreachable."""
+        try:
+            resp = await self._client.get(f"{self.base_url}/api/version")
+            if resp.status_code != 200:
+                return ""
+            return resp.json().get("version", "")
+        except (httpx.ConnectError, httpx.TimeoutException, Exception):
+            return ""
+
+    async def list_local_models(self) -> list[str]:
+        """Return a list of model tags currently pulled on the Ollama server."""
+        try:
+            resp = await self._client.get(f"{self.base_url}/api/tags")
+            if resp.status_code != 200:
+                return []
+            return [m.get("name", "") for m in resp.json().get("models", [])]
+        except (httpx.ConnectError, httpx.TimeoutException, Exception):
+            return []
 
     # ------------------------------------------------------------------
     # Text completion

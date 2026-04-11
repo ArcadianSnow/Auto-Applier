@@ -12,6 +12,9 @@ from auto_applier.gui.styles import (
 )
 
 
+from auto_applier.llm.ollama_backend import version_gte as _version_gte
+
+
 class LLMSetupStep(ttk.Frame):
     """LLM backend configuration with connection testing."""
 
@@ -76,9 +79,10 @@ class LLMSetupStep(ttk.Frame):
             fg=TEXT, bg=BG_CARD,
         ).pack(side="left")
 
-        ttk.Entry(
+        from auto_applier.config import OLLAMA_MODEL_PRESETS
+        ttk.Combobox(
             model_row, textvariable=self.wizard.data["ollama_model"],
-            font=FONT_MONO, width=30,
+            values=OLLAMA_MODEL_PRESETS, font=FONT_MONO, width=28,
         ).pack(side="left", padx=(8, 12))
 
         ttk.Button(
@@ -86,11 +90,24 @@ class LLMSetupStep(ttk.Frame):
             command=self._test_ollama,
         ).pack(side="left")
 
+        current_model = self.wizard.data["ollama_model"].get() or "gemma4:e4b"
         tk.Label(
             ollama_card,
-            text="Install from ollama.com, then run:  ollama pull llama3.1:8b",
+            text=(
+                f"Install from ollama.com (v0.8.0+), then run:  "
+                f"ollama pull {current_model}"
+            ),
             font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
         ).pack(anchor="w")
+
+        tk.Label(
+            ollama_card,
+            text=(
+                "Presets:  e2b (small, CPU-friendly)  •  "
+                "e4b (default, 16 GB RAM)  •  31b (dev machines)"
+            ),
+            font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD,
+        ).pack(anchor="w", pady=(2, 0))
 
         # --- Gemini card ---
         gemini_card = tk.Frame(
@@ -197,25 +214,37 @@ class LLMSetupStep(ttk.Frame):
             try:
                 result = asyncio.run(_check())
             except Exception:
-                result = False
-            self.after(0, lambda: self._update_ollama_status(result))
+                result = (False, "", False)
+            self.after(0, lambda: self._update_ollama_status(*result))
 
         async def _check():
             from auto_applier.llm.ollama_backend import OllamaBackend
+            from auto_applier.config import OLLAMA_MIN_VERSION
             backend = OllamaBackend(
                 model=self.wizard.data["ollama_model"].get()
             )
-            return await backend.is_available()
+            available = await backend.is_available()
+            version = await backend.get_version()
+            version_ok = _version_gte(version, OLLAMA_MIN_VERSION) if version else False
+            return (available, version, version_ok)
 
         threading.Thread(target=check, daemon=True).start()
 
-    def _update_ollama_status(self, available: bool) -> None:
+    def _update_ollama_status(
+        self, available: bool, version: str = "", version_ok: bool = False,
+    ) -> None:
         """Update Ollama status UI after test completes."""
-        self._ollama_available = available
-        if available:
+        self._ollama_available = available and version_ok
+        if available and version_ok:
             self._draw_dot(self._ollama_dot, STATUS_SUCCESS)
+            label = f"Connected (v{version})" if version else "Connected"
+            self._ollama_status_label.configure(text=label, fg=STATUS_SUCCESS)
+        elif available and not version_ok:
+            from auto_applier.config import OLLAMA_MIN_VERSION
+            self._draw_dot(self._ollama_dot, STATUS_ERROR)
             self._ollama_status_label.configure(
-                text="Connected", fg=STATUS_SUCCESS,
+                text=f"Upgrade Ollama (v{version} < {OLLAMA_MIN_VERSION})",
+                fg=STATUS_ERROR,
             )
         else:
             self._draw_dot(self._ollama_dot, STATUS_ERROR)

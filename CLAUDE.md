@@ -33,9 +33,14 @@ python -m auto_applier --cli resumes
 # Tests (asyncio_mode = "auto" in pyproject.toml)
 pip install -e ".[dev]"
 pytest
-pytest tests/test_foo.py
+pytest tests/test_scoring.py
 pytest -k test_name
+
+# Build standalone Windows .exe (PyInstaller, outputs to dist/)
+python build.py
 ```
+
+Test suite currently covers `llm/`, `scoring/`, `storage/` models, and the repository layer. Browser, GUI, and orchestrator layers are not unit-tested — validate those manually with `--dry-run`.
 
 ## Architecture
 
@@ -52,11 +57,11 @@ pytest -k test_name
 
 ### LLM Fallback Chain (`llm/router.py`)
 
-1. **Ollama** (localhost:11434) — local inference, zero cost, needs 8-16GB RAM
+1. **Ollama** (localhost:11434) — local inference, zero cost. Default model `gemma4:e4b` (~4.5B effective, ~9.6 GB download, multimodal text+image+audio, 128k context). Requires **Ollama ≥ 0.8.0** for Gemma 4 architecture support. Alternative presets in `config.OLLAMA_MODEL_PRESETS`: `gemma4:e2b` (smaller/CPU), `gemma4:31b` (dev machines), plus legacy `gemma3:4b` and `llama3.1:8b` fallbacks.
 2. **Gemini** (free API) — 1,000 req/day free tier, no credit card needed
 3. **Rule-based** — fuzzy match against `data/answers.json`, always available
 
-All LLM calls go through `LLMRouter.complete()` or `complete_json()`. Cache layer (72h TTL, SHA-256 keyed) sits in front. Seven prompt templates in `llm/prompts.py`.
+All LLM calls go through `LLMRouter.complete()` or `complete_json()`. Cache layer (72h TTL, SHA-256 keyed) sits in front. Seven prompt templates in `llm/prompts.py` — all JSON prompts declare their schema inline and demand JSON-only output with no thinking preamble or code fences, to keep Gemma 4's instruction-following reliable across backends.
 
 ### Multi-Resume System (`resume/manager.py`)
 
@@ -82,6 +87,10 @@ Adding a new job site: create `browser/platforms/newsite.py` subclassing `JobPla
 `ApplicationEngine` runs the full pipeline with **per-platform error isolation** (one platform crashing doesn't stop others). Event-driven via `EventEmitter` pub/sub — GUI subscribes to events, CLI uses print handlers.
 
 Pipeline: discover -> fetch description -> score (all resumes) -> decide -> fill (AI) -> apply -> track gaps -> evolve resume.
+
+**Event names** (defined in `orchestrator/events.py`): `run_started`, `resume_parsed`, `platform_started`, `platform_login_needed`, `platform_login_failed`, `search_started`, `jobs_found`, `job_scored`, `user_review_needed`, `application_started`, `application_complete`, `platform_error`, `platform_finished`, `evolution_triggers`, `run_finished`, `captcha_detected`. Most are fire-and-forget via `emit()`. User-blocking events (e.g. `user_review_needed`) use `emit_and_wait()` — the GUI handler must call `resolve_event(name, result)` to unblock the pipeline (5-minute default timeout).
+
+**Registered platforms** (`browser/platforms/__init__.py`): `linkedin`, `indeed`, `dice`, `ziprecruiter`.
 
 ### Resume Evolution (`resume/evolution.py`)
 
