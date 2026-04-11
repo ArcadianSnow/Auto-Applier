@@ -97,8 +97,25 @@ async def apply_to_job(
         gap.source = platform.source_id
         repository.save(gap)
 
-    # Build application record
-    status = "dry_run" if dry_run else ("applied" if result.success else "failed")
+    # Build application record.
+    #
+    # The old logic was `status = "dry_run" if dry_run else ...`
+    # which marked EVERY dry-run job as 'dry_run' regardless of
+    # whether the apply actually succeeded — external redirects,
+    # failed form walks, missing apply buttons, and honeypot-blocked
+    # forms all looked identical to real dry-run applies. That's
+    # why 'Sr. Marketing Measurement Analyst (Remote)' showed as an
+    # apply in the dashboard when it was actually skipped as external.
+    #
+    # New logic: dry-run status only applies when the APPLY ACTUALLY
+    # REACHED THE SUBMIT STEP. A failed apply during dry-run is
+    # recorded as 'failed' with the real failure_reason intact, so
+    # the dashboard counter and patterns analysis reflect what
+    # actually happened.
+    if result.success:
+        status = "dry_run" if dry_run else "applied"
+    else:
+        status = "failed"
     app = Application(
         job_id=job.job_id,
         status=status,

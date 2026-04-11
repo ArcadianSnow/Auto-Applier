@@ -216,6 +216,12 @@ def normalize() -> dict:
     4. Canonicalize company names on Jobs (``normalize_company``) —
        preserves the original casing so it's recoverable from backup
        but ensures consistency for dedup.
+    5. Retroactively correct 'dry_run' applications that have a
+       non-empty failure_reason. These are the false positives from
+       the old pipeline.apply_to_job bug where ANY dry-run apply
+       was marked 'dry_run' regardless of whether the apply
+       actually reached the submit step. Those rows should be
+       'failed'.
 
     Returns a dict describing what changed.
     """
@@ -224,6 +230,7 @@ def normalize() -> dict:
         "application_statuses_fixed": 0,
         "followup_statuses_fixed": 0,
         "companies_renormalized": 0,
+        "false_dry_runs_corrected": 0,
     }
 
     # Step 1: dedup jobs
@@ -248,16 +255,26 @@ def normalize() -> dict:
     if changes["jobs_deduped"] or changes["companies_renormalized"]:
         _rewrite(Job, kept)
 
-    # Step 2: application status aliases
+    # Step 2: application status aliases + false-dry-run correction
     apps = repository.load_all(Application)
     apps_changed = False
     for a in apps:
-        if a.status in _APPLICATION_STATUSES:
-            continue
-        alias = _APPLICATION_STATUS_ALIASES.get(a.status.lower().strip())
-        if alias:
-            a.status = alias
-            changes["application_statuses_fixed"] += 1
+        # 2a: canonical alias rewrite
+        if a.status not in _APPLICATION_STATUSES:
+            alias = _APPLICATION_STATUS_ALIASES.get(a.status.lower().strip())
+            if alias:
+                a.status = alias
+                changes["application_statuses_fixed"] += 1
+                apps_changed = True
+        # 2b: dry_run + failure_reason = historical false apply from
+        # the pipeline.apply_to_job bug. Rewrite as 'failed'.
+        if (
+            a.status == "dry_run"
+            and a.failure_reason
+            and a.failure_reason.strip()
+        ):
+            a.status = "failed"
+            changes["false_dry_runs_corrected"] += 1
             apps_changed = True
     if apps_changed:
         _rewrite(Application, apps)
