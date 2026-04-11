@@ -49,8 +49,16 @@ LOGGED_IN_SELECTORS = [
     "a[data-gnav-element-name='Settings']",
 ]
 
-# Job card selectors on the search results page
+# Job card selectors on the search results page.
+# Indeed's DOM changes frequently — newest selectors go at the top,
+# historical ones stay as fallbacks so old profiles keep working.
 JOB_CARD_SELECTORS = [
+    # 2024+ mosaic layout
+    "div[data-testid='slider_item']",
+    "div[class*='job_seen_beacon']",
+    "div.cardOutline",
+    # Older layouts
+    "li.css-5lfssm",
     ".job_seen_beacon",
     ".resultContent",
     "[data-jk]",
@@ -63,22 +71,29 @@ JOB_CARD_SELECTORS = [
 
 # Job title within a card
 JOB_TITLE_SELECTORS = [
+    # 2024+ layouts — titles are usually inside an h2 → span with
+    # the actual text, wrapped by an anchor with data-jk.
+    "h2.jobTitle > a > span",
+    "h2[class*='jobTitle'] a span",
+    "a[data-jk] span[title]",
     "h2.jobTitle a",
     ".jobTitle > a",
     "a[data-jk]",
     ".jcs-JobTitle",
     "h2.jobTitle span[title]",
+    "h2 span[title]",
     ".jobTitle a span",
 ]
 
 # Company name within a card
 JOB_COMPANY_SELECTORS = [
+    "span[data-testid='company-name']",
     "[data-testid='company-name']",
+    "div[data-testid='company-name']",
     ".companyName",
     ".company_location .companyName",
     "span.css-1x7skt3",
     ".resultContent .company",
-    "span[data-testid='company-name']",
 ]
 
 # Location within a card
@@ -191,11 +206,16 @@ class IndeedPlatform(JobPlatform):
         "job posting has expired",
     ]
 
+    # Indeed challenge paths. Narrow on purpose: generic prefixes
+    # like '/account/login/challenge' used to be here but they match
+    # normal login-flow URLs like '/account/login?challenge=email'
+    # and fired on every run. Only paths that are EXCLUSIVELY used
+    # for automation challenges stay.
     captcha_url_patterns = [
         "/captcha",
         "/recaptcha",
-        "/account/login/challenge",
         "/hcaptcha",
+        "/cloudflare/challenge",
     ]
 
     # ------------------------------------------------------------------
@@ -241,14 +261,40 @@ class IndeedPlatform(JobPlatform):
     # ------------------------------------------------------------------
 
     async def search_jobs(self, keyword: str, location: str) -> list[Job]:
-        """Search Indeed Jobs with Easy Apply filter enabled.
+        """Search Indeed Jobs and return job cards from the results.
 
-        Uses the ``fromage=14`` param for last 14 days and the
-        ``sc=0kf:attr(DSQF7)`` param for Easily Apply filter.
-        Paginates through up to MAX_SEARCH_PAGES pages.
+        Uses a minimal search URL so the results aren't over-filtered:
+
+        - No 'fromage' date filter — the old 14-day limit excluded
+          legitimate matching jobs that happened to be older.
+        - No 'sc=0kf:attr(DSQF7)' Easily Apply filter — Indeed has
+          quietly deprecated this attribute and with it active most
+          searches return zero cards even when matching jobs exist.
+
+        We let the scoring step decide which jobs are worth applying
+        to, and the platform adapter's own _is_external_apply check
+        skips jobs that aren't Indeed Apply when we actually try to
+        click Apply. This means more candidate jobs reach scoring
+        but the apply-click rate stays the same.
         """
         page = await self.get_page()
         await self.check_and_abort_on_captcha(page)
+
+        # Warm-up: visit the Indeed homepage and do a quick organic
+        # scroll before hitting the search URL. Matches the LinkedIn
+        # pattern — cold navigation to a filtered search URL from a
+        # fresh tab is an automation tell.
+        try:
+            if "indeed.com" not in page.url.lower():
+                logger.info("Indeed: warm-up via homepage before search")
+                await page.goto(
+                    "https://www.indeed.com/",
+                    wait_until="domcontentloaded",
+                )
+                await reading_pause(page)
+                await simulate_organic_behavior(page)
+        except Exception as exc:
+            logger.debug("Indeed warm-up skipped: %s", exc)
 
         jobs: list[Job] = []
         encoded_kw = quote_plus(keyword)
@@ -260,8 +306,6 @@ class IndeedPlatform(JobPlatform):
                 f"https://www.indeed.com/jobs"
                 f"?q={encoded_kw}"
                 f"&l={encoded_loc}"
-                f"&fromage=14"
-                f"&sc=0kf%3Aattr(DSQF7)%3B"
                 f"&start={start}"
             )
 
@@ -307,17 +351,53 @@ class IndeedPlatform(JobPlatform):
 
         # Find all job card containers
         cards = []
+        matched_selector = ""
         for sel in JOB_CARD_SELECTORS:
             try:
                 cards = await page.query_selector_all(sel)
                 if cards:
+                    matched_selector = sel
                     logger.debug("Found %d job cards via '%s'", len(cards), sel)
                     break
             except Exception:
                 continue
 
         if not cards:
-            logger.warning("Indeed: No job cards found on page")
+            # No cards found — dump some diagnostic info so we can
+            # tell WHY. Is the page showing a captcha? A 'no results'
+            # banner? A redirect? A country-specific variant of Indeed
+            # that uses different class names? Without this log line
+            # the user just sees '0 jobs found' and can't debug.
+            try:
+                current_url = page.url
+                title = await page.title()
+                body = await page.inner_text("body")
+            except Exception:
+                current_url = "?"
+                title = "?"
+                body = ""
+            snippet = body.strip()[:400].replace("\n", " | ")
+            logger.warning(
+                "Indeed: 0 job cards found.\n"
+                "  url=%s\n"
+                "  title=%s\n"
+                "  page snippet: %s",
+                current_url, title, snippet,
+            )
+            # Also check for the common "no results" signals so we can
+            # say it explicitly in the log.
+            body_lower = body.lower()
+            if "did not match any jobs" in body_lower or "no jobs" in body_lower:
+                logger.warning(
+                    "Indeed is telling us zero jobs match the search — "
+                    "try broader keywords or a wider location."
+                )
+            elif "unusual activity" in body_lower or "verify" in body_lower:
+                logger.warning(
+                    "Indeed page contains 'verify' / 'unusual activity' "
+                    "text. If you see a captcha in the browser window, "
+                    "solve it manually and retry."
+                )
             return jobs
 
         for card in cards:
