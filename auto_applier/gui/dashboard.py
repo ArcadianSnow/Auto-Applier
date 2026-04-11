@@ -18,7 +18,6 @@ from auto_applier.gui.styles import (
 from auto_applier.orchestrator.events import (
     EventEmitter,
     RUN_STARTED,
-    RESUME_PARSED,
     PLATFORM_STARTED,
     PLATFORM_LOGIN_NEEDED,
     PLATFORM_LOGIN_FAILED,

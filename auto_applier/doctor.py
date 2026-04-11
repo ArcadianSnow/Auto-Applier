@@ -113,7 +113,19 @@ def check_user_config() -> CheckResult:
             fix="Delete data/user_config.json and re-run the wizard",
         )
     personal = data.get("personal_info", {}) or data.get("personal", {}) or data
-    missing = [k for k in ("name", "email") if not personal.get(k)]
+    # Accept either a combined 'name' field or first_name + last_name.
+    # The wizard saves them separately; the fixture generator writes
+    # both. Either shape counts as "has a name".
+    has_name = bool(
+        personal.get("name")
+        or (personal.get("first_name") and personal.get("last_name"))
+    )
+    has_email = bool(personal.get("email"))
+    missing = []
+    if not has_name:
+        missing.append("name")
+    if not has_email:
+        missing.append("email")
     if missing:
         return CheckResult(
             "user_config.json", WARN,

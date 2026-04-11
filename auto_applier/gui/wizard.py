@@ -39,15 +39,15 @@ class WizardApp(tk.Tk):
 
         apply_theme(self)
 
-        # Shared state -- Variables accessible by all steps
+        # Shared state -- Variables accessible by all steps.
+        # These MUST be created before _init_variables() because
+        # _load_saved_config() (called at the end of _init_variables)
+        # reads resume_list/answer_vars back from user_config.json.
         self.data: dict[str, tk.Variable] = {}
-        self._init_variables()
-
-        # Resume list: list of (label, path) tuples, managed by ResumesStep
         self.resume_list: list[tuple[str, str]] = []
-
-        # Answer variables: populated by AnswersStep
         self.answer_vars: dict[str, tk.StringVar] = {}
+
+        self._init_variables()
 
         # Build UI structure
         self._build_header()
