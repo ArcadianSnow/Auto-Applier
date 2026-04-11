@@ -324,6 +324,80 @@ def normalize():
 
 @cli.command()
 @click.argument("job_id")
+@click.option("--resume", default=None, help="Resume label to use (defaults to best match)")
+def tailor(job_id: str, resume: str):
+    """Generate a tailored PDF resume for a specific stored job."""
+    import asyncio as _asyncio
+    from auto_applier.llm.router import LLMRouter
+    from auto_applier.resume.manager import ResumeManager
+    from auto_applier.resume.tailor import (
+        ResumeTailor, render_html, render_pdf,
+        save_tailored_json, tailored_pdf_path,
+    )
+    from auto_applier.storage.models import Job
+    from auto_applier.storage.repository import load_all
+
+    jobs = [j for j in load_all(Job) if j.job_id == job_id]
+    if not jobs:
+        click.echo(f"No job found with id '{job_id}'.")
+        return
+    job = jobs[0]
+
+    async def _run():
+        router = LLMRouter()
+        mgr = ResumeManager(router)
+        label = resume
+        if not label:
+            resumes = mgr.list_resumes()
+            if not resumes:
+                return "No resumes loaded."
+            label = resumes[0].label
+        resume_text = mgr.get_resume_text(label)
+        if not resume_text:
+            return f"Resume '{label}' has no parsed text."
+
+        click.echo(f"Tailoring resume '{label}' for {job.title} @ {job.company}...")
+        tailor_obj = ResumeTailor(router)
+        tailored = await tailor_obj.tailor(
+            resume_text=resume_text,
+            job_description=job.description,
+            company_name=job.company,
+            job_title=job.title,
+            job_id=job.job_id,
+            resume_label=label,
+        )
+        if tailored is None:
+            return "LLM failed to produce a tailored resume. See logs."
+
+        # Pull name/contact from user_config.json if available
+        cfg = load_user_config()
+        personal = cfg.get("personal_info", cfg)
+        name = personal.get("name", "")
+        contact_bits = []
+        for k in ("email", "phone", "city"):
+            v = personal.get(k, "")
+            if v:
+                contact_bits.append(str(v))
+        contact = " | ".join(contact_bits)
+
+        html_content = render_html(tailored, name=name, contact=contact)
+        json_path = save_tailored_json(tailored)
+        pdf_path = tailored_pdf_path(job.job_id)
+
+        ok = await render_pdf(html_content, pdf_path)
+        if not ok:
+            return f"HTML written to {json_path.with_suffix('.html')}, but PDF render failed."
+        # Keep a copy of the HTML alongside the PDF for debugging
+        html_path = pdf_path.with_suffix(".html")
+        html_path.write_text(html_content, encoding="utf-8")
+        return f"Wrote {pdf_path}"
+
+    result = _asyncio.run(_run())
+    click.echo(result)
+
+
+@cli.command()
+@click.argument("job_id")
 @click.option("--resume", default=None, help="Resume label to use (defaults to first loaded)")
 def outreach(job_id: str, resume: str):
     """Generate a LinkedIn connection-request message for a specific job."""

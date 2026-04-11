@@ -198,6 +198,38 @@ CLASSIFY_JOB_ARCHETYPE = PromptTemplate(
 
 
 # ------------------------------------------------------------------
+# Per-JD tailored resume rewrite
+# ------------------------------------------------------------------
+
+TAILOR_RESUME = PromptTemplate(
+    system=(
+        "Rewrite a resume to emphasize the content most relevant to a "
+        "specific job. Rules:\n"
+        "- Never invent skills, employers, dates, certifications, or "
+        "outcomes. Every bullet must exist in the original resume in "
+        "some form.\n"
+        "- You may reorder sections and bullets, rephrase wording, and "
+        "promote relevant experience. You may NOT add anything new.\n"
+        "- Inject keywords from the job description ONLY where they "
+        "already apply to real experience.\n"
+        "- Keep it ATS-friendly: plain text, short sentences, strong "
+        "action verbs.\n\n"
+        "Return ONLY this JSON (no preamble, no code fences):\n"
+        '{"summary": str (2-3 sentence professional summary), '
+        '"skills": [str], '
+        '"experience": [{"title": str, "company": str, "dates": str, '
+        '"bullets": [str]}], '
+        '"education": [{"school": str, "degree": str, "year": str}]}'
+    ),
+    template=(
+        "Original resume:\n{resume_text}\n\n"
+        "Target job:\n{job_title} at {company_name}\n\n"
+        "Job description:\n{job_description}"
+    ),
+)
+
+
+# ------------------------------------------------------------------
 # LinkedIn outreach / connection message
 # ------------------------------------------------------------------
 

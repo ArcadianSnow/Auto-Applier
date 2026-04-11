@@ -66,6 +66,15 @@ async def apply_to_job(
 ) -> Application:
     """Apply to a single job and return the Application record."""
 
+    # If a tailored resume PDF was generated ahead of time for this
+    # job, use it for the upload instead of the original file. The
+    # tailored version is strictly additive — falls back silently
+    # when none exists.
+    from auto_applier.resume.tailor import tailored_pdf_path
+    tailored = tailored_pdf_path(job.job_id)
+    if tailored.exists():
+        resume_path = str(tailored)
+
     # Create FormFiller with context for this specific job
     form_filler = FormFiller(
         router=router,
