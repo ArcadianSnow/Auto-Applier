@@ -235,6 +235,51 @@ def doctor():
 
 
 @cli.command()
+def patterns():
+    """Surface conversion patterns from the application history."""
+    from auto_applier.analysis.patterns import analyze
+
+    report = analyze()
+    if report.total_applications == 0:
+        click.echo("No applications recorded yet — nothing to analyze.")
+        return
+
+    click.echo(
+        f"\nApplication history ({report.total_applications} total):\n"
+        f"  applied:  {report.applied}\n"
+        f"  failed:   {report.failed}\n"
+        f"  skipped:  {report.skipped}\n"
+        f"  dry-run:  {report.dry_run}"
+    )
+
+    def _section(title: str, rows: list, format_key=lambda k: str(k)):
+        if not rows:
+            return
+        click.echo(f"\n{title}:")
+        click.echo(f"  {'key':24s}  rate    applied/total")
+        for key, applied, total, rate in rows[:10]:
+            pct = f"{rate*100:5.1f}%"
+            click.echo(f"  {format_key(key):24s}  {pct}   {applied}/{total}")
+
+    _section("By resume", report.resume_stats)
+    _section("By platform", report.platform_stats)
+    _section("By search keyword", report.keyword_stats)
+    _section("By score bucket", report.score_buckets)
+    _section("By hour of day", report.hour_stats, format_key=lambda h: f"{h:02d}:00")
+    _section("By day of week", report.dow_stats)
+
+    if report.dead_listing_sources:
+        click.echo("\nDead listings by platform:")
+        for source, n in report.dead_listing_sources:
+            click.echo(f"  {source:24s}  {n}")
+
+    if report.top_gaps:
+        click.echo("\nMost-asked unknown fields (skill gaps):")
+        for field, count in report.top_gaps[:10]:
+            click.echo(f"  {count:4d}x  {field}")
+
+
+@cli.command()
 def fsck():
     """Check CSV data for integrity issues (read-only)."""
     from auto_applier.storage.integrity import fsck as run_fsck
