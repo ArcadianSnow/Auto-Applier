@@ -10,13 +10,29 @@ from auto_applier.storage import repository
 
 
 async def discover_jobs(platform, keyword: str, location: str) -> list[Job]:
-    """Search for jobs and filter out already-applied ones."""
+    """Search for jobs and filter out duplicates.
+
+    Filters at two levels:
+    1. Per-source: already-applied ``(job_id, source)`` pairs.
+    2. Canonical: cross-source duplicates matched by ``canonical_hash``
+       (same company + title normalized). Catches the same listing
+       cross-posted to multiple platforms or discovered in a previous
+       run under a different job_id.
+    """
     all_jobs = await platform.search_jobs(keyword, location)
-    new_jobs = []
+    new_jobs: list[Job] = []
+    seen_this_batch: set[str] = set()
     for job in all_jobs:
-        if not repository.job_already_applied(job.job_id, job.source):
-            repository.save(job)
-            new_jobs.append(job)
+        if repository.job_already_applied(job.job_id, job.source):
+            continue
+        if job.canonical_hash:
+            if job.canonical_hash in seen_this_batch:
+                continue
+            if repository.job_seen_canonically(job.canonical_hash):
+                continue
+            seen_this_batch.add(job.canonical_hash)
+        repository.save(job)
+        new_jobs.append(job)
     return new_jobs
 
 

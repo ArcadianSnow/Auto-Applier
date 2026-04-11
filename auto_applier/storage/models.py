@@ -30,7 +30,14 @@ class Job:
     description: str = ""
     search_keyword: str = ""
     source: str = ""  # "linkedin", "indeed", etc.
+    canonical_hash: str = ""  # cross-source dedup key (see storage/dedup.py)
     found_at: str = field(default_factory=_now_iso)
+
+    def __post_init__(self) -> None:
+        """Populate canonical_hash from company + title if not set explicitly."""
+        if not self.canonical_hash and self.company and self.title:
+            from auto_applier.storage.dedup import canonical_job_hash
+            self.canonical_hash = canonical_job_hash(self.company, self.title)
 
 
 @dataclass

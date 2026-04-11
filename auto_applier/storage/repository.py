@@ -87,6 +87,21 @@ def job_already_applied(job_id: str, source: str) -> bool:
     return False
 
 
+def job_seen_canonically(canonical_hash: str) -> bool:
+    """Return True if any previously-recorded job has this canonical hash.
+
+    Used to skip cross-posted duplicates — the same "Senior Data
+    Analyst at Acme Corp" listing appearing on both LinkedIn and
+    Indeed, within or across runs.
+
+    Empty hash is always False (unknown identity — callers fall back
+    to per-source ``job_already_applied``).
+    """
+    if not canonical_hash:
+        return False
+    return any(job.canonical_hash == canonical_hash for job in load_all(Job))
+
+
 def get_todays_application_count() -> int:
     """Return the number of applications submitted (or dry-run) today (UTC)."""
     today = datetime.now(timezone.utc).date().isoformat()
