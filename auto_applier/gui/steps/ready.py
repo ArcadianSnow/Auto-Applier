@@ -27,12 +27,16 @@ class ReadyStep(ttk.Frame):
     def _build(self) -> None:
         # Heading
         ttk.Label(
-            self, text="Ready to Apply", style="Heading.TLabel",
+            self, text="All set — let's check everything", style="Heading.TLabel",
         ).pack(anchor="w", padx=PAD_X, pady=(PAD_Y, 4))
 
         ttk.Label(
             self,
-            text="Review your configuration and launch.",
+            text=(
+                "Below is a quick recap of your settings and an automatic "
+                "system check. When everything shows green, pick how you "
+                "want to start."
+            ),
             style="Small.TLabel",
         ).pack(anchor="w", padx=PAD_X, pady=(0, PAD_Y))
 
@@ -46,33 +50,56 @@ class ReadyStep(ttk.Frame):
         btn_frame.pack(fill="x", padx=PAD_X, pady=(0, PAD_Y))
 
         self._run_button = ttk.Button(
-            btn_frame, text="Run", style="Primary.TButton",
+            btn_frame, text="Start applying for real",
+            style="Primary.TButton",
             command=lambda: self._launch(dry_run=False),
         )
         self._run_button.pack(side="left", padx=(0, 8))
+        from auto_applier.gui.tooltip import Tooltip
+        Tooltip(
+            self._run_button,
+            "Auto Applier will open the job sites, find matching jobs, "
+            "and actually submit applications up to your daily limit. "
+            "Use this once you've tried Test Run and everything looked "
+            "right.",
+        )
 
-        ttk.Button(
-            btn_frame, text="Dry Run", style="Accent.TButton",
+        test_btn = ttk.Button(
+            btn_frame, text="Test run (no real applications)",
+            style="Accent.TButton",
             command=lambda: self._launch(dry_run=True),
-        ).pack(side="left", padx=(0, 8))
+        )
+        test_btn.pack(side="left", padx=(0, 8))
+        Tooltip(
+            test_btn,
+            "Go through every step — search jobs, score them, fill out "
+            "the forms — but STOP right before submitting. Perfect for "
+            "your first time. Nothing gets sent to employers.",
+        )
 
-        ttk.Button(
-            btn_frame, text="Recheck",
+        recheck_btn = ttk.Button(
+            btn_frame, text="Check again",
             command=self._recheck,
-        ).pack(side="left", padx=(0, 8))
+        )
+        recheck_btn.pack(side="left", padx=(0, 8))
+        Tooltip(
+            recheck_btn,
+            "Re-run the system check below. Use this after you fix "
+            "something (for example, after turning on the AI).",
+        )
 
         ttk.Button(
-            btn_frame, text="Exit",
+            btn_frame, text="Close",
             command=self.wizard.destroy,
         ).pack(side="right")
 
     def _recheck(self) -> None:
-        """Re-run the preflight checks without rebuilding the summary."""
+        """Re-run the checks without rebuilding the summary."""
         for w in self._preflight_rows:
             w.destroy()
         self._preflight_rows.clear()
         self._preflight_status_label.configure(
-            text="Running preflight checks...", fg=TEXT_LIGHT,
+            text="Checking everything...", fg=TEXT_LIGHT,
         )
         self._start_preflight()
 
@@ -188,13 +215,14 @@ class ReadyStep(ttk.Frame):
         self._preflight_card.pack(fill="x", padx=4, pady=4)
 
         tk.Label(
-            self._preflight_card, text="System Check", font=FONT_SUBHEADING,
+            self._preflight_card, text="Making sure everything works",
+            font=FONT_SUBHEADING,
             fg=PRIMARY, bg=BG_CARD,
         ).pack(anchor="w", pady=(0, 6))
 
         self._preflight_status_label = tk.Label(
             self._preflight_card,
-            text="Running preflight checks...",
+            text="Checking everything...",
             font=FONT_BODY, fg=TEXT_LIGHT, bg=BG_CARD,
             anchor="w", justify="left",
         )
@@ -238,13 +266,19 @@ class ReadyStep(ttk.Frame):
         self._has_fails = fails > 0
 
         if fails:
-            summary = f"{passes} pass · {warns} warn · {fails} FAIL"
+            summary = (
+                f"Something needs to be fixed before you can start. "
+                f"See the red X marks below."
+            )
             summary_color = DANGER
         elif warns:
-            summary = f"{passes} pass · {warns} warn · ready (warnings are optional)"
+            summary = (
+                f"Ready to go. The yellow ! marks below are optional "
+                f"things you might want to set up later."
+            )
             summary_color = TEXT_LIGHT
         else:
-            summary = f"{passes} pass · everything ready"
+            summary = "Everything looks perfect. You're ready to start."
             summary_color = STATUS_SUCCESS
         self._preflight_status_label.configure(text=summary, fg=summary_color)
 
@@ -306,8 +340,9 @@ class ReadyStep(ttk.Frame):
         # Validate resumes
         if not self.wizard.resume_list:
             messagebox.showwarning(
-                "No Resumes",
-                "Please go back and add at least one resume.",
+                "Missing resume",
+                "You haven't added a resume yet. Click 'Back' until you "
+                "see the Resumes page, then add at least one.",
                 parent=self.wizard,
             )
             return
@@ -316,10 +351,14 @@ class ReadyStep(ttk.Frame):
         try:
             self.wizard.save_config()
             self.wizard.save_answers()
-        except Exception as e:
+        except Exception as exc:
             messagebox.showerror(
-                "Save Error",
-                f"Failed to save configuration:\n{e}",
+                "Couldn't save",
+                (
+                    "Auto Applier couldn't save your settings. This "
+                    "usually means the data folder is read-only. Error "
+                    f"details:\n\n{exc}"
+                ),
                 parent=self.wizard,
             )
             return

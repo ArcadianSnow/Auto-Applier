@@ -28,12 +28,16 @@ class LLMSetupStep(ttk.Frame):
     def _build(self) -> None:
         # Heading
         ttk.Label(
-            self, text="AI Setup", style="Heading.TLabel",
+            self, text="Set up the AI helper", style="Heading.TLabel",
         ).pack(anchor="w", padx=PAD_X, pady=(PAD_Y, 4))
 
         ttk.Label(
             self,
-            text="Configure which AI backends to use for scoring and form filling.",
+            text=(
+                "Auto Applier uses a free AI program called Ollama to read job "
+                "postings and fill out applications. Follow the numbered steps "
+                "below — it's a one-time setup."
+            ),
             style="Small.TLabel",
         ).pack(anchor="w", padx=PAD_X, pady=(0, PAD_Y))
 
@@ -53,7 +57,7 @@ class LLMSetupStep(ttk.Frame):
         header_row.pack(fill="x", pady=(0, 8))
 
         tk.Label(
-            header_row, text="Ollama (Local AI)", font=FONT_SUBHEADING,
+            header_row, text="Local AI (Ollama)", font=FONT_SUBHEADING,
             fg=PRIMARY, bg=BG_CARD,
         ).pack(side="left")
 
@@ -70,67 +74,77 @@ class LLMSetupStep(ttk.Frame):
         )
         self._ollama_status_label.pack(side="left", padx=(4, 0))
 
-        # Model entry
-        model_row = tk.Frame(ollama_card, bg=BG_CARD)
-        model_row.pack(fill="x", pady=(0, 8))
+        # --- Step 1: Download Ollama ---
+        self._step_row(
+            ollama_card, "1.",
+            "Download and install Ollama from ollama.com",
+            "This is the free AI program that powers Auto Applier. "
+            "Clicking the button opens your web browser.",
+            "Open ollama.com",
+            self._open_ollama_website,
+        )
 
-        tk.Label(
-            model_row, text="Model:", font=FONT_BODY,
-            fg=TEXT, bg=BG_CARD,
-        ).pack(side="left")
+        # --- Step 2: Turn it on ---
+        self._start_server_btn = self._step_row(
+            ollama_card, "2.",
+            "Turn on the AI",
+            "After you finish installing Ollama, click here to start it "
+            "running in the background. You won't see a window — that's "
+            "normal.",
+            "Turn on AI",
+            self._start_server,
+        )
 
+        # --- Step 3: Download the AI brain ---
+        # Model picker (hidden unless advanced — most people never touch this)
         from auto_applier.config import OLLAMA_MODEL_PRESETS
+        self._install_model_btn = self._step_row(
+            ollama_card, "3.",
+            "Download the AI brain (about 10 GB, one time only)",
+            "This downloads the AI model file so everything runs on your "
+            "own computer. It can take 15–30 minutes depending on your "
+            "internet speed — you'll see a progress bar below.",
+            "Download AI brain",
+            self._install_model,
+        )
+
+        # Advanced model picker folded into a small row beneath Step 3
+        adv_row = tk.Frame(ollama_card, bg=BG_CARD)
+        adv_row.pack(fill="x", pady=(0, 8), padx=(24, 0))
+        tk.Label(
+            adv_row, text="Advanced — which AI model:", font=FONT_SMALL,
+            fg=TEXT_MUTED, bg=BG_CARD,
+        ).pack(side="left")
         ttk.Combobox(
-            model_row, textvariable=self.wizard.data["ollama_model"],
-            values=OLLAMA_MODEL_PRESETS, font=FONT_MONO, width=28,
-        ).pack(side="left", padx=(8, 12))
+            adv_row, textvariable=self.wizard.data["ollama_model"],
+            values=OLLAMA_MODEL_PRESETS, font=FONT_MONO, width=22,
+        ).pack(side="left", padx=(8, 0))
+        from auto_applier.gui.tooltip import attach_help_icon
+        attach_help_icon(adv_row, (
+            "Most people should leave this as 'gemma4:e4b' (the default). "
+            "Pick 'gemma4:e2b' if your computer has less than 16 GB of "
+            "memory, or 'gemma4:31b' if you have a powerful gaming PC. "
+            "The tool works fine with any of these — the larger ones are "
+            "just a bit smarter at reading job descriptions."
+        ), bg=BG_CARD).pack(side="left", padx=(6, 0))
 
-        # Three-button action row: Check, Start server, Install model
-        actions_row = tk.Frame(ollama_card, bg=BG_CARD)
-        actions_row.pack(fill="x", pady=(4, 8))
-
-        ttk.Button(
-            actions_row, text="Check Status",
-            command=self._test_ollama,
-        ).pack(side="left", padx=(0, 6))
-
-        self._start_server_btn = ttk.Button(
-            actions_row, text="Start Server",
-            command=self._start_server,
+        # --- Step 4: Verify ---
+        self._step_row(
+            ollama_card, "4.",
+            "Make sure everything works",
+            "Click here to test your setup. A green dot next to 'Local AI "
+            "(Ollama)' up top means you're done.",
+            "Check it's working",
+            self._test_ollama,
         )
-        self._start_server_btn.pack(side="left", padx=(0, 6))
 
-        self._install_model_btn = ttk.Button(
-            actions_row, text="Install Model",
-            command=self._install_model,
-        )
-        self._install_model_btn.pack(side="left")
-
-        # Live progress line (used during pull + server startup)
+        # Live progress / status line
         self._ollama_progress = tk.Label(
             ollama_card, text="", font=FONT_SMALL,
             fg=TEXT_MUTED, bg=BG_CARD, anchor="w", justify="left",
             wraplength=560,
         )
-        self._ollama_progress.pack(fill="x", pady=(2, 6))
-
-        tk.Label(
-            ollama_card,
-            text=(
-                "New here?  1) Install Ollama from ollama.com  "
-                "2) Click Start Server  3) Click Install Model"
-            ),
-            font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
-        ).pack(anchor="w")
-
-        tk.Label(
-            ollama_card,
-            text=(
-                "Model presets:  e2b (small, CPU-friendly)  •  "
-                "e4b (default, 16 GB RAM)  •  31b (dev machines)"
-            ),
-            font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD,
-        ).pack(anchor="w", pady=(2, 0))
+        self._ollama_progress.pack(fill="x", pady=(6, 0))
 
         # --- Gemini card ---
         gemini_card = tk.Frame(
@@ -143,7 +157,7 @@ class LLMSetupStep(ttk.Frame):
         g_header.pack(fill="x", pady=(0, 8))
 
         tk.Label(
-            g_header, text="Gemini (Cloud Fallback)", font=FONT_SUBHEADING,
+            g_header, text="Backup AI — optional", font=FONT_SUBHEADING,
             fg=PRIMARY, bg=BG_CARD,
         ).pack(side="left")
 
@@ -181,8 +195,14 @@ class LLMSetupStep(ttk.Frame):
 
         tk.Label(
             gemini_card,
-            text="Free at ai.google.dev -- 1,000 requests/day, no credit card required.",
+            text=(
+                "Optional: You can skip this whole section. Gemini is a "
+                "free Google AI you can use as a backup if your local "
+                "Ollama ever has trouble. Get a free key at ai.google.dev "
+                "— no credit card needed."
+            ),
             font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
+            justify="left", wraplength=560,
         ).pack(anchor="w")
 
         # --- Status summary card ---
@@ -223,6 +243,66 @@ class LLMSetupStep(ttk.Frame):
         """Draw a small colored circle on a canvas."""
         canvas.delete("all")
         canvas.create_oval(1, 1, 11, 11, fill=color, outline=color)
+
+    # ------------------------------------------------------------------
+    # Numbered-step row helper
+    # ------------------------------------------------------------------
+
+    def _step_row(
+        self,
+        parent: tk.Widget,
+        number: str,
+        title: str,
+        description: str,
+        button_label: str,
+        command,
+    ) -> ttk.Button:
+        """Render one numbered step: title, description, and action button.
+
+        Returns the created button so callers can enable/disable it.
+        """
+        container = tk.Frame(parent, bg=BG_CARD)
+        container.pack(fill="x", pady=(4, 2))
+
+        # Number + title row
+        head = tk.Frame(container, bg=BG_CARD)
+        head.pack(fill="x")
+        tk.Label(
+            head, text=number, font=FONT_SUBHEADING,
+            fg=PRIMARY, bg=BG_CARD, width=3, anchor="w",
+        ).pack(side="left")
+        tk.Label(
+            head, text=title, font=FONT_BODY,
+            fg=TEXT, bg=BG_CARD, anchor="w",
+        ).pack(side="left")
+
+        # Description (indented)
+        tk.Label(
+            container, text=description, font=FONT_SMALL,
+            fg=TEXT_LIGHT, bg=BG_CARD, anchor="w", justify="left",
+            wraplength=520,
+        ).pack(anchor="w", padx=(24, 0))
+
+        # Button (indented)
+        btn = ttk.Button(container, text=button_label, command=command)
+        btn.pack(anchor="w", padx=(24, 0), pady=(4, 0))
+        return btn
+
+    # ------------------------------------------------------------------
+    # Open Ollama website
+    # ------------------------------------------------------------------
+
+    def _open_ollama_website(self) -> None:
+        """Launch the default browser at the Ollama download page."""
+        import webbrowser
+        webbrowser.open("https://ollama.com/download", new=2)
+        self._ollama_progress.configure(
+            text=(
+                "Opened ollama.com in your browser. Finish the install, "
+                "then come back here and click 'Turn on AI'."
+            ),
+            fg=TEXT_LIGHT,
+        )
 
     # ------------------------------------------------------------------
     # Ollama test
@@ -296,51 +376,61 @@ class LLMSetupStep(ttk.Frame):
             self._ollama_available = False
             self._draw_dot(self._ollama_dot, STATUS_ERROR)
             self._ollama_status_label.configure(
-                text="Ollama not installed", fg=STATUS_ERROR,
+                text="Ollama isn't installed yet", fg=STATUS_ERROR,
             )
             self._ollama_progress.configure(
-                text="Download and install Ollama from ollama.com, then click Check Status again.",
+                text=(
+                    "Do Step 1: click 'Open ollama.com' above, download "
+                    "Ollama, run the installer, then come back here."
+                ),
                 fg=TEXT_LIGHT,
             )
         elif not server:
             self._ollama_available = False
             self._draw_dot(self._ollama_dot, DANGER)
             self._ollama_status_label.configure(
-                text="Server not running", fg=DANGER,
+                text="AI is installed but not turned on", fg=DANGER,
             )
             self._ollama_progress.configure(
-                text="Ollama is installed but the server isn't responding. Click Start Server.",
+                text="Do Step 2: click 'Turn on AI' above.",
                 fg=TEXT_LIGHT,
             )
         elif not version_ok:
             self._ollama_available = False
             self._draw_dot(self._ollama_dot, STATUS_ERROR)
             self._ollama_status_label.configure(
-                text=f"Upgrade Ollama (v{version} < {OLLAMA_MIN_VERSION})",
+                text="Ollama is out of date — please update it",
                 fg=STATUS_ERROR,
             )
             self._ollama_progress.configure(
-                text=f"Your Ollama is v{version}. Gemma 4 needs v{OLLAMA_MIN_VERSION}+. Reinstall from ollama.com.",
+                text=(
+                    f"Your Ollama version is {version}, but Auto Applier "
+                    f"needs {OLLAMA_MIN_VERSION} or newer. Click "
+                    f"'Open ollama.com' above to download the latest version."
+                ),
                 fg=TEXT_LIGHT,
             )
         elif not pulled:
             self._ollama_available = False
             self._draw_dot(self._ollama_dot, DANGER)
             self._ollama_status_label.configure(
-                text=f"Model '{model}' not installed", fg=DANGER,
+                text="AI brain hasn't been downloaded yet", fg=DANGER,
             )
             self._ollama_progress.configure(
-                text=f"Server v{version} is running but {model} hasn't been downloaded. Click Install Model.",
+                text="Do Step 3: click 'Download AI brain' above.",
                 fg=TEXT_LIGHT,
             )
         else:
             self._ollama_available = True
             self._draw_dot(self._ollama_dot, STATUS_SUCCESS)
             self._ollama_status_label.configure(
-                text=f"Ready (v{version}, {model})", fg=STATUS_SUCCESS,
+                text="Ready to go", fg=STATUS_SUCCESS,
             )
             self._ollama_progress.configure(
-                text="Everything's wired up. You can move on when you're ready.",
+                text=(
+                    f"Everything works (Ollama {version}, AI model {model}). "
+                    f"Click 'Next' at the bottom to continue."
+                ),
                 fg=STATUS_SUCCESS,
             )
 
@@ -358,13 +448,17 @@ class LLMSetupStep(ttk.Frame):
 
         if not ollama_binary_installed():
             self._ollama_progress.configure(
-                text="Ollama isn't installed. Get it from ollama.com first.",
+                text=(
+                    "Ollama isn't installed yet. Do Step 1 first — click "
+                    "'Open ollama.com' up top."
+                ),
                 fg=DANGER,
             )
             return
 
         self._ollama_progress.configure(
-            text="Starting Ollama server...", fg=TEXT_LIGHT,
+            text="Turning on the AI... (this takes a few seconds)",
+            fg=TEXT_LIGHT,
         )
         self._start_server_btn.configure(state="disabled")
 
@@ -395,7 +489,10 @@ class LLMSetupStep(ttk.Frame):
     def _on_server_ready(self, version: str) -> None:
         self._start_server_btn.configure(state="normal")
         self._ollama_progress.configure(
-            text=f"Server started (v{version}). Click Check Status or Install Model next.",
+            text=(
+                f"AI turned on successfully (Ollama {version}). Next, do "
+                f"Step 3 to download the AI brain."
+            ),
             fg=STATUS_SUCCESS,
         )
         self._test_ollama()
@@ -404,8 +501,10 @@ class LLMSetupStep(ttk.Frame):
         self._start_server_btn.configure(state="normal")
         self._ollama_progress.configure(
             text=(
-                "Couldn't start the server automatically. Open a terminal "
-                "and run 'ollama serve' yourself, then click Check Status."
+                "Couldn't turn on the AI automatically. Make sure you "
+                "finished installing Ollama, then try clicking 'Turn on "
+                "AI' again. If it still doesn't work, restart your "
+                "computer and try once more."
             ),
             fg=DANGER,
         )
@@ -420,17 +519,22 @@ class LLMSetupStep(ttk.Frame):
 
         self._install_model_btn.configure(state="disabled")
         self._ollama_progress.configure(
-            text=f"Starting download of {model}... this is ~10 GB for gemma4:e4b.",
+            text=(
+                f"Downloading the AI brain ({model})... This is about "
+                f"10 GB and can take 15–30 minutes. Don't close this "
+                f"window. You'll see live progress below."
+            ),
             fg=TEXT_LIGHT,
         )
 
         def worker():
             try:
                 ok = asyncio.run(_pull())
-            except Exception as e:
-                self.after(0, lambda: self._on_pull_done(False, str(e)))
+            except Exception as exc:
+                err_msg = str(exc)
+                self.after(0, lambda msg=err_msg: self._on_pull_done(False, msg))
                 return
-            self.after(0, lambda: self._on_pull_done(ok, ""))
+            self.after(0, lambda ok=ok: self._on_pull_done(ok, ""))
 
         async def _pull():
             from auto_applier.llm.ollama_backend import OllamaBackend
@@ -452,14 +556,17 @@ class LLMSetupStep(ttk.Frame):
         self._install_model_btn.configure(state="normal")
         if ok:
             self._ollama_progress.configure(
-                text="Model installed.", fg=STATUS_SUCCESS,
+                text="AI brain downloaded successfully.",
+                fg=STATUS_SUCCESS,
             )
             self._test_ollama()
         else:
-            msg = err or (
-                "Download failed. Make sure the server is running "
-                "(click Start Server) and try again."
+            msg = (
+                "Download failed. Make sure the AI is turned on (Step 2) "
+                "and your internet is working, then try again."
             )
+            if err:
+                msg += f"\n\nDetails: {err}"
             self._ollama_progress.configure(text=msg, fg=DANGER)
 
     # ------------------------------------------------------------------

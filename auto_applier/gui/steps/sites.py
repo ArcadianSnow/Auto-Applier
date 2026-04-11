@@ -44,12 +44,16 @@ class SitesStep(ttk.Frame):
     def _build(self) -> None:
         # Heading
         ttk.Label(
-            self, text="Select Job Platforms", style="Heading.TLabel",
+            self, text="Pick which job sites to use", style="Heading.TLabel",
         ).pack(anchor="w", padx=PAD_X, pady=(PAD_Y, 4))
 
         ttk.Label(
             self,
-            text="Choose which job sites to search. All are enabled by default.",
+            text=(
+                "Check the boxes for sites where you already have an "
+                "account. Not sure? Start with just LinkedIn — you can "
+                "always add more later."
+            ),
             style="Small.TLabel",
         ).pack(anchor="w", padx=PAD_X, pady=(0, PAD_Y))
 
@@ -83,8 +87,13 @@ class SitesStep(ttk.Frame):
 
         tk.Label(
             note_frame,
-            text="\u2139  You will log in manually in the browser window during runs. "
-                 "Credentials are never stored.",
+            text=(
+                "\u2139  When you start a run, Auto Applier opens a real "
+                "browser window and asks you to log in yourself the first "
+                "time. This is by design — it keeps your passwords safe "
+                "and avoids triggering site security. You only have to log "
+                "in once per site; after that, the browser remembers you."
+            ),
             font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG,
             wraplength=700, justify="left",
         ).pack(anchor="w")

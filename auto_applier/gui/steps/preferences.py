@@ -7,6 +7,61 @@ from auto_applier.gui.styles import (
     FONT_HEADING, FONT_SUBHEADING, FONT_BODY, FONT_SMALL,
     PAD_X, PAD_Y,
 )
+from auto_applier.gui.tooltip import attach_help_icon
+
+
+# Plain-English help text. Written as if explaining to someone who has
+# never used a job search tool before. One place so rewording is easy.
+HELP = {
+    "keywords": (
+        "These are the job titles Auto Applier will search for. "
+        "Type them exactly like you would on LinkedIn or Indeed.\n\n"
+        "Example: Data Analyst, Business Analyst, Reporting Specialist\n\n"
+        "Tip: Add 3–5 related titles. More titles means more jobs "
+        "found, but runs will take longer."
+    ),
+    "location": (
+        "Where you want to work. Type a city like 'Seattle, WA', "
+        "a whole country like 'United States', or just 'Remote' if "
+        "you only want work-from-home jobs.\n\n"
+        "Don't worry about matching each site's exact format — Auto "
+        "Applier handles the differences for you."
+    ),
+    "max_apps": (
+        "The most applications Auto Applier is allowed to actually "
+        "submit in one day. When it hits this number, it stops — "
+        "even if it finds more good jobs.\n\n"
+        "Start small (3–5) while you're trying it out. That way if "
+        "something surprises you, only a handful of applications went "
+        "out before you noticed.\n\n"
+        "When you trust it, you can turn this up to 10 or 15."
+    ),
+    "auto_apply": (
+        "Auto Applier gives every job a match score from 1 to 10 "
+        "based on your resume. Jobs at or above THIS number get "
+        "applied to automatically without asking you.\n\n"
+        "• 7 (the default) is 'strong match' — safe and recommended\n"
+        "• 8 or 9 = pickier, fewer applications but all top matches\n"
+        "• 5 or 6 = more aggressive, will apply to average matches\n\n"
+        "You can change this later any time."
+    ),
+    "cli_auto_apply": (
+        "Most people can ignore this setting — it only matters for "
+        "advanced users who run Auto Applier from a command window "
+        "(for example, on a schedule overnight).\n\n"
+        "Leave it the same as 'Auto-Apply Score Threshold' above "
+        "unless you specifically know you want it different."
+    ),
+    "review_min": (
+        "Jobs scoring BELOW this number are skipped automatically "
+        "— Auto Applier won't even bother showing them to you.\n\n"
+        "Jobs scoring between this number and the auto-apply number "
+        "show up in your Review queue on the dashboard, where you "
+        "can decide yes or no one at a time.\n\n"
+        "Default is 4. Anything below 4 out of 10 is almost never "
+        "worth applying to."
+    ),
+}
 
 
 class PreferencesStep(ttk.Frame):
@@ -44,12 +99,17 @@ class PreferencesStep(ttk.Frame):
         # Keywords
         kw_row = tk.Frame(search_card, bg=BG_CARD)
         kw_row.pack(fill="x", pady=(0, 12))
+        kw_label_row = tk.Frame(kw_row, bg=BG_CARD)
+        kw_label_row.pack(fill="x", anchor="w")
         tk.Label(
-            kw_row, text="Search Keywords", font=FONT_BODY,
+            kw_label_row, text="Job titles to search for", font=FONT_BODY,
             fg=TEXT, bg=BG_CARD,
-        ).pack(anchor="w")
+        ).pack(side="left")
+        attach_help_icon(kw_label_row, HELP["keywords"], bg=BG_CARD).pack(
+            side="left", padx=(6, 0),
+        )
         tk.Label(
-            kw_row, text="Comma-separated, e.g.: Data Analyst, Python Developer",
+            kw_row, text="Type one or more, separated by commas.",
             font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
         ).pack(anchor="w")
         ttk.Entry(
@@ -60,12 +120,17 @@ class PreferencesStep(ttk.Frame):
         # Location
         loc_row = tk.Frame(search_card, bg=BG_CARD)
         loc_row.pack(fill="x", pady=(0, 0))
+        loc_label_row = tk.Frame(loc_row, bg=BG_CARD)
+        loc_label_row.pack(fill="x", anchor="w")
         tk.Label(
-            loc_row, text="Location", font=FONT_BODY,
+            loc_label_row, text="Where you want to work", font=FONT_BODY,
             fg=TEXT, bg=BG_CARD,
-        ).pack(anchor="w")
+        ).pack(side="left")
+        attach_help_icon(loc_label_row, HELP["location"], bg=BG_CARD).pack(
+            side="left", padx=(6, 0),
+        )
         tk.Label(
-            loc_row, text="e.g.: New York, NY  or  Remote",
+            loc_row, text="A city, a country, or just 'Remote'.",
             font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
         ).pack(anchor="w")
         ttk.Entry(
@@ -90,13 +155,13 @@ class PreferencesStep(ttk.Frame):
         grid.pack(fill="x")
 
         spinbox_fields = [
-            ("Max Applications Per Day", "max_applications_per_day", 1, 50),
-            ("Auto-Apply Score Threshold (1-10)", "auto_apply_min", 1, 10),
-            ("CLI Auto-Apply Threshold (1-10)", "cli_auto_apply_min", 1, 10),
-            ("Review Minimum Score (1-10)", "review_min", 1, 10),
+            ("Most applications per day", "max_applications_per_day", 1, 50, HELP["max_apps"]),
+            ("Auto-apply score (1-10)", "auto_apply_min", 1, 10, HELP["auto_apply"]),
+            ("Review score (1-10)", "review_min", 1, 10, HELP["review_min"]),
+            ("Command-line auto-apply score (advanced)", "cli_auto_apply_min", 1, 10, HELP["cli_auto_apply"]),
         ]
 
-        for i, (label, key, from_val, to_val) in enumerate(spinbox_fields):
+        for label, key, from_val, to_val, help_text in spinbox_fields:
             row = tk.Frame(grid, bg=BG_CARD)
             row.pack(fill="x", pady=(0, 10))
 
@@ -104,6 +169,10 @@ class PreferencesStep(ttk.Frame):
                 row, text=label, font=FONT_BODY,
                 fg=TEXT, bg=BG_CARD, anchor="w",
             ).pack(side="left")
+
+            attach_help_icon(row, help_text, bg=BG_CARD).pack(
+                side="left", padx=(6, 0),
+            )
 
             spin = ttk.Spinbox(
                 row,
@@ -115,13 +184,14 @@ class PreferencesStep(ttk.Frame):
             )
             spin.pack(side="right")
 
-        # Explanation
+        # Plain-English summary at the bottom
         tk.Label(
             threshold_card,
             text=(
-                "Jobs scoring above the auto-apply threshold are applied to automatically.\n"
-                "Jobs between review minimum and auto-apply are queued for your review.\n"
-                "Jobs below the review minimum are skipped."
+                "In plain English:\n"
+                "• Jobs with a GREAT match get applied to for you automatically.\n"
+                "• Jobs with an OKAY match show up in your review queue to approve one at a time.\n"
+                "• Jobs with a POOR match are skipped quietly."
             ),
             font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
             justify="left",

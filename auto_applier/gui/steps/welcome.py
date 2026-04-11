@@ -32,19 +32,38 @@ class WelcomeStep(ttk.Frame):
         tk.Label(
             center,
             text=(
-                "AI-powered job application automation.\n"
-                "Apply to jobs across multiple platforms with intelligent\n"
-                "form filling and resume matching."
+                "A helper that searches job sites for you, figures out\n"
+                "which postings actually match your resume, and fills out\n"
+                "the applications automatically. Free, runs on your own\n"
+                "computer, and you stay in control the whole time."
             ),
             font=FONT_BODY, fg=TEXT_LIGHT, bg=BG, justify="center",
         ).pack(pady=(0, 32))
 
         # Feature cards
         features = [
-            ("Multi-Platform", "Search and apply on LinkedIn, Indeed, Dice, and ZipRecruiter simultaneously."),
-            ("AI Scoring", "Each job is scored against your resume. Only apply to good matches."),
-            ("Resume Evolution", "Track skill gaps across applications and improve your resume over time."),
-            ("Cover Letters", "AI-generated cover letters tailored to each specific job posting."),
+            (
+                "Searches multiple sites",
+                "Looks at LinkedIn, Indeed, Dice, and ZipRecruiter so you "
+                "don't have to check them one by one.",
+            ),
+            (
+                "Only picks good matches",
+                "Reads each job posting and compares it to your resume. "
+                "Skips the stuff that doesn't fit, applies to the jobs "
+                "that do.",
+            ),
+            (
+                "Remembers what's asked",
+                "Notices when job forms keep asking about skills you "
+                "don't have listed, so you can add them to your resume "
+                "later.",
+            ),
+            (
+                "Writes cover letters",
+                "Generates a fresh, specific cover letter for each job "
+                "instead of copy-pasting the same one everywhere.",
+            ),
         ]
 
         grid = tk.Frame(center, bg=BG)
