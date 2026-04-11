@@ -198,6 +198,35 @@ CLASSIFY_JOB_ARCHETYPE = PromptTemplate(
 
 
 # ------------------------------------------------------------------
+# Deep company research briefing
+# ------------------------------------------------------------------
+
+COMPANY_RESEARCH = PromptTemplate(
+    system=(
+        "Produce a concise interview-prep briefing about a company "
+        "based on the provided context (career page text, news "
+        "snippets, user notes, job descriptions). Be factual — never "
+        "invent claims the source material doesn't support. If the "
+        "source lacks information for a section, write 'not in "
+        "source' rather than guessing.\n\n"
+        "Return ONLY this JSON (no preamble, no code fences):\n"
+        '{"what_they_do": str (2-3 sentences), '
+        '"tech_stack_signals": [str], '
+        '"culture_signals": [str], '
+        '"red_flags": [str], '
+        '"questions_to_ask": [str] (4-6 thoughtful questions to ask '
+        'in an interview), '
+        '"talking_points": [str] (things the candidate could mention '
+        'to show genuine research)}'
+    ),
+    template=(
+        "Company: {company_name}\n\n"
+        "Source material:\n{source_material}"
+    ),
+)
+
+
+# ------------------------------------------------------------------
 # Per-JD tailored resume rewrite
 # ------------------------------------------------------------------
 

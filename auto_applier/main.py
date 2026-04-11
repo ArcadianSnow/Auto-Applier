@@ -323,6 +323,62 @@ def normalize():
 
 
 @cli.command()
+@click.argument("company")
+@click.option(
+    "--from-file", "-f", type=click.Path(exists=True),
+    help="Path to a text file containing source material (career page, news, notes)",
+)
+@click.option(
+    "--show/--no-show", default=True, help="Print the briefing to stdout",
+)
+def research(company: str, from_file: str, show: bool):
+    """Generate a company research briefing from pasted or file-provided source material.
+
+    Paste the career page / article / notes into a text file and pass
+    --from-file, or pipe stdin when --from-file is omitted.
+    """
+    import asyncio as _asyncio
+    from pathlib import Path as _Path
+    from auto_applier.analysis.research import (
+        CompanyResearcher, load_briefing, save_briefing,
+    )
+    from auto_applier.llm.router import LLMRouter
+
+    if from_file:
+        source_material = _Path(from_file).read_text(encoding="utf-8")
+    else:
+        click.echo(
+            "Paste source material, then Ctrl-Z + Enter (Windows) or "
+            "Ctrl-D (Unix) when done:"
+        )
+        import sys as _sys
+        source_material = _sys.stdin.read()
+
+    if not source_material.strip():
+        click.echo("No source material provided — aborting.")
+        return
+
+    async def _run():
+        router = LLMRouter()
+        researcher = CompanyResearcher(router)
+        return await researcher.research(company, source_material)
+
+    briefing = _asyncio.run(_run())
+    if briefing is None:
+        click.echo(
+            "Research failed — LLM produced no usable summary. "
+            "Try providing more source material."
+        )
+        return
+
+    path = save_briefing(briefing)
+    click.echo(f"Saved briefing to {path}")
+    if show:
+        click.echo("")
+        click.echo(briefing.to_markdown())
+
+
+@cli.command()
 @click.argument("job_id")
 @click.option("--resume", default=None, help="Resume label to use (defaults to best match)")
 def tailor(job_id: str, resume: str):
