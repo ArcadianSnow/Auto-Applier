@@ -235,6 +235,66 @@ def doctor():
 
 
 @cli.command()
+@click.argument("job_id")
+def show(job_id: str):
+    """Show everything known about a single job (jobs, apps, gaps, followups)."""
+    from auto_applier.analysis.observability import get_job_detail
+
+    detail = get_job_detail(job_id)
+    if not detail:
+        click.echo(f"No job with id '{job_id}'.")
+        return
+
+    click.echo(f"\n=== Job {job_id} ===")
+    for j in detail["jobs"]:
+        click.echo(f"\n[Job row]")
+        for k, v in j.items():
+            click.echo(f"  {k:16s} {v}")
+
+    if detail["applications"]:
+        click.echo("\n[Applications]")
+        for a in detail["applications"]:
+            click.echo(
+                f"  {a.get('applied_at', '?')}  "
+                f"{a.get('status', '?'):8s}  "
+                f"{a.get('source', '?'):12s}  "
+                f"score={a.get('score', 0)}  "
+                f"resume={a.get('resume_used', '')}"
+            )
+            if a.get("failure_reason"):
+                click.echo(f"      failure: {a['failure_reason']}")
+
+    if detail["skill_gaps"]:
+        click.echo(f"\n[Skill gaps: {len(detail['skill_gaps'])}]")
+        for g in detail["skill_gaps"][:15]:
+            click.echo(f"  [{g.get('category', '?')}] {g.get('field_label', '?')}")
+
+    if detail["followups"]:
+        click.echo("\n[Follow-ups]")
+        for f in detail["followups"]:
+            click.echo(
+                f"  {f.get('due_date', '?')}  "
+                f"[{f.get('status', '?'):9s}]  "
+                f"{f.get('channel', '?')}"
+            )
+
+
+@cli.command()
+@click.option(
+    "--output", "-o", default="auto_applier_export.json",
+    help="Output file path (default: auto_applier_export.json)",
+)
+def export(output: str):
+    """Export all CSV data plus schema hints to a single JSON file."""
+    from pathlib import Path as _Path
+    from auto_applier.analysis.observability import write_export
+
+    path = write_export(_Path(output))
+    size_kb = path.stat().st_size / 1024
+    click.echo(f"Exported to {path} ({size_kb:.1f} KB)")
+
+
+@cli.command()
 def patterns():
     """Surface conversion patterns from the application history."""
     from auto_applier.analysis.patterns import analyze
