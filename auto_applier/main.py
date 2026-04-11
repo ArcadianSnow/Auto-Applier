@@ -235,6 +235,73 @@ def doctor():
 
 
 @cli.group()
+def archetype():
+    """Manage job archetypes for resume routing."""
+    pass
+
+
+@archetype.command("list")
+def archetype_list():
+    """Show defined archetypes."""
+    from auto_applier.resume.archetypes import load_archetypes
+
+    archs = load_archetypes()
+    if not archs:
+        click.echo(
+            "No archetypes defined. Routing disabled — every job will "
+            "score against all resumes.\n\n"
+            "Create data/archetypes.json with entries like:\n"
+            '  {"archetypes": [{"name": "data_analyst", '
+            '"description": "SQL, dashboards, reporting"}]}'
+        )
+        return
+
+    click.echo(f"\n{len(archs)} archetype(s):\n")
+    for a in archs:
+        click.echo(f"  {a.name}")
+        if a.description:
+            click.echo(f"      {a.description}")
+        if a.keywords:
+            click.echo(f"      keywords: {', '.join(a.keywords)}")
+
+
+@archetype.command("add")
+@click.argument("name")
+@click.option("--description", "-d", default="", help="Short description of the role family")
+@click.option("--keyword", "-k", multiple=True, help="Keyword hint (repeatable)")
+def archetype_add(name: str, description: str, keyword: tuple):
+    """Add a new archetype definition."""
+    from auto_applier.resume.archetypes import (
+        Archetype, load_archetypes, save_archetypes,
+    )
+
+    archs = load_archetypes()
+    if any(a.name == name for a in archs):
+        click.echo(f"Archetype '{name}' already exists. Remove it first to update.")
+        return
+    archs.append(Archetype(
+        name=name, description=description, keywords=list(keyword),
+    ))
+    save_archetypes(archs)
+    click.echo(f"Added archetype '{name}'.")
+
+
+@archetype.command("remove")
+@click.argument("name")
+def archetype_remove(name: str):
+    """Remove an archetype definition."""
+    from auto_applier.resume.archetypes import load_archetypes, save_archetypes
+
+    archs = load_archetypes()
+    remaining = [a for a in archs if a.name != name]
+    if len(remaining) == len(archs):
+        click.echo(f"Archetype '{name}' not found.")
+        return
+    save_archetypes(remaining)
+    click.echo(f"Removed archetype '{name}'.")
+
+
+@cli.group()
 def followup():
     """Manage follow-up reminders for submitted applications."""
     pass

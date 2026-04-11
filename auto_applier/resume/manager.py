@@ -273,22 +273,43 @@ class ResumeManager:
     # Scoring / best-match selection
     # ------------------------------------------------------------------
 
-    async def score_all(self, job_description: str) -> list[ResumeScore]:
-        """Score every resume against a job description.
+    async def score_all(
+        self,
+        job_description: str,
+        archetype_filter: str = "",
+    ) -> list[ResumeScore]:
+        """Score resumes against a job description.
 
-        Returns a list of :class:`ResumeScore` sorted best-first
-        (highest score first).
+        When ``archetype_filter`` is non-empty, only resumes tagged
+        with that archetype (or untagged "wildcard" resumes) are
+        scored. If the filter excludes every resume, falls back to
+        scoring all of them so the user never ends up with no
+        candidates for a confidently-classified job.
+
+        Returns a list of :class:`ResumeScore` sorted best-first.
         """
         resumes = self.list_resumes()
         if not resumes:
             return []
 
+        candidates = resumes
+        if archetype_filter:
+            from auto_applier.resume.archetypes import filter_resumes_by_archetype
+            paired = [(r, self.get_profile(r.label)) for r in resumes]
+            filtered = filter_resumes_by_archetype(paired, archetype_filter)
+            if filtered:
+                candidates = [r for r, _ in filtered]
+            else:
+                logger.debug(
+                    "Archetype '%s' matched no resumes, scoring all instead",
+                    archetype_filter,
+                )
+
         scores: list[ResumeScore] = []
-        for resume in resumes:
+        for resume in candidates:
             score = await self._score_single(resume, job_description)
             scores.append(score)
 
-        # Sort by score descending
         scores.sort(key=lambda s: s.score, reverse=True)
         return scores
 

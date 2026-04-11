@@ -176,6 +176,28 @@ RESUME_SELECT = PromptTemplate(
 )
 
 # ------------------------------------------------------------------
+# Job archetype classification
+# ------------------------------------------------------------------
+
+CLASSIFY_JOB_ARCHETYPE = PromptTemplate(
+    system=(
+        "You classify job descriptions into one of a fixed set of "
+        "archetype categories. Pick the single best match and give a "
+        "confidence score 0.0-1.0 (1.0 = certain, 0.5 = could go "
+        "either way, 0.0 = none of the listed archetypes apply). If "
+        "no archetype fits well, return an empty string for archetype "
+        "and a low confidence. Respond ONLY with this JSON schema "
+        "(no other text, no code fences):\n"
+        '{"archetype": str, "confidence": float, "reason": str}'
+    ),
+    template=(
+        "Available archetypes:\n{archetype_menu}\n\n"
+        "Job Description:\n{job_description}"
+    ),
+)
+
+
+# ------------------------------------------------------------------
 # Cover letter generation
 # ------------------------------------------------------------------
 
