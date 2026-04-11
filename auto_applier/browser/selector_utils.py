@@ -151,6 +151,12 @@ async def _classify_element(
             return FormField(label=label, element=el, field_type="file")
         elif input_type in ("radio", "checkbox"):
             return FormField(label=label, element=el, field_type=input_type)
+        elif input_type in ("date", "datetime-local", "month", "week"):
+            # Preserve native date pickers so the form filler can emit
+            # ISO-formatted values instead of typing free text.
+            return FormField(label=label, element=el, field_type="date")
+        elif input_type == "number":
+            return FormField(label=label, element=el, field_type="number")
         else:
             return FormField(label=label, element=el, field_type="text")
 

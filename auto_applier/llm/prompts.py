@@ -37,15 +37,31 @@ class PromptTemplate:
 
 FORM_FILL = PromptTemplate(
     system=(
-        "You fill job application form fields. Given a resume and job "
-        "description, answer the question concisely and professionally "
-        "in the candidate's voice. If the resume lacks relevant info, "
-        "reply with an empty string. Output the answer only — no "
-        "preamble, no quotes, no markdown."
+        "You fill job application form fields using facts from the "
+        "candidate's resume. Rules:\n"
+        "- Yes/no questions: answer with exactly 'Yes' or 'No'. Base "
+        "it on what the resume actually shows. If the resume doesn't "
+        "mention it at all, answer 'No'.\n"
+        "- 'How many years of X?' questions: answer with a single "
+        "integer. Count only years explicitly shown on the resume. "
+        "If none are shown, answer '0'.\n"
+        "- 'Do you have experience with X?' where X is a tool or "
+        "skill: answer 'Yes' only if X (or a clearly equivalent tool) "
+        "appears on the resume. Otherwise 'No'.\n"
+        "- 'Have you previously worked for [company]?': check the "
+        "resume's employment history. Answer 'Yes' only if that "
+        "exact company appears in the work history.\n"
+        "- Free-text questions: answer concisely in the candidate's "
+        "voice, one or two sentences max.\n"
+        "- If the resume genuinely has no information relevant to "
+        "the question, reply with an empty string.\n"
+        "Output the answer only — no preamble, no explanation, no "
+        "quotes, no markdown."
     ),
     template=(
         "Resume:\n{resume_text}\n\n"
-        "Job Description:\n{job_description}\n\n"
+        "Job description:\n{job_description}\n\n"
+        "Company being applied to: {company_name}\n\n"
         "Question: {question}\n\n"
         "Answer:"
     ),

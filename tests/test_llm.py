@@ -14,10 +14,12 @@ class TestPrompts:
         prompt = FORM_FILL.format(
             resume_text="Python developer with 5 years experience",
             job_description="Looking for a Python developer",
+            company_name="Acme Corp",
             question="How many years of Python experience?",
         )
         assert "Python developer with 5 years experience" in prompt
         assert "How many years of Python experience?" in prompt
+        assert "Acme Corp" in prompt
 
     def test_job_score_format(self):
         prompt = JOB_SCORE.format(

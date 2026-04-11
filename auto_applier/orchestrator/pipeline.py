@@ -81,6 +81,7 @@ async def apply_to_job(
         company_name=job.company,
         job_title=job.title,
         resume_label=resume_label,
+        platform_display_name=getattr(platform, "display_name", ""),
     )
     platform.form_filler = form_filler
 

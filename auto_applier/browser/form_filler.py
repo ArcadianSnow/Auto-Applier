@@ -2,25 +2,28 @@
 
 Fills application form fields using a priority chain:
 1. Personal info match (name, email, phone, etc.)
-2. answers.json match (exact then fuzzy)
-3. LLM generation (via the fallback router)
-4. Record as skill gap (unfilled field)
+2. Contextual match (how did you hear, previously worked here, start date)
+3. answers.json match (exact then fuzzy)
+4. LLM generation (via the fallback router)
+5. Record as skill gap (unfilled field)
 
-Also handles cover letter generation and file upload detection.
+Also handles cover letter generation, file upload detection, and
+native date input pickers.
 """
 import difflib
 import json
 import logging
-from pathlib import Path
+from datetime import date, timedelta
 
 from playwright.async_api import Page
 
-from auto_applier.browser.anti_detect import human_fill, human_type, random_delay
+from auto_applier.browser.anti_detect import human_fill, random_delay
 from auto_applier.browser.selector_utils import FormField
 from auto_applier.config import ANSWERS_FILE, UNANSWERED_FILE
 from auto_applier.llm.prompts import FORM_FILL
 from auto_applier.llm.router import LLMRouter
 from auto_applier.resume.cover_letter import CoverLetterWriter
+from auto_applier.storage.dedup import normalize_company
 from auto_applier.storage.models import SkillGap
 
 logger = logging.getLogger(__name__)
@@ -56,6 +59,44 @@ RESUME_UPLOAD_KEYWORDS = [
     "upload your",
 ]
 
+# Keywords for contextual auto-answers. Each group is matched
+# substring-wise against the lowercased label.
+SOURCE_QUESTION_KEYWORDS = [
+    "how did you hear",
+    "where did you hear",
+    "how did you find",
+    "where did you find",
+    "how were you referred",
+    "source of application",
+    "referral source",
+    "where did you learn",
+]
+
+PREVIOUSLY_WORKED_KEYWORDS = [
+    "previously worked",
+    "former employee",
+    "formerly employed",
+    "ever worked for",
+    "worked here before",
+    "prior employment with",
+    "past employee",
+]
+
+START_DATE_KEYWORDS = [
+    "start date",
+    "available start",
+    "earliest start",
+    "when can you start",
+    "availability date",
+    "date you can start",
+    "date available",
+]
+
+# Default start-date offset used when a form asks for the earliest
+# date the candidate can begin. Two weeks is the conventional notice
+# period in most industries.
+DEFAULT_START_DATE_OFFSET_DAYS = 14
+
 
 class FormFiller:
     """Fills application forms using a priority chain.
@@ -76,6 +117,7 @@ class FormFiller:
         company_name: str = "",
         job_title: str = "",
         resume_label: str = "",
+        platform_display_name: str = "",
     ) -> None:
         self.router = router
         self.personal_info = personal_info
@@ -84,6 +126,10 @@ class FormFiller:
         self.company_name = company_name
         self.job_title = job_title
         self.resume_label = resume_label
+        # Platform display name like "LinkedIn" or "Indeed", used for
+        # the "how did you hear about this?" auto-answer. Empty string
+        # means the contextual matcher will fall through to the LLM.
+        self.platform_display_name = platform_display_name
         self.cover_letter_writer = CoverLetterWriter(router)
         self.gaps: list[SkillGap] = []
         self.fields_filled: int = 0
@@ -118,17 +164,22 @@ class FormFiller:
         # Priority 1: Personal info match
         answer = self._match_personal_info(label_lower)
 
-        # Priority 2: answers.json match
+        # Priority 2: Contextual auto-answers (source, prior employment,
+        # start date). These are deterministic and free — no LLM cost.
+        if not answer:
+            answer = self._match_contextual(label_lower, field)
+
+        # Priority 3: answers.json match
         if not answer:
             answer = self._match_answers(field.label)
 
-        # Priority 3: LLM generation
+        # Priority 4: LLM generation
         if not answer:
             answer = await self._generate_answer(field)
             if answer:
                 self.used_llm = True
 
-        # Priority 4: Record as gap
+        # Priority 5: Record as gap
         if not answer:
             self._record_gap(field, job_id)
             self._record_unanswered(field.label)
@@ -151,6 +202,71 @@ class FormFiller:
                     )
                 return value
         return ""
+
+    # ------------------------------------------------------------------
+    # Priority 2: Contextual auto-answers
+    # ------------------------------------------------------------------
+
+    def _match_contextual(self, label_lower: str, field: FormField) -> str:
+        """Answer context-dependent questions from state the filler already has.
+
+        Three cases, all deterministic and free:
+
+        - **Source attribution** ('how did you hear about this?'):
+          reply with the platform the applicant is applying from.
+
+        - **Previous employment** ('have you worked for us before?'):
+          check whether the hiring company name appears in the
+          candidate's resume, using the same canonical-name
+          normalization we use for dedup so 'Acme' matches 'Acme Inc.'.
+
+        - **Earliest start date**: return a date 14 days from today
+          in ISO format. The _apply_answer date branch will normalize
+          it for whatever date widget the site is using.
+        """
+        # Source attribution — only if we know which platform we're on
+        if self.platform_display_name and any(
+            kw in label_lower for kw in SOURCE_QUESTION_KEYWORDS
+        ):
+            return self.platform_display_name
+
+        # Previously worked for this company
+        if any(kw in label_lower for kw in PREVIOUSLY_WORKED_KEYWORDS):
+            return self._check_prior_employment()
+
+        # Earliest start date
+        if any(kw in label_lower for kw in START_DATE_KEYWORDS):
+            default = date.today() + timedelta(
+                days=DEFAULT_START_DATE_OFFSET_DAYS
+            )
+            return default.isoformat()
+
+        return ""
+
+    def _check_prior_employment(self) -> str:
+        """Return 'Yes' or 'No' based on resume vs company-name match.
+
+        Matches canonically (lowercase, corporate suffixes stripped)
+        so 'Acme Inc.' on the resume counts as having worked at 'Acme
+        Corporation'. Returns 'No' if either the company or resume
+        text is empty — safer than returning nothing and asking the
+        user.
+        """
+        if not self.company_name or not self.resume_text:
+            return "No"
+
+        canonical = normalize_company(self.company_name)
+        if not canonical:
+            return "No"
+        # Also test the un-normalized form in case the resume has the
+        # company name with its original casing / suffix intact.
+        resume_lower = self.resume_text.lower()
+        if canonical in resume_lower:
+            return "Yes"
+        raw = self.company_name.lower().strip()
+        if raw and raw in resume_lower:
+            return "Yes"
+        return "No"
 
     # ------------------------------------------------------------------
     # Priority 2: Answers.json
@@ -195,6 +311,7 @@ class FormFiller:
         prompt_text = FORM_FILL.format(
             resume_text=self.resume_text[:2000],
             job_description=self.job_description[:1500],
+            company_name=self.company_name or "(not specified)",
             question=field.label,
         )
 
@@ -203,6 +320,13 @@ class FormFiller:
             prompt_text += (
                 f"\n\nAvailable options (choose exactly one): "
                 f"{', '.join(field.options)}"
+            )
+
+        # For number fields, ask explicitly for an integer
+        if field.field_type == "number":
+            prompt_text += (
+                "\n\nThis field accepts only a number. Reply with one "
+                "integer and nothing else."
             )
 
         try:
@@ -263,6 +387,27 @@ class FormFiller:
                 await random_delay(0.3, 0.8)
                 return True
 
+            elif field.field_type == "date":
+                # Native HTML date pickers accept YYYY-MM-DD via .fill().
+                # Normalize whatever string we got into that format;
+                # fall back to the raw string if parsing fails.
+                iso = self._coerce_iso_date(answer)
+                await field.element.fill(iso)
+                self.fields_filled += 1
+                await random_delay(0.3, 0.8)
+                return True
+
+            elif field.field_type == "number":
+                # Strip non-digits and fill as-is — browsers validate
+                # number inputs on submit.
+                digits = "".join(c for c in answer if c.isdigit() or c == ".")
+                if not digits:
+                    return False
+                await field.element.fill(digits)
+                self.fields_filled += 1
+                await random_delay(0.3, 0.8)
+                return True
+
             elif field.field_type == "select":
                 best_option = self._find_best_option(answer, field.options)
                 if best_option:
@@ -290,6 +435,38 @@ class FormFiller:
                 exc,
             )
         return False
+
+    @staticmethod
+    def _coerce_iso_date(value: str) -> str:
+        """Return a YYYY-MM-DD date string.
+
+        Accepts the already-ISO output of the contextual matcher, the
+        common US / EU date formats the LLM might produce, and
+        natural-language offsets like 'in two weeks'. Falls back to
+        two weeks from today for anything it can't parse — never
+        raises, so form filling keeps moving.
+        """
+        from datetime import datetime
+
+        fallback = (date.today() + timedelta(days=DEFAULT_START_DATE_OFFSET_DAYS)).isoformat()
+        s = (value or "").strip()
+        if not s:
+            return fallback
+
+        # Already ISO (YYYY-MM-DD)
+        try:
+            return date.fromisoformat(s).isoformat()
+        except ValueError:
+            pass
+
+        # Common alternative formats
+        for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%d/%m/%Y", "%B %d, %Y", "%b %d, %Y"):
+            try:
+                return datetime.strptime(s, fmt).date().isoformat()
+            except ValueError:
+                continue
+
+        return fallback
 
     # ------------------------------------------------------------------
     # Select Option Matching
