@@ -1,0 +1,31 @@
+09:37:38 INFO  auto_applier.log_setup                   Run logging enabled. Debug output: C:\Users\jar85\AI Projects\Auto Applier\data\logs\run-20260412-093738.log
+09:37:38 DEBUG asyncio                                  Using proactor: IocpProactor
+09:37:39 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+09:37:39 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x0000015D5FE7D550>
+09:37:39 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'GET']>
+09:37:39 DEBUG httpcore.http11                          send_request_headers.complete
+09:37:39 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'GET']>
+09:37:39 DEBUG httpcore.http11                          send_request_body.complete
+09:37:39 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'GET']>
+09:37:39 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 12 Apr 2026 14:37:39 GMT'), (b'Content-Length', b'339')])
+09:37:39 INFO  httpx                                    HTTP Request: GET http://localhost:11434/api/tags "HTTP/1.1 200 OK"
+09:37:39 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'GET']>
+09:37:39 DEBUG httpcore.http11                          receive_response_body.complete
+09:37:39 DEBUG httpcore.http11                          response_closed.started
+09:37:39 DEBUG httpcore.http11                          response_closed.complete
+09:37:39 INFO  auto_applier.llm.router                  LLM backend ollama       : available
+09:37:39 INFO  auto_applier.llm.router                  LLM backend gemini       : unavailable
+09:37:39 INFO  auto_applier.llm.router                  LLM backend rule-based   : available
+09:37:39 INFO  auto_applier.browser.session             Using patchright (CDP leak patches active)
+09:37:40 INFO  auto_applier.browser.session             Detected real Chrome installation, using channel=chrome
+09:37:41 INFO  auto_applier.browser.session             Browser session started (patchright=True)
+09:37:41 INFO  auto_applier.browser.anti_detect         Anti-detect fast mode: ON
+09:38:27 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Not logged in. Navigating to login page for manual login...
+09:38:27 INFO  auto_applier.browser.base_platform       Waiting for manual login on ZipRecruiter (timeout=300s)...
+09:38:27 INFO  auto_applier.browser.base_platform       Login detected via URL pattern
+09:38:29 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Searching page 1 -- data analyst Remote
+09:38:39 DEBUG auto_applier.browser.platforms.ziprecruiter Found 40 job cards via 'article:has(h2)'
+09:38:45 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Found 40 jobs for 'data analyst' in 'Remote'
+09:38:45 INFO  auto_applier.orchestrator.pipeline       discover_jobs[ziprecruiter/data analyst]: raw=25 kept=13 filtered=12 (already_applied=0, canonical_dup=0, batch_dup=12) dry_run=True
+09:39:22 WARNING auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Could not extract description for zr-79616325
+09:39:23 INFO  auto_applier.orchestrator.engine         Skip: Principal Data Solutions Analyst [external] — zr-79616325

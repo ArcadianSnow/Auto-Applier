@@ -1,0 +1,258 @@
+14:11:32 INFO  auto_applier.log_setup                   Run logging enabled. Debug output: C:\Users\jar85\AI Projects\Auto Applier\data\logs\run-20260411-141132.log
+14:11:32 DEBUG asyncio                                  Using proactor: IocpProactor
+14:11:33 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+14:11:33 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000001A256BB14F0>
+14:11:33 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'GET']>
+14:11:33 DEBUG httpcore.http11                          send_request_headers.complete
+14:11:33 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'GET']>
+14:11:33 DEBUG httpcore.http11                          send_request_body.complete
+14:11:33 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'GET']>
+14:11:33 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:11:33 GMT'), (b'Content-Length', b'339')])
+14:11:33 INFO  httpx                                    HTTP Request: GET http://localhost:11434/api/tags "HTTP/1.1 200 OK"
+14:11:33 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'GET']>
+14:11:33 DEBUG httpcore.http11                          receive_response_body.complete
+14:11:33 DEBUG httpcore.http11                          response_closed.started
+14:11:33 DEBUG httpcore.http11                          response_closed.complete
+14:11:33 INFO  auto_applier.llm.router                  LLM backend ollama       : available
+14:11:33 INFO  auto_applier.llm.router                  LLM backend gemini       : unavailable
+14:11:33 INFO  auto_applier.llm.router                  LLM backend rule-based   : available
+14:11:33 INFO  auto_applier.resume.manager              Resume already in place at C:\Users\jar85\AI Projects\Auto Applier\data\resumes\testpilot.docx, skipping copy
+14:11:33 INFO  auto_applier.resume.manager              Saved minimal profile for 'Testpilot' (raw text only)
+14:11:33 INFO  auto_applier.resume.manager              Created profile for 'Testpilot' (17 skills, 1 tools)
+14:11:34 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+14:11:34 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000001A256EB2F90>
+14:11:34 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'GET']>
+14:11:34 DEBUG httpcore.http11                          send_request_headers.complete
+14:11:34 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'GET']>
+14:11:34 DEBUG httpcore.http11                          send_request_body.complete
+14:11:34 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'GET']>
+14:11:34 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:11:34 GMT'), (b'Content-Length', b'339')])
+14:11:34 INFO  httpx                                    HTTP Request: GET http://localhost:11434/api/tags "HTTP/1.1 200 OK"
+14:11:34 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'GET']>
+14:11:34 DEBUG httpcore.http11                          receive_response_body.complete
+14:11:34 DEBUG httpcore.http11                          response_closed.started
+14:11:34 DEBUG httpcore.http11                          response_closed.complete
+14:11:34 INFO  auto_applier.llm.router                  LLM backend ollama       : available
+14:11:34 INFO  auto_applier.llm.router                  LLM backend gemini       : unavailable
+14:11:34 INFO  auto_applier.llm.router                  LLM backend rule-based   : available
+14:11:34 INFO  auto_applier.browser.session             Using patchright (CDP leak patches active)
+14:11:35 INFO  auto_applier.browser.session             Detected real Chrome installation, using channel=chrome
+14:11:35 INFO  auto_applier.browser.session             Browser session started (patchright=True)
+14:11:35 INFO  auto_applier.browser.anti_detect         Anti-detect fast mode: ON
+14:11:37 INFO  auto_applier.browser.platforms.indeed    Indeed: Already logged in
+14:11:37 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 1 -- data analyst Remote
+14:11:40 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:11:44 DEBUG auto_applier.browser.platforms.indeed    Found 16 job cards via 'div[data-testid='slider_item']'
+14:11:46 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 2 -- data analyst Remote
+14:11:48 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:11:52 DEBUG auto_applier.browser.platforms.indeed    Found 16 job cards via 'div[data-testid='slider_item']'
+14:11:52 INFO  auto_applier.browser.platforms.indeed    Indeed: Found 32 jobs for 'data analyst' in 'Remote'
+14:11:53 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:11:53 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 1 -- analytics engineer Remote
+14:11:55 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:11:58 DEBUG auto_applier.browser.platforms.indeed    Found 18 job cards via 'div[data-testid='slider_item']'
+14:12:00 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 2 -- analytics engineer Remote
+14:12:02 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:12:06 DEBUG auto_applier.browser.platforms.indeed    Found 16 job cards via 'div[data-testid='slider_item']'
+14:12:06 INFO  auto_applier.browser.platforms.indeed    Indeed: Found 34 jobs for 'analytics engineer' in 'Remote'
+14:12:08 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-d28a9231c3afba9c (10116 chars)
+14:12:08 DEBUG httpcore.connection                      close.started
+14:12:08 DEBUG httpcore.connection                      close.complete
+14:12:08 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+14:12:09 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000001A24D971D90>
+14:12:09 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:12:09 DEBUG httpcore.http11                          send_request_headers.complete
+14:12:09 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:12:09 DEBUG httpcore.http11                          send_request_body.complete
+14:12:09 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:12:25 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:12:25 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:12:25 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:12:25 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:12:25 DEBUG httpcore.http11                          receive_response_body.complete
+14:12:25 DEBUG httpcore.http11                          response_closed.started
+14:12:25 DEBUG httpcore.http11                          response_closed.complete
+14:12:25 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:12:25 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:12:25 DEBUG httpcore.http11                          send_request_headers.complete
+14:12:25 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:12:25 DEBUG httpcore.http11                          send_request_body.complete
+14:12:25 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:12:26 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:12:26 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:12:26 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:12:26 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:12:26 DEBUG httpcore.http11                          receive_response_body.complete
+14:12:26 DEBUG httpcore.http11                          response_closed.started
+14:12:26 DEBUG httpcore.http11                          response_closed.complete
+14:12:26 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:12:26 DEBUG auto_applier.scoring.scorer              Archetype 'data_engineer' (conf=0.95) — filtering resumes
+14:12:26 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:12:26 DEBUG httpcore.http11                          send_request_headers.complete
+14:12:26 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:12:26 DEBUG httpcore.http11                          send_request_body.complete
+14:12:26 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:12:31 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:12:31 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:12:31 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:12:31 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:12:31 DEBUG httpcore.http11                          receive_response_body.complete
+14:12:31 DEBUG httpcore.http11                          response_closed.started
+14:12:31 DEBUG httpcore.http11                          response_closed.complete
+14:12:31 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:12:33 DEBUG auto_applier.browser.platforms.indeed    External apply detected via button text: 'apply on company site'
+14:12:33 INFO  auto_applier.browser.platforms.indeed    Indeed: Job ind-d28a9231c3afba9c redirects to external site, skipping
+14:12:48 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 1 -- business intelligence analyst Remote
+14:12:50 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:12:57 DEBUG auto_applier.browser.platforms.indeed    Found 17 job cards via 'div[data-testid='slider_item']'
+14:12:59 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 2 -- business intelligence analyst Remote
+14:13:07 DEBUG auto_applier.browser.platforms.indeed    Found 16 job cards via 'div[data-testid='slider_item']'
+14:13:07 INFO  auto_applier.browser.platforms.indeed    Indeed: Found 33 jobs for 'business intelligence analyst' in 'Remote'
+14:13:09 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-1126c15a5094afd6 (3537 chars)
+14:13:09 DEBUG httpcore.connection                      close.started
+14:13:09 DEBUG httpcore.connection                      close.complete
+14:13:09 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+14:13:10 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000001A24D8B3200>
+14:13:10 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:13:10 DEBUG httpcore.http11                          send_request_headers.complete
+14:13:10 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:13:10 DEBUG httpcore.http11                          send_request_body.complete
+14:13:10 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:13:11 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:13:11 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:13:11 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:13:11 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:13:11 DEBUG httpcore.http11                          receive_response_body.complete
+14:13:11 DEBUG httpcore.http11                          response_closed.started
+14:13:11 DEBUG httpcore.http11                          response_closed.complete
+14:13:11 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:13:11 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:13:11 DEBUG httpcore.http11                          send_request_headers.complete
+14:13:11 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:13:11 DEBUG httpcore.http11                          send_request_body.complete
+14:13:11 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:13:13 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:13:13 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:13:13 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:13:13 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:13:13 DEBUG httpcore.http11                          receive_response_body.complete
+14:13:13 DEBUG httpcore.http11                          response_closed.started
+14:13:13 DEBUG httpcore.http11                          response_closed.complete
+14:13:13 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:13:13 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.80) — filtering resumes
+14:13:13 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:13:13 DEBUG httpcore.http11                          send_request_headers.complete
+14:13:13 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:13:13 DEBUG httpcore.http11                          send_request_body.complete
+14:13:13 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:13:18 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:13:18 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:13:18 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:13:18 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:13:18 DEBUG httpcore.http11                          receive_response_body.complete
+14:13:18 DEBUG httpcore.http11                          response_closed.started
+14:13:18 DEBUG httpcore.http11                          response_closed.complete
+14:13:18 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:13:19 DEBUG auto_applier.browser.platforms.indeed    External apply detected via button text: 'apply on company site'
+14:13:19 INFO  auto_applier.browser.platforms.indeed    Indeed: Job ind-1126c15a5094afd6 redirects to external site, skipping
+14:13:48 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-7f2036a6487e8702 (4685 chars)
+14:13:48 DEBUG httpcore.connection                      close.started
+14:13:48 DEBUG httpcore.connection                      close.complete
+14:13:48 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+14:13:48 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000001A24DA8E840>
+14:13:48 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:13:48 DEBUG httpcore.http11                          send_request_headers.complete
+14:13:48 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:13:48 DEBUG httpcore.http11                          send_request_body.complete
+14:13:48 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:13:50 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:13:50 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:13:50 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:13:50 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:13:50 DEBUG httpcore.http11                          receive_response_body.complete
+14:13:50 DEBUG httpcore.http11                          response_closed.started
+14:13:50 DEBUG httpcore.http11                          response_closed.complete
+14:13:50 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:13:50 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:13:50 DEBUG httpcore.http11                          send_request_headers.complete
+14:13:50 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:13:50 DEBUG httpcore.http11                          send_request_body.complete
+14:13:50 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:13:51 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:13:51 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:13:51 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:13:51 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:13:51 DEBUG httpcore.http11                          receive_response_body.complete
+14:13:51 DEBUG httpcore.http11                          response_closed.started
+14:13:51 DEBUG httpcore.http11                          response_closed.complete
+14:13:51 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:13:51 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.80) — filtering resumes
+14:13:51 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:13:51 DEBUG httpcore.http11                          send_request_headers.complete
+14:13:51 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:13:51 DEBUG httpcore.http11                          send_request_body.complete
+14:13:51 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:13:57 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:13:57 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:13:57 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:13:57 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:13:57 DEBUG httpcore.http11                          receive_response_body.complete
+14:13:57 DEBUG httpcore.http11                          response_closed.started
+14:13:57 DEBUG httpcore.http11                          response_closed.complete
+14:13:57 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:13:58 DEBUG auto_applier.browser.platforms.indeed    External apply detected via button text: 'apply on company site'
+14:13:58 INFO  auto_applier.browser.platforms.indeed    Indeed: Job ind-7f2036a6487e8702 redirects to external site, skipping
+14:15:19 INFO  auto_applier.browser.platforms.dice      Dice: Not logged in. Navigating to login page for manual login...
+14:15:19 INFO  auto_applier.browser.base_platform       Waiting for manual login on Dice (timeout=300s)...
+14:15:19 INFO  auto_applier.browser.base_platform       Login detected via URL pattern
+14:15:19 INFO  auto_applier.browser.platforms.dice      Dice: Searching page 1 -- data analyst Remote
+14:15:26 DEBUG auto_applier.browser.platforms.dice      Found 20 job cards via '[data-testid='job-search-job-detail-link']'
+14:15:26 INFO  auto_applier.browser.platforms.dice      Dice: 20 cards detected but none parsed, falling back to anchor-based finder
+14:15:27 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/job-detail/'): 57 anchors matched selector, kept 19, rejected 19 empty / 0 length / 6 excluded
+14:15:27 INFO  auto_applier.browser.platforms.dice      Dice: anchor fallback recovered 19 jobs
+14:15:28 INFO  auto_applier.browser.platforms.dice      Dice: Searching page 2 -- data analyst Remote
+14:15:33 DEBUG auto_applier.browser.platforms.dice      Found 20 job cards via '[data-testid='job-search-job-detail-link']'
+14:15:34 INFO  auto_applier.browser.platforms.dice      Dice: 20 cards detected but none parsed, falling back to anchor-based finder
+14:15:34 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/job-detail/'): 54 anchors matched selector, kept 18, rejected 18 empty / 0 length / 5 excluded
+14:15:34 INFO  auto_applier.browser.platforms.dice      Dice: anchor fallback recovered 18 jobs
+14:15:34 INFO  auto_applier.browser.platforms.dice      Dice: Found 37 jobs for 'data analyst' in 'Remote'
+14:16:07 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-8753743925 (3570 chars)
+14:16:07 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.90) — filtering resumes
+14:17:25 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:17:55 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-3600039973 (8281 chars)
+14:17:55 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:17:57 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:18:27 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-3399009473 (2473 chars)
+14:18:27 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:18:27 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.95) — filtering resumes
+14:18:28 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:20:25 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-2708843569 (1297 chars)
+14:20:25 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.80) — filtering resumes
+14:20:57 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-3472222890 (5732 chars)
+14:20:58 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.90) — filtering resumes
+14:23:14 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Not logged in. Navigating to login page for manual login...
+14:23:14 INFO  auto_applier.browser.base_platform       Waiting for manual login on ZipRecruiter (timeout=300s)...
+14:23:14 INFO  auto_applier.browser.base_platform       Login detected via URL pattern
+14:23:16 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Searching page 1 -- data analyst Remote
+14:23:22 DEBUG auto_applier.browser.platforms.ziprecruiter Found 40 job cards via 'article:has(h2)'
+14:23:23 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: 40 cards detected but none parsed, falling back to anchor-based finder
+14:23:23 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/jobs/'): 0 anchors matched selector, kept 0, rejected 0 empty / 0 length / 0 excluded
+14:23:23 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/job/'): 0 anchors matched selector, kept 0, rejected 0 empty / 0 length / 0 excluded
+14:23:23 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/ec/'): 0 anchors matched selector, kept 0, rejected 0 empty / 0 length / 0 excluded
+14:23:23 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/k/'): 0 anchors matched selector, kept 0, rejected 0 empty / 0 length / 0 excluded
+14:23:23 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/apply/'): 0 anchors matched selector, kept 0, rejected 0 empty / 0 length / 0 excluded
+14:23:23 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: No more job cards found, stopping pagination
+14:23:23 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Found 0 jobs for 'data analyst' in 'Remote'
+14:23:24 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Searching page 1 -- analytics engineer Remote
+14:23:29 DEBUG auto_applier.browser.platforms.ziprecruiter Found 40 job cards via 'article:has(h2)'
+14:23:30 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: 40 cards detected but none parsed, falling back to anchor-based finder
+14:23:30 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/jobs/'): 0 anchors matched selector, kept 0, rejected 0 empty / 0 length / 0 excluded
+14:23:30 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/job/'): 0 anchors matched selector, kept 0, rejected 0 empty / 0 length / 0 excluded
+14:23:30 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/ec/'): 0 anchors matched selector, kept 0, rejected 0 empty / 0 length / 0 excluded
+14:23:30 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/k/'): 0 anchors matched selector, kept 0, rejected 0 empty / 0 length / 0 excluded
+14:23:30 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/apply/'): 0 anchors matched selector, kept 0, rejected 0 empty / 0 length / 0 excluded
+14:23:30 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: No more job cards found, stopping pagination
+14:23:30 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Found 0 jobs for 'analytics engineer' in 'Remote'
+14:23:30 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Searching page 1 -- business intelligence analyst Remote
+14:23:40 DEBUG auto_applier.browser.platforms.ziprecruiter Found 40 job cards via 'article:has(h2)'
+14:23:41 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: 40 cards detected but none parsed, falling back to anchor-based finder
+14:23:41 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/jobs/'): 0 anchors matched selector, kept 0, rejected 0 empty / 0 length / 0 excluded
+14:23:41 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/job/'): 0 anchors matched selector, kept 0, rejected 0 empty / 0 length / 0 excluded
+14:23:41 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/ec/'): 0 anchors matched selector, kept 0, rejected 0 empty / 0 length / 0 excluded
+14:23:41 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/k/'): 0 anchors matched selector, kept 0, rejected 0 empty / 0 length / 0 excluded
+14:23:41 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/apply/'): 0 anchors matched selector, kept 0, rejected 0 empty / 0 length / 0 excluded
+14:23:41 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: No more job cards found, stopping pagination
+14:23:41 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Found 0 jobs for 'business intelligence analyst' in 'Remote'
+14:24:58 INFO  auto_applier.resume.evolution            Found 0 evolution triggers (threshold=3)
+14:24:58 INFO  auto_applier.browser.session             Browser session stopped

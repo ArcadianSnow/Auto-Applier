@@ -1,0 +1,344 @@
+17:02:52 INFO  auto_applier.log_setup                   Run logging enabled. Debug output: C:\Users\jar85\AI Projects\Auto Applier\data\logs\run-20260411-170252.log
+17:02:52 DEBUG asyncio                                  Using proactor: IocpProactor
+17:02:53 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+17:02:53 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000001E25A6E59A0>
+17:02:53 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'GET']>
+17:02:53 DEBUG httpcore.http11                          send_request_headers.complete
+17:02:53 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'GET']>
+17:02:53 DEBUG httpcore.http11                          send_request_body.complete
+17:02:53 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'GET']>
+17:02:53 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 22:02:53 GMT'), (b'Content-Length', b'339')])
+17:02:53 INFO  httpx                                    HTTP Request: GET http://localhost:11434/api/tags "HTTP/1.1 200 OK"
+17:02:53 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'GET']>
+17:02:53 DEBUG httpcore.http11                          receive_response_body.complete
+17:02:53 DEBUG httpcore.http11                          response_closed.started
+17:02:53 DEBUG httpcore.http11                          response_closed.complete
+17:02:53 INFO  auto_applier.llm.router                  LLM backend ollama       : available
+17:02:53 INFO  auto_applier.llm.router                  LLM backend gemini       : unavailable
+17:02:53 INFO  auto_applier.llm.router                  LLM backend rule-based   : available
+17:02:53 INFO  auto_applier.resume.manager              Resume already in place at C:\Users\jar85\AI Projects\Auto Applier\data\resumes\testpilot.docx, skipping copy
+17:02:53 INFO  auto_applier.resume.manager              Saved minimal profile for 'Testpilot' (raw text only)
+17:02:53 INFO  auto_applier.resume.manager              Created profile for 'Testpilot' (17 skills, 1 tools)
+17:02:54 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+17:02:54 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000001E25AA0F500>
+17:02:54 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'GET']>
+17:02:54 DEBUG httpcore.http11                          send_request_headers.complete
+17:02:54 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'GET']>
+17:02:54 DEBUG httpcore.http11                          send_request_body.complete
+17:02:54 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'GET']>
+17:02:54 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 22:02:54 GMT'), (b'Content-Length', b'339')])
+17:02:54 INFO  httpx                                    HTTP Request: GET http://localhost:11434/api/tags "HTTP/1.1 200 OK"
+17:02:54 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'GET']>
+17:02:54 DEBUG httpcore.http11                          receive_response_body.complete
+17:02:54 DEBUG httpcore.http11                          response_closed.started
+17:02:54 DEBUG httpcore.http11                          response_closed.complete
+17:02:54 INFO  auto_applier.llm.router                  LLM backend ollama       : available
+17:02:54 INFO  auto_applier.llm.router                  LLM backend gemini       : unavailable
+17:02:54 INFO  auto_applier.llm.router                  LLM backend rule-based   : available
+17:02:54 INFO  auto_applier.browser.session             Using patchright (CDP leak patches active)
+17:02:55 INFO  auto_applier.browser.session             Detected real Chrome installation, using channel=chrome
+17:02:55 INFO  auto_applier.browser.session             Browser session started (patchright=True)
+17:02:55 INFO  auto_applier.browser.anti_detect         Anti-detect fast mode: ON
+17:02:57 INFO  auto_applier.browser.platforms.indeed    Indeed: Already logged in
+17:02:57 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 1 -- data analyst Remote
+17:02:59 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+17:03:02 DEBUG auto_applier.browser.platforms.indeed    Found 16 job cards via 'div[data-testid='slider_item']'
+17:03:04 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 2 -- data analyst Remote
+17:03:09 DEBUG auto_applier.browser.platforms.indeed    Found 16 job cards via 'div[data-testid='slider_item']'
+17:03:09 INFO  auto_applier.browser.platforms.indeed    Indeed: Found 32 jobs for 'data analyst' in 'Remote'
+17:03:09 INFO  auto_applier.orchestrator.pipeline       discover_jobs[indeed/data analyst]: raw=25 kept=24 filtered=1 (already_applied=0, canonical_dup=0, batch_dup=1) dry_run=True
+17:03:11 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-e6953da5a7c9b227 (3462 chars)
+17:03:18 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 1 for ind-e6953da5a7c9b227
+17:03:19 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:03:20 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:03:20 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:03:20 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:03:20 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:03:20 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:03:20 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:03:20 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:03:20 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:03:20 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:03:28 INFO  auto_applier.browser.platforms.indeed    Indeed: Text-scan click on button 'continue'
+17:03:29 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 2 for ind-e6953da5a7c9b227
+17:03:29 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+17:03:29 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:03:30 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:03:30 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:03:30 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:03:30 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:03:30 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:03:30 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:03:30 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:03:30 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:03:30 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:03:38 INFO  auto_applier.browser.platforms.indeed    Indeed: Text-scan click on button 'continue'
+17:03:39 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 3 for ind-e6953da5a7c9b227
+17:03:39 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+17:03:39 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/profile-location
+17:03:39 DEBUG auto_applier.browser.selector_utils      Detected 3 form fields on page
+17:03:39 DEBUG auto_applier.browser.selector_utils        field[0]: label='Zip code' type=text
+17:03:39 DEBUG auto_applier.browser.selector_utils        field[1]: label='City, State' type=text
+17:03:39 DEBUG auto_applier.browser.selector_utils        field[2]: label='Street address' type=text
+17:03:39 DEBUG auto_applier.browser.form_filler         fill_field: label='Zip code' type=text options=none
+17:03:39 DEBUG auto_applier.browser.form_filler         Personal info match: 'zip code' -> zip_code
+17:03:39 DEBUG auto_applier.browser.form_filler           matched personal_info → '98101'
+17:03:42 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Zip code'
+17:03:42 DEBUG auto_applier.browser.form_filler         fill_field: label='City, State' type=text options=none
+17:03:42 DEBUG auto_applier.browser.form_filler         Personal info match: 'city, state' -> city_state
+17:03:42 DEBUG auto_applier.browser.form_filler           matched personal_info → 'Seattle, WA'
+17:03:45 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'City, State'
+17:03:45 DEBUG auto_applier.browser.form_filler         fill_field: label='Street address' type=text options=none
+17:03:45 DEBUG auto_applier.browser.form_filler         Personal info match: 'street address' -> street_address
+17:03:45 DEBUG auto_applier.browser.form_filler           matched personal_info → '1100 4th Avenue'
+17:03:48 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Street address'
+17:03:57 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 4 for ind-e6953da5a7c9b227
+17:03:57 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+17:03:57 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/profile-location
+17:03:57 DEBUG auto_applier.browser.selector_utils      Detected 3 form fields on page
+17:03:57 DEBUG auto_applier.browser.selector_utils        field[0]: label='Zip code' type=text
+17:03:57 DEBUG auto_applier.browser.selector_utils        field[1]: label='City, State' type=text
+17:03:57 DEBUG auto_applier.browser.selector_utils        field[2]: label='Street address' type=text
+17:03:57 DEBUG auto_applier.browser.form_filler         fill_field: label='Zip code' type=text options=none
+17:03:57 DEBUG auto_applier.browser.form_filler         Personal info match: 'zip code' -> zip_code
+17:03:57 DEBUG auto_applier.browser.form_filler           matched personal_info → '98101'
+17:03:59 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Zip code'
+17:03:59 DEBUG auto_applier.browser.form_filler         fill_field: label='City, State' type=text options=none
+17:03:59 DEBUG auto_applier.browser.form_filler           → hidden field, skipping (likely honeypot)
+17:04:00 DEBUG auto_applier.browser.form_filler         fill_field: label='Street address' type=text options=none
+17:04:00 DEBUG auto_applier.browser.form_filler           → hidden field, skipping (likely honeypot)
+17:04:00 WARNING auto_applier.browser.platforms.indeed    Indeed: form not advancing at https://smartapply.indeed.com/beta/indeedapply/form/profile-location — same URL and fields across steps 3→4, bailing
+17:04:46 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-e230c94619394494 (3083 chars)
+17:04:46 DEBUG auto_applier.browser.platforms.indeed    External apply detected via button text: 'apply on company site'
+17:04:48 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-855cb8c143a75f0f (2137 chars)
+17:04:48 DEBUG auto_applier.browser.platforms.indeed    External apply detected via button text: 'apply on company site'
+17:04:50 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-3ca280ed396a1420 (4483 chars)
+17:04:54 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 1 for ind-3ca280ed396a1420
+17:04:56 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:04:56 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:04:56 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:04:56 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:04:56 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:04:56 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:04:56 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:04:56 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:04:56 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:04:56 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:05:05 INFO  auto_applier.browser.platforms.indeed    Indeed: Text-scan click on button 'continue'
+17:05:05 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 2 for ind-3ca280ed396a1420
+17:05:05 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+17:05:06 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:05:06 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:05:06 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:05:06 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:05:06 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:05:06 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:05:06 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:05:06 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:05:06 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:05:06 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:05:15 INFO  auto_applier.browser.platforms.indeed    Indeed: Text-scan click on button 'continue'
+17:05:15 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 3 for ind-3ca280ed396a1420
+17:05:15 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+17:05:16 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:05:16 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:05:16 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:05:16 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:05:16 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:05:16 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:05:16 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:05:16 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:05:16 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:05:16 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:05:17 WARNING auto_applier.browser.platforms.indeed    Indeed: form not advancing at https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module — same URL and fields across steps 2→3, bailing
+17:05:53 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-2e19d070e68df8d1 (4057 chars)
+17:05:53 DEBUG auto_applier.browser.platforms.indeed    External apply detected via button text: 'apply on company site'
+17:05:54 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-4fa51925f61dd9b9 (7192 chars)
+17:05:55 DEBUG auto_applier.browser.platforms.indeed    External apply detected via button text: 'apply on company site'
+17:05:56 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-e6d39619fc6ca125 (5058 chars)
+17:05:56 DEBUG auto_applier.browser.platforms.indeed    External apply detected via button text: 'apply on company site'
+17:05:58 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-d2099ed4e4e70bfb (2063 chars)
+17:06:00 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 1 for ind-d2099ed4e4e70bfb
+17:06:01 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:06:02 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:06:02 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:06:02 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:06:02 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:06:02 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:06:02 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:06:02 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:06:02 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:06:02 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:06:10 INFO  auto_applier.browser.platforms.indeed    Indeed: Text-scan click on button 'continue'
+17:06:11 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 2 for ind-d2099ed4e4e70bfb
+17:06:11 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+17:06:12 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:06:12 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:06:12 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:06:12 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:06:12 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:06:12 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:06:12 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:06:12 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:06:12 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:06:12 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:06:20 INFO  auto_applier.browser.platforms.indeed    Indeed: Text-scan click on button 'continue'
+17:06:21 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 3 for ind-d2099ed4e4e70bfb
+17:06:21 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+17:06:21 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:06:22 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:06:22 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:06:22 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:06:22 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:06:22 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:06:22 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:06:22 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:06:22 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:06:22 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:06:22 WARNING auto_applier.browser.platforms.indeed    Indeed: form not advancing at https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module — same URL and fields across steps 2→3, bailing
+17:06:58 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-cd645d9d6b23d512 (5251 chars)
+17:06:58 DEBUG auto_applier.browser.platforms.indeed    External apply detected via button text: 'apply on company site'
+17:07:00 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-ea4b96ad05cd38b3 (4991 chars)
+17:07:03 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 1 for ind-ea4b96ad05cd38b3
+17:07:04 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:07:04 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:07:04 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:07:04 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:07:04 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:07:04 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:07:04 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:07:04 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:07:04 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:07:04 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:07:13 INFO  auto_applier.browser.platforms.indeed    Indeed: Text-scan click on button 'continue'
+17:07:13 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 2 for ind-ea4b96ad05cd38b3
+17:07:13 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+17:07:14 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:07:14 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:07:14 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:07:14 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:07:14 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:07:14 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:07:14 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:07:14 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:07:14 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:07:14 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:07:22 INFO  auto_applier.browser.platforms.indeed    Indeed: Text-scan click on button 'continue'
+17:07:23 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 3 for ind-ea4b96ad05cd38b3
+17:07:23 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+17:07:24 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:07:24 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:07:24 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:07:24 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:07:24 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:07:24 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:07:24 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:07:24 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:07:24 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:07:24 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:07:24 WARNING auto_applier.browser.platforms.indeed    Indeed: form not advancing at https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module — same URL and fields across steps 2→3, bailing
+17:07:44 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-7c0bdd62587467a0 (8598 chars)
+17:07:45 DEBUG auto_applier.browser.platforms.indeed    External apply detected via button text: 'apply on company site'
+17:07:46 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-c44403fe91e8fb0c (4328 chars)
+17:07:49 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 1 for ind-c44403fe91e8fb0c
+17:07:50 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:07:50 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:07:50 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:07:50 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:07:50 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:07:50 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:07:50 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:07:50 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:07:50 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:07:50 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:07:59 INFO  auto_applier.browser.platforms.indeed    Indeed: Text-scan click on button 'continue'
+17:08:00 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 2 for ind-c44403fe91e8fb0c
+17:08:00 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+17:08:00 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:08:00 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:08:00 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:08:00 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:08:00 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:08:00 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:08:00 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:08:00 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:08:00 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:08:00 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:08:01 WARNING auto_applier.browser.platforms.indeed    Indeed: form not advancing at https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module — same URL and fields across steps 1→2, bailing
+17:08:18 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-def5102959da649f (5395 chars)
+17:08:18 DEBUG auto_applier.browser.platforms.indeed    External apply detected via button text: 'apply on company site'
+17:08:20 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-1c0854b8fa81caca (3145 chars)
+17:08:20 DEBUG auto_applier.browser.platforms.indeed    External apply detected via button text: 'apply on company site'
+17:08:22 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-5bd0b949e7a46843 (4917 chars)
+17:08:22 DEBUG auto_applier.browser.platforms.indeed    External apply detected via button text: 'apply on company site'
+17:08:24 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-0e6f7937aa93343f (5907 chars)
+17:08:27 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 1 for ind-0e6f7937aa93343f
+17:08:28 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:08:28 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:08:28 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:08:28 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:08:28 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:08:28 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:08:28 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:08:28 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:08:29 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:08:29 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:08:37 INFO  auto_applier.browser.platforms.indeed    Indeed: Text-scan click on button 'continue'
+17:08:38 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 2 for ind-0e6f7937aa93343f
+17:08:38 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+17:08:38 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:08:38 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:08:38 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:08:38 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:08:38 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:08:38 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:08:38 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:08:38 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:08:39 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:08:39 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:08:39 WARNING auto_applier.browser.platforms.indeed    Indeed: form not advancing at https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module — same URL and fields across steps 1→2, bailing
+17:09:11 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-c47096678a27e1ce (5493 chars)
+17:09:14 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 1 for ind-c47096678a27e1ce
+17:09:15 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:09:15 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:09:15 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:09:15 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:09:15 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:09:15 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:09:15 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:09:15 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:09:15 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:09:15 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:09:24 INFO  auto_applier.browser.platforms.indeed    Indeed: Text-scan click on button 'continue'
+17:09:24 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 2 for ind-c47096678a27e1ce
+17:09:25 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+17:09:25 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:09:25 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:09:25 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:09:25 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:09:25 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:09:25 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:09:25 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:09:25 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:09:25 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:09:25 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:09:34 INFO  auto_applier.browser.platforms.indeed    Indeed: Text-scan click on button 'continue'
+17:09:35 INFO  auto_applier.browser.platforms.indeed    Indeed: Application form step 3 for ind-c47096678a27e1ce
+17:09:35 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+17:09:35 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+17:09:35 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+17:09:35 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+17:09:35 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+17:09:35 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+17:09:35 DEBUG auto_applier.browser.form_filler         Personal info match: 'phone' -> phone
+17:09:35 DEBUG auto_applier.browser.form_filler           matched personal_info → '2065550100'
+17:09:35 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Type phone number'
+17:09:36 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+17:09:36 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+17:09:36 WARNING auto_applier.browser.platforms.indeed    Indeed: form not advancing at https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module — same URL and fields across steps 2→3, bailing
+17:10:16 INFO  auto_applier.orchestrator.engine         Stop requested — will finish current job and exit.
+17:10:16 INFO  auto_applier.orchestrator.engine         Stop requested, finishing indeed after current job
+17:10:16 INFO  auto_applier.orchestrator.engine         Stop requested, skipping remaining keywords on indeed
+17:10:16 INFO  auto_applier.orchestrator.engine         Stop requested, skipping remaining platforms
+17:10:16 INFO  auto_applier.resume.evolution            Found 0 evolution triggers (threshold=3)
+17:10:16 INFO  auto_applier.browser.session             Browser session stopped

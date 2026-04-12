@@ -1,0 +1,73 @@
+11:09:16 INFO  auto_applier.log_setup                   Run logging enabled. Debug output: C:\Users\jar85\AI Projects\Auto Applier\data\logs\run-20260412-110916.log
+11:09:17 DEBUG asyncio                                  Using proactor: IocpProactor
+11:09:17 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+11:09:18 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000001ACB3062540>
+11:09:18 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'GET']>
+11:09:18 DEBUG httpcore.http11                          send_request_headers.complete
+11:09:18 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'GET']>
+11:09:18 DEBUG httpcore.http11                          send_request_body.complete
+11:09:18 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'GET']>
+11:09:18 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 12 Apr 2026 16:09:18 GMT'), (b'Content-Length', b'339')])
+11:09:18 INFO  httpx                                    HTTP Request: GET http://localhost:11434/api/tags "HTTP/1.1 200 OK"
+11:09:18 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'GET']>
+11:09:18 DEBUG httpcore.http11                          receive_response_body.complete
+11:09:18 DEBUG httpcore.http11                          response_closed.started
+11:09:18 DEBUG httpcore.http11                          response_closed.complete
+11:09:18 INFO  auto_applier.llm.router                  LLM backend ollama       : available
+11:09:18 INFO  auto_applier.llm.router                  LLM backend gemini       : unavailable
+11:09:18 INFO  auto_applier.llm.router                  LLM backend rule-based   : available
+11:09:18 INFO  auto_applier.browser.session             Using patchright (CDP leak patches active)
+11:09:18 INFO  auto_applier.browser.session             Detected real Chrome installation, using channel=chrome
+11:09:19 INFO  auto_applier.browser.session             Browser session started (patchright=True)
+11:09:19 INFO  auto_applier.browser.anti_detect         Anti-detect fast mode: ON
+11:09:21 INFO  auto_applier.browser.platforms.indeed    Indeed: Already logged in
+11:09:21 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 1 -- data analyst Remote
+11:09:25 DEBUG auto_applier.browser.platforms.indeed    Found 16 job cards via 'div[data-testid='slider_item']'
+11:09:27 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 2 -- data analyst Remote
+11:09:29 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+11:09:31 DEBUG auto_applier.browser.platforms.indeed    Found 16 job cards via 'div[data-testid='slider_item']'
+11:09:32 INFO  auto_applier.browser.platforms.indeed    Indeed: Found 32 jobs for 'data analyst' in 'Remote'
+11:09:32 INFO  auto_applier.orchestrator.pipeline       discover_jobs[indeed/data analyst]: raw=25 kept=23 filtered=2 (already_applied=0, canonical_dup=0, batch_dup=2) dry_run=True
+11:09:34 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-e6953da5a7c9b227 (3462 chars)
+11:09:34 INFO  auto_applier.orchestrator.engine         Score: EPIC Cogito Business Intelligence Developer - Seni @ indeed → 7.0 (auto_apply) [resume=Testpilot]
+11:09:42 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+11:09:42 DEBUG auto_applier.browser.selector_utils      Detected 3 form fields on page
+11:09:42 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+11:09:42 DEBUG auto_applier.browser.selector_utils        field[1]: label="If you're a human, leave this blank" type=number
+11:09:42 DEBUG auto_applier.browser.selector_utils        field[2]: label='Phone number' type=text
+11:09:42 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+11:09:42 DEBUG auto_applier.browser.form_filler           → already pre-filled, skipping
+11:09:43 DEBUG auto_applier.browser.form_filler         fill_field: label="If you're a human, leave this blank" type=number options=none
+11:09:43 DEBUG auto_applier.browser.form_filler           → honeypot field by label, skipping
+11:09:43 DEBUG auto_applier.browser.form_filler         fill_field: label='Phone number' type=text options=none
+11:09:43 DEBUG auto_applier.browser.form_filler           → already pre-filled, skipping
+11:09:43 INFO  auto_applier.browser.platforms.indeed    Indeed: step 1 module=generic fields=3 url=applybyapplyablejobid?indeedApplyableJobId=499d698d-1cba-49ae-8e0b-b5d956fc1802-cGR4cHJvZDE&iaUid=1jm17975dijth801&iststd=1
+11:09:51 INFO  auto_applier.browser.platforms.indeed    Indeed: Text-scan click on button 'continue'
+11:09:51 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+11:09:52 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/contact-info-module
+11:09:52 DEBUG auto_applier.browser.selector_utils      Detected 1 form fields on page
+11:09:52 DEBUG auto_applier.browser.selector_utils        field[0]: label='Type phone number' type=text
+11:09:52 DEBUG auto_applier.browser.form_filler         fill_field: label='Type phone number' type=text options=none
+11:09:52 DEBUG auto_applier.browser.form_filler           → hidden field, skipping (likely honeypot)
+11:09:52 INFO  auto_applier.browser.platforms.indeed    Indeed: step 2 module=contact-info fields=1 url=contact-info-module
+11:10:00 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+11:10:01 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/profile-location
+11:10:01 DEBUG auto_applier.browser.selector_utils      Detected 3 form fields on page
+11:10:01 DEBUG auto_applier.browser.selector_utils        field[0]: label='Zip code' type=text
+11:10:01 DEBUG auto_applier.browser.selector_utils        field[1]: label='City, State' type=text
+11:10:01 DEBUG auto_applier.browser.selector_utils        field[2]: label='Street address' type=text
+11:10:01 DEBUG auto_applier.browser.form_filler         fill_field: label='Zip code' type=text options=none
+11:10:01 DEBUG auto_applier.browser.form_filler           → already pre-filled, skipping
+11:10:01 DEBUG auto_applier.browser.form_filler         fill_field: label='City, State' type=text options=none
+11:10:01 DEBUG auto_applier.browser.form_filler           → already pre-filled, skipping
+11:10:01 DEBUG auto_applier.browser.form_filler         fill_field: label='Street address' type=text options=none
+11:10:01 DEBUG auto_applier.browser.form_filler           → already pre-filled, skipping
+11:10:02 INFO  auto_applier.browser.platforms.indeed    Indeed: step 3 module=generic fields=3 url=profile-location
+11:10:03 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+11:10:03 INFO  auto_applier.browser.platforms.indeed    Indeed: Uploaded resume from C:\Users\jar85\AI Projects\Auto Applier\data\resumes\testpilot.docx
+11:10:04 INFO  auto_applier.browser.platforms.indeed    Indeed: step 4 module=resume-selection fields=0 url=resume-selection
+11:10:11 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+11:10:11 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/questions-module/questions/1
+11:10:11 DEBUG auto_applier.browser.selector_utils      Detected 0 form fields on page
+11:10:11 INFO  auto_applier.browser.platforms.indeed    Indeed: step 5 module=generic fields=0 url=1
+11:10:29 WARNING auto_applier.browser.platforms.indeed    Indeed: form not advancing at https://smartapply.indeed.com/beta/indeedapply/form/questions-module/questions/1 (module=generic) — no URL change, no visible error

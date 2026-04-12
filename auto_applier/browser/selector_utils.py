@@ -159,7 +159,10 @@ async def find_form_fields(page: Page) -> list[FormField]:
             label_id = await group.get_attribute("aria-labelledby")
             if not label_id:
                 continue
-            label_el = await page.query_selector(f"#{label_id}")
+            # aria-labelledby can contain space-separated IDs; use
+            # only the first one for the CSS selector.
+            first_id = label_id.split()[0]
+            label_el = await page.query_selector(f"#{first_id}")
             if not label_el:
                 continue
             label_text = (await label_el.inner_text()).strip()

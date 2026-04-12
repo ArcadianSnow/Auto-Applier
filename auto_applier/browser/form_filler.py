@@ -364,7 +364,7 @@ class FormFiller:
                     logger.debug(
                         "Personal info match: '%s' -> %s", keyword, config_key
                     )
-                return value
+                    return value
         return ""
 
     # ------------------------------------------------------------------

@@ -1,0 +1,120 @@
+11:11:44 INFO  auto_applier.log_setup                   Run logging enabled. Debug output: C:\Users\jar85\AI Projects\Auto Applier\data\logs\run-20260412-111144.log
+11:11:44 DEBUG asyncio                                  Using proactor: IocpProactor
+11:11:45 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+11:11:45 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000001D958C66720>
+11:11:45 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'GET']>
+11:11:45 DEBUG httpcore.http11                          send_request_headers.complete
+11:11:45 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'GET']>
+11:11:45 DEBUG httpcore.http11                          send_request_body.complete
+11:11:45 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'GET']>
+11:11:45 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 12 Apr 2026 16:11:45 GMT'), (b'Content-Length', b'339')])
+11:11:45 INFO  httpx                                    HTTP Request: GET http://localhost:11434/api/tags "HTTP/1.1 200 OK"
+11:11:45 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'GET']>
+11:11:45 DEBUG httpcore.http11                          receive_response_body.complete
+11:11:45 DEBUG httpcore.http11                          response_closed.started
+11:11:45 DEBUG httpcore.http11                          response_closed.complete
+11:11:45 INFO  auto_applier.llm.router                  LLM backend ollama       : available
+11:11:45 INFO  auto_applier.llm.router                  LLM backend gemini       : unavailable
+11:11:45 INFO  auto_applier.llm.router                  LLM backend rule-based   : available
+11:11:45 INFO  auto_applier.browser.session             Using patchright (CDP leak patches active)
+11:11:46 INFO  auto_applier.browser.session             Detected real Chrome installation, using channel=chrome
+11:11:46 INFO  auto_applier.browser.session             Browser session started (patchright=True)
+11:11:46 INFO  auto_applier.browser.anti_detect         Anti-detect fast mode: ON
+11:11:48 INFO  auto_applier.browser.platforms.indeed    Indeed: Already logged in
+11:11:49 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 1 -- data analyst Remote
+11:11:51 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+11:11:54 DEBUG auto_applier.browser.platforms.indeed    Found 17 job cards via 'div[data-testid='slider_item']'
+11:11:56 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 2 -- data analyst Remote
+11:11:58 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+11:12:04 DEBUG auto_applier.browser.platforms.indeed    Found 16 job cards via 'div[data-testid='slider_item']'
+11:12:04 INFO  auto_applier.browser.platforms.indeed    Indeed: Found 33 jobs for 'data analyst' in 'Remote'
+11:12:04 INFO  auto_applier.orchestrator.pipeline       discover_jobs[indeed/data analyst]: raw=25 kept=23 filtered=2 (already_applied=0, canonical_dup=0, batch_dup=2) dry_run=True
+11:12:06 DEBUG auto_applier.browser.platforms.indeed    Indeed: Got description for ind-e6953da5a7c9b227 (3462 chars)
+11:12:07 INFO  auto_applier.orchestrator.engine         Score: EPIC Cogito Business Intelligence Developer - Seni @ indeed → 7.0 (auto_apply) [resume=Testpilot]
+11:12:15 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/resume-selection-module/resume-selection
+11:12:15 DEBUG auto_applier.browser.selector_utils      Detected 1 form fields on page
+11:12:15 DEBUG auto_applier.browser.selector_utils        field[0]: label='Build an Indeed Resume' type=radio
+11:12:15 DEBUG auto_applier.browser.form_filler         fill_field: label='Build an Indeed Resume' type=radio options=none
+11:12:15 DEBUG auto_applier.browser.form_filler           → hidden field, skipping (likely honeypot)
+11:12:15 INFO  auto_applier.browser.platforms.indeed    Indeed: step 1 module=generic fields=1 url=applybyapplyablejobid?indeedApplyableJobId=499d698d-1cba-49ae-8e0b-b5d956fc1802-cGR4cHJvZDE&iaUid=1jm17drl3jljo801&iststd=1
+11:12:18 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+11:12:18 INFO  auto_applier.browser.platforms.indeed    Indeed: Uploaded resume from C:\Users\jar85\AI Projects\Auto Applier\data\resumes\testpilot.docx
+11:12:19 INFO  auto_applier.browser.platforms.indeed    Indeed: Selected uploaded-resume option (fallback)
+11:12:19 INFO  auto_applier.browser.platforms.indeed    Indeed: step 2 module=resume-selection fields=0 url=resume-selection
+11:12:26 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+11:12:26 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://smartapply.indeed.com/beta/indeedapply/form/questions-module/questions/1
+11:12:26 DEBUG auto_applier.browser.selector_utils      Detected 0 form fields on page
+11:12:27 DEBUG auto_applier.browser.form_filler         fill_field: label='q_13ae933e91bed3852a3f9ea836a56d6f' type=radio options=none
+11:12:27 DEBUG auto_applier.browser.form_filler           no deterministic match, calling LLM...
+11:12:27 DEBUG httpcore.connection                      close.started
+11:12:27 DEBUG httpcore.connection                      close.complete
+11:12:27 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+11:12:27 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000001D95A7F9190>
+11:12:27 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+11:12:27 DEBUG httpcore.http11                          send_request_headers.complete
+11:12:27 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+11:12:27 DEBUG httpcore.http11                          send_request_body.complete
+11:12:27 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+11:12:34 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 12 Apr 2026 16:12:34 GMT'), (b'Transfer-Encoding', b'chunked')])
+11:12:34 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+11:12:34 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+11:12:34 DEBUG httpcore.http11                          receive_response_body.complete
+11:12:34 DEBUG httpcore.http11                          response_closed.started
+11:12:34 DEBUG httpcore.http11                          response_closed.complete
+11:12:34 DEBUG auto_applier.llm.router                  Backend ollama answered (7906ms, 2 tokens)
+11:12:34 DEBUG auto_applier.browser.form_filler         LLM generated answer for 'q_13ae933e91bed3852a3f9ea836a56d6f': No...
+11:12:34 DEBUG auto_applier.browser.form_filler           LLM returned → 'No'
+11:12:34 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'q_13ae933e91bed3852a3f9ea836a56d6f'
+11:12:35 DEBUG auto_applier.browser.form_filler         fill_field: label='q_b8e3cf2929dfe3ef081f2a9b73ac1a74' type=textarea options=none
+11:12:35 DEBUG auto_applier.browser.form_filler           no deterministic match, calling LLM...
+11:12:35 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+11:12:35 DEBUG httpcore.http11                          send_request_headers.complete
+11:12:35 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+11:12:35 DEBUG httpcore.http11                          send_request_body.complete
+11:12:35 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+11:12:35 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 12 Apr 2026 16:12:35 GMT'), (b'Transfer-Encoding', b'chunked')])
+11:12:35 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+11:12:35 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+11:12:35 DEBUG httpcore.http11                          receive_response_body.complete
+11:12:35 DEBUG httpcore.http11                          response_closed.started
+11:12:35 DEBUG httpcore.http11                          response_closed.complete
+11:12:35 DEBUG auto_applier.llm.router                  Backend ollama answered (469ms, 2 tokens)
+11:12:35 DEBUG auto_applier.browser.form_filler         LLM generated answer for 'q_b8e3cf2929dfe3ef081f2a9b73ac1a74': No...
+11:12:35 DEBUG auto_applier.browser.form_filler           LLM returned → 'No'
+11:12:36 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'q_b8e3cf2929dfe3ef081f2a9b73ac1a74'
+11:12:36 DEBUG auto_applier.browser.form_filler         fill_field: label='q_856c8489eae762a7394d98bafb26f746' type=radio options=none
+11:12:36 DEBUG auto_applier.browser.form_filler           no deterministic match, calling LLM...
+11:12:36 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+11:12:36 DEBUG httpcore.http11                          send_request_headers.complete
+11:12:36 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+11:12:36 DEBUG httpcore.http11                          send_request_body.complete
+11:12:36 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+11:12:36 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 12 Apr 2026 16:12:36 GMT'), (b'Transfer-Encoding', b'chunked')])
+11:12:36 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+11:12:36 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+11:12:36 DEBUG httpcore.http11                          receive_response_body.complete
+11:12:36 DEBUG httpcore.http11                          response_closed.started
+11:12:36 DEBUG httpcore.http11                          response_closed.complete
+11:12:36 DEBUG auto_applier.llm.router                  Backend ollama answered (438ms, 2 tokens)
+11:12:36 DEBUG auto_applier.browser.form_filler         LLM generated answer for 'q_856c8489eae762a7394d98bafb26f746': No...
+11:12:36 DEBUG auto_applier.browser.form_filler           LLM returned → 'No'
+11:12:36 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'q_856c8489eae762a7394d98bafb26f746'
+11:12:36 DEBUG auto_applier.browser.form_filler         fill_field: label='q_b2b350c52f5e581bd77418893adb8ee9' type=text options=none
+11:12:36 DEBUG auto_applier.browser.form_filler           no deterministic match, calling LLM...
+11:12:36 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+11:12:36 DEBUG httpcore.http11                          send_request_headers.complete
+11:12:36 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+11:12:36 DEBUG httpcore.http11                          send_request_body.complete
+11:12:36 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+11:12:39 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 12 Apr 2026 16:12:39 GMT'), (b'Transfer-Encoding', b'chunked')])
+11:12:39 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+11:12:39 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+11:12:39 DEBUG httpcore.http11                          receive_response_body.complete
+11:12:39 DEBUG httpcore.http11                          response_closed.started
+11:12:39 DEBUG httpcore.http11                          response_closed.complete
+11:12:39 ERROR auto_applier.llm.router                  All LLM backends failed for prompt
+11:12:39 DEBUG auto_applier.browser.form_filler           → NO ANSWER FOUND, recording as skill gap
+11:12:39 DEBUG auto_applier.browser.form_filler         Recorded skill gap: 'q_b2b350c52f5e581bd77418893adb8ee9' (other)
+11:12:39 INFO  auto_applier.browser.platforms.indeed    Indeed: step 3 module=questions fields=4 url=1
+11:12:56 WARNING auto_applier.browser.platforms.indeed    Indeed: form not advancing at https://smartapply.indeed.com/beta/indeedapply/form/questions-module/questions/1 (module=questions) — no URL change, no visible error
+11:13:29 INFO  auto_applier.orchestrator.engine         Apply FAILED: EPIC Cogito Business Intelligence Developer - Seni @ indeed → form stuck on 1 (questions): no URL change, no visible error

@@ -1,0 +1,78 @@
+08:55:41 INFO  auto_applier.log_setup                   Run logging enabled. Debug output: C:\Users\jar85\AI Projects\Auto Applier\data\logs\run-20260412-085541.log
+08:55:42 DEBUG asyncio                                  Using proactor: IocpProactor
+08:55:42 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+08:55:43 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002356AAC2720>
+08:55:43 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'GET']>
+08:55:43 DEBUG httpcore.http11                          send_request_headers.complete
+08:55:43 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'GET']>
+08:55:43 DEBUG httpcore.http11                          send_request_body.complete
+08:55:43 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'GET']>
+08:55:43 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 12 Apr 2026 13:55:43 GMT'), (b'Content-Length', b'339')])
+08:55:43 INFO  httpx                                    HTTP Request: GET http://localhost:11434/api/tags "HTTP/1.1 200 OK"
+08:55:43 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'GET']>
+08:55:43 DEBUG httpcore.http11                          receive_response_body.complete
+08:55:43 DEBUG httpcore.http11                          response_closed.started
+08:55:43 DEBUG httpcore.http11                          response_closed.complete
+08:55:43 INFO  auto_applier.llm.router                  LLM backend ollama       : available
+08:55:43 INFO  auto_applier.llm.router                  LLM backend gemini       : unavailable
+08:55:43 INFO  auto_applier.llm.router                  LLM backend rule-based   : available
+08:55:43 INFO  auto_applier.browser.session             Using patchright (CDP leak patches active)
+08:55:50 INFO  auto_applier.browser.session             Detected real Chrome installation, using channel=chrome
+08:55:50 INFO  auto_applier.browser.session             Browser session started (patchright=True)
+08:55:50 INFO  auto_applier.browser.anti_detect         Anti-detect fast mode: ON
+08:56:38 INFO  auto_applier.browser.platforms.dice      Dice: Not logged in. Navigating to login page for manual login...
+08:56:39 INFO  auto_applier.browser.base_platform       Waiting for manual login on Dice (timeout=300s)...
+08:56:39 INFO  auto_applier.browser.base_platform       Login detected via URL pattern
+08:56:40 INFO  auto_applier.browser.platforms.dice      Dice: Searching page 1 -- data analyst Remote
+08:56:46 DEBUG auto_applier.browser.platforms.dice      Found 20 job cards via 'div:has(> a[data-testid='job-search-job-detail-link'])'
+08:56:49 INFO  auto_applier.browser.platforms.dice      Dice: Searching page 2 -- data analyst Remote
+08:56:58 DEBUG auto_applier.browser.platforms.dice      Found 20 job cards via 'div:has(> a[data-testid='job-search-job-detail-link'])'
+08:57:01 INFO  auto_applier.browser.platforms.dice      Dice: Found 40 jobs for 'data analyst' in 'Remote'
+08:57:01 INFO  auto_applier.orchestrator.pipeline       discover_jobs[dice/data analyst]: raw=25 kept=25 filtered=0 (already_applied=0, canonical_dup=0, batch_dup=0) dry_run=True
+08:57:34 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-c3be6293-761b-4b15-b423-259bf401823a (3570 chars)
+08:57:34 INFO  auto_applier.orchestrator.engine         Score: Data Analyst II - Business Office @ dice → 9.0 (auto_apply) [resume=Testpilot]
+08:57:38 INFO  auto_applier.browser.platforms.dice      Dice: Easy Apply step 1 for dice-c3be6293-761b-4b15-b423-259bf401823a
+08:57:38 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://www.dice.com/dashboard/login?redirectUrl=%2Fjob-applications%2Fc3be6293-761b-4b15-b423-259bf401823a%2Fstart-apply
+08:57:38 DEBUG auto_applier.browser.selector_utils      Detected 2 form fields on page
+08:57:38 DEBUG auto_applier.browser.selector_utils        field[0]: label='Email address' type=text
+08:57:38 DEBUG auto_applier.browser.selector_utils        field[1]: label='name@yourdomain.com' type=text
+08:57:38 DEBUG auto_applier.browser.form_filler         fill_field: label='Email address' type=text options=none
+08:57:38 DEBUG auto_applier.browser.form_filler         Personal info match: 'email' -> email
+08:57:38 DEBUG auto_applier.browser.form_filler           matched personal_info → 'jordan.testpilot@example.com'
+08:57:43 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Email address'
+08:57:43 DEBUG auto_applier.browser.form_filler         fill_field: label='name@yourdomain.com' type=text options=none
+08:57:43 DEBUG auto_applier.browser.form_filler           → already pre-filled, skipping
+08:58:10 INFO  auto_applier.browser.platforms.dice      Dice: Easy Apply step 2 for dice-c3be6293-761b-4b15-b423-259bf401823a
+08:58:11 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://www.dice.com/register/new-profile?email=jordan.testpilot%40example.com&redirectUrl=%2Fjob-applications%2Fc3be6293-761b-4b15-b423-259bf401823a%2Fstart-apply
+08:58:11 DEBUG auto_applier.browser.selector_utils      Detected 10 form fields on page
+08:58:11 DEBUG auto_applier.browser.selector_utils        field[0]: label='First Name *' type=text
+08:58:11 DEBUG auto_applier.browser.selector_utils        field[1]: label='Last Name *' type=text
+08:58:11 DEBUG auto_applier.browser.selector_utils        field[2]: label='Email Address *' type=text
+08:58:11 DEBUG auto_applier.browser.selector_utils        field[3]: label='Password *' type=text
+08:58:11 DEBUG auto_applier.browser.selector_utils        field[4]: label='Confirm Password *' type=text
+08:58:11 DEBUG auto_applier.browser.selector_utils        field[5]: label='Email address' type=text
+08:58:11 DEBUG auto_applier.browser.selector_utils        field[6]: label='John' type=text
+08:58:11 DEBUG auto_applier.browser.selector_utils        field[7]: label='Doe' type=text
+08:58:11 DEBUG auto_applier.browser.selector_utils        field[8]: label='you@example.com' type=text
+08:58:11 DEBUG auto_applier.browser.selector_utils        field[9]: label='name@yourdomain.com' type=text
+08:58:11 DEBUG auto_applier.browser.form_filler         fill_field: label='First Name *' type=text options=none
+08:58:11 DEBUG auto_applier.browser.form_filler         Personal info match: 'first name' -> first_name
+08:58:11 DEBUG auto_applier.browser.form_filler           matched personal_info → 'Jordan'
+08:58:13 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'First Name *'
+08:58:13 DEBUG auto_applier.browser.form_filler         fill_field: label='Last Name *' type=text options=none
+08:58:13 DEBUG auto_applier.browser.form_filler         Personal info match: 'last name' -> last_name
+08:58:13 DEBUG auto_applier.browser.form_filler           matched personal_info → 'Testpilot'
+08:58:15 DEBUG auto_applier.browser.form_filler           ← apply_answer returned True for 'Last Name *'
+08:58:15 DEBUG auto_applier.browser.form_filler         fill_field: label='Email Address *' type=text options=none
+08:58:15 DEBUG auto_applier.browser.form_filler           → already pre-filled, skipping
+08:58:15 DEBUG auto_applier.browser.form_filler         fill_field: label='Password *' type=text options=none
+08:58:15 DEBUG auto_applier.browser.form_filler           no deterministic match, calling LLM...
+08:58:15 DEBUG httpcore.connection                      close.started
+08:58:15 DEBUG httpcore.connection                      close.complete
+08:58:15 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+08:58:16 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002356C7BE240>
+08:58:16 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+08:58:16 DEBUG httpcore.http11                          send_request_headers.complete
+08:58:16 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+08:58:16 DEBUG httpcore.http11                          send_request_body.complete
+08:58:16 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>

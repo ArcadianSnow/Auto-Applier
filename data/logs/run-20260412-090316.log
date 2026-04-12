@@ -1,0 +1,88 @@
+09:03:16 INFO  auto_applier.log_setup                   Run logging enabled. Debug output: C:\Users\jar85\AI Projects\Auto Applier\data\logs\run-20260412-090316.log
+09:03:16 DEBUG asyncio                                  Using proactor: IocpProactor
+09:03:17 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+09:03:17 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x00000251CC4D1640>
+09:03:17 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'GET']>
+09:03:17 DEBUG httpcore.http11                          send_request_headers.complete
+09:03:17 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'GET']>
+09:03:17 DEBUG httpcore.http11                          send_request_body.complete
+09:03:17 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'GET']>
+09:03:17 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 12 Apr 2026 14:03:17 GMT'), (b'Content-Length', b'339')])
+09:03:17 INFO  httpx                                    HTTP Request: GET http://localhost:11434/api/tags "HTTP/1.1 200 OK"
+09:03:17 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'GET']>
+09:03:17 DEBUG httpcore.http11                          receive_response_body.complete
+09:03:17 DEBUG httpcore.http11                          response_closed.started
+09:03:17 DEBUG httpcore.http11                          response_closed.complete
+09:03:17 INFO  auto_applier.llm.router                  LLM backend ollama       : available
+09:03:17 INFO  auto_applier.llm.router                  LLM backend gemini       : unavailable
+09:03:17 INFO  auto_applier.llm.router                  LLM backend rule-based   : available
+09:03:17 INFO  auto_applier.browser.session             Using patchright (CDP leak patches active)
+09:03:18 INFO  auto_applier.browser.session             Detected real Chrome installation, using channel=chrome
+09:03:18 INFO  auto_applier.browser.session             Browser session started (patchright=True)
+09:03:18 INFO  auto_applier.browser.anti_detect         Anti-detect fast mode: ON
+09:04:05 INFO  auto_applier.browser.platforms.dice      Dice: Not logged in. Navigating to login page for manual login...
+09:04:05 INFO  auto_applier.browser.base_platform       Waiting for manual login on Dice (timeout=300s)...
+09:04:05 INFO  auto_applier.browser.base_platform       Login detected via URL pattern
+09:04:06 INFO  auto_applier.browser.platforms.dice      Dice: Searching page 1 -- data analyst Remote
+09:04:14 DEBUG auto_applier.browser.platforms.dice      Found 20 job cards via 'div:has(> a[data-testid='job-search-job-detail-link'])'
+09:04:17 INFO  auto_applier.browser.platforms.dice      Dice: Searching page 2 -- data analyst Remote
+09:04:23 DEBUG auto_applier.browser.platforms.dice      Found 20 job cards via 'div:has(> a[data-testid='job-search-job-detail-link'])'
+09:04:24 INFO  auto_applier.browser.platforms.dice      Dice: Found 40 jobs for 'data analyst' in 'Remote'
+09:04:25 INFO  auto_applier.orchestrator.pipeline       discover_jobs[dice/data analyst]: raw=25 kept=25 filtered=0 (already_applied=0, canonical_dup=0, batch_dup=0) dry_run=True
+09:04:57 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-c3be6293-761b-4b15-b423-259bf401823a (3570 chars)
+09:04:57 INFO  auto_applier.orchestrator.engine         Score: Data Analyst II - Business Office @ dice → 9.0 (auto_apply) [resume=Testpilot]
+09:05:01 INFO  auto_applier.browser.platforms.dice      Dice: apply redirected to login — waiting for manual login (timeout=120s)...
+09:06:04 INFO  auto_applier.browser.platforms.dice      Dice: login completed, continuing apply flow
+09:06:07 INFO  auto_applier.browser.platforms.dice      Dice: Easy Apply step 1 for dice-c3be6293-761b-4b15-b423-259bf401823a
+09:06:07 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://jobs.unchealthcare.org/jobs/17602947-data-analyst-ii-business-office
+09:06:07 DEBUG auto_applier.browser.selector_utils      Detected 0 form fields on page
+09:06:38 WARNING auto_applier.browser.platforms.dice      Dice: No Next/Submit button found at step 1
+09:07:38 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-75788696-1f00-4e12-bc5f-52da5d5a115a (8297 chars)
+09:07:38 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:07:38 INFO  auto_applier.orchestrator.engine         Score: Data Analyst Advisor @ dice → 8.0 (auto_apply) [resume=Testpilot]
+09:07:39 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:07:41 INFO  auto_applier.browser.platforms.dice      Dice: External ATS redirect detected (new tab opened)
+09:08:07 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:08:37 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-1e5d907f-24ba-412f-8820-364f530f52ca (6667 chars)
+09:08:37 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:08:37 INFO  auto_applier.orchestrator.engine         Score: Data Analyst III @ dice → 8.0 (auto_apply) [resume=Testpilot]
+09:08:39 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:08:41 INFO  auto_applier.browser.platforms.dice      Dice: External ATS redirect detected (new tab opened)
+09:09:02 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:09:33 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-9c0b051e-27c9-44a1-b221-36fc90eed5e3 (8281 chars)
+09:09:33 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:09:33 INFO  auto_applier.orchestrator.engine         Score: Data Analyst Advisor @ dice → 8.0 (auto_apply) [resume=Testpilot]
+09:09:34 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:09:44 INFO  auto_applier.browser.platforms.dice      Dice: External ATS redirect detected (new tab opened)
+09:10:13 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:10:43 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-3f753c77-ba5f-4e8a-8125-9f86d1fe228a (8524 chars)
+09:10:43 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:10:43 INFO  auto_applier.orchestrator.engine         Score: Senior Data Analyst - Digital Insights & Analytics @ dice → 8.0 (auto_apply) [resume=Testpilot]
+09:10:45 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:10:47 INFO  auto_applier.browser.platforms.dice      Dice: External ATS redirect detected (new tab opened)
+09:11:33 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:12:03 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-4bce5615-80d2-482c-a7d4-57ca631971de (3917 chars)
+09:12:03 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:12:03 INFO  auto_applier.orchestrator.engine         Score: Senior Data Analyst - Digital Insights & Analytics @ dice → 9.0 (auto_apply) [resume=Testpilot]
+09:12:04 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:12:07 INFO  auto_applier.browser.platforms.dice      Dice: External ATS redirect detected (new tab opened)
+09:12:32 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:13:02 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-83fd7699-177c-4315-bf29-4c2f36d87438 (2473 chars)
+09:13:02 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:13:02 INFO  auto_applier.orchestrator.engine         Score: Business Data Analyst @ dice → 8.0 (auto_apply) [resume=Testpilot]
+09:13:03 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:13:05 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:13:05 INFO  auto_applier.browser.platforms.dice      Dice: Easy Apply step 1 for dice-83fd7699-177c-4315-bf29-4c2f36d87438
+09:13:05 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:13:06 INFO  auto_applier.browser.platforms.dice      Dice: Uploaded resume from C:\Users\jar85\AI Projects\Auto Applier\data\resumes\testpilot.docx
+09:13:06 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://www.dice.com/job-applications/83fd7699-177c-4315-bf29-4c2f36d87438/wizard
+09:13:06 DEBUG auto_applier.browser.selector_utils      Detected 0 form fields on page
+09:13:34 INFO  auto_applier.browser.platforms.dice      Dice: Easy Apply step 2 for dice-83fd7699-177c-4315-bf29-4c2f36d87438
+09:13:34 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:13:34 INFO  auto_applier.browser.platforms.dice      Dice: Uploaded resume from C:\Users\jar85\AI Projects\Auto Applier\data\resumes\testpilot.docx
+09:13:34 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://www.dice.com/job-applications/83fd7699-177c-4315-bf29-4c2f36d87438/wizard
+09:13:34 DEBUG auto_applier.browser.selector_utils      Detected 0 form fields on page
+09:14:00 INFO  auto_applier.browser.platforms.dice      Dice: Easy Apply step 3 for dice-83fd7699-177c-4315-bf29-4c2f36d87438
+09:14:00 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+09:14:00 DEBUG auto_applier.browser.selector_utils      find_form_fields: scanning page url=https://www.dice.com/job-applications/83fd7699-177c-4315-bf29-4c2f36d87438/wizard
+09:14:00 DEBUG auto_applier.browser.selector_utils      Detected 0 form fields on page

@@ -1,0 +1,1672 @@
+14:40:45 INFO  auto_applier.log_setup                   Run logging enabled. Debug output: C:\Users\jar85\AI Projects\Auto Applier\data\logs\run-20260411-144045.log
+14:40:45 DEBUG asyncio                                  Using proactor: IocpProactor
+14:40:45 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+14:40:46 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF846105C0>
+14:40:46 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'GET']>
+14:40:46 DEBUG httpcore.http11                          send_request_headers.complete
+14:40:46 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'GET']>
+14:40:46 DEBUG httpcore.http11                          send_request_body.complete
+14:40:46 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'GET']>
+14:40:46 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:40:46 GMT'), (b'Content-Length', b'339')])
+14:40:46 INFO  httpx                                    HTTP Request: GET http://localhost:11434/api/tags "HTTP/1.1 200 OK"
+14:40:46 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'GET']>
+14:40:46 DEBUG httpcore.http11                          receive_response_body.complete
+14:40:46 DEBUG httpcore.http11                          response_closed.started
+14:40:46 DEBUG httpcore.http11                          response_closed.complete
+14:40:46 INFO  auto_applier.llm.router                  LLM backend ollama       : available
+14:40:46 INFO  auto_applier.llm.router                  LLM backend gemini       : unavailable
+14:40:46 INFO  auto_applier.llm.router                  LLM backend rule-based   : available
+14:40:46 INFO  auto_applier.resume.manager              Resume already in place at C:\Users\jar85\AI Projects\Auto Applier\data\resumes\testpilot.docx, skipping copy
+14:40:46 INFO  auto_applier.resume.manager              Saved minimal profile for 'Testpilot' (raw text only)
+14:40:46 INFO  auto_applier.resume.manager              Created profile for 'Testpilot' (17 skills, 1 tools)
+14:40:46 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+14:40:47 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF8493E6F0>
+14:40:47 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'GET']>
+14:40:47 DEBUG httpcore.http11                          send_request_headers.complete
+14:40:47 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'GET']>
+14:40:47 DEBUG httpcore.http11                          send_request_body.complete
+14:40:47 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'GET']>
+14:40:47 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:40:47 GMT'), (b'Content-Length', b'339')])
+14:40:47 INFO  httpx                                    HTTP Request: GET http://localhost:11434/api/tags "HTTP/1.1 200 OK"
+14:40:47 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'GET']>
+14:40:47 DEBUG httpcore.http11                          receive_response_body.complete
+14:40:47 DEBUG httpcore.http11                          response_closed.started
+14:40:47 DEBUG httpcore.http11                          response_closed.complete
+14:40:47 INFO  auto_applier.llm.router                  LLM backend ollama       : available
+14:40:47 INFO  auto_applier.llm.router                  LLM backend gemini       : unavailable
+14:40:47 INFO  auto_applier.llm.router                  LLM backend rule-based   : available
+14:40:47 INFO  auto_applier.browser.session             Using patchright (CDP leak patches active)
+14:40:47 INFO  auto_applier.browser.session             Detected real Chrome installation, using channel=chrome
+14:40:48 INFO  auto_applier.browser.session             Browser session started (patchright=True)
+14:40:48 INFO  auto_applier.browser.anti_detect         Anti-detect fast mode: ON
+14:40:50 INFO  auto_applier.browser.platforms.indeed    Indeed: Already logged in
+14:40:50 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 1 -- data analyst Remote
+14:40:57 DEBUG auto_applier.browser.platforms.indeed    Found 16 job cards via 'div[data-testid='slider_item']'
+14:40:58 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 2 -- data analyst Remote
+14:41:00 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:41:07 DEBUG auto_applier.browser.platforms.indeed    Found 16 job cards via 'div[data-testid='slider_item']'
+14:41:07 INFO  auto_applier.browser.platforms.indeed    Indeed: Found 32 jobs for 'data analyst' in 'Remote'
+14:41:08 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:41:08 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 1 -- analytics engineer Remote
+14:41:16 DEBUG auto_applier.browser.platforms.indeed    Found 18 job cards via 'div[data-testid='slider_item']'
+14:41:18 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 2 -- analytics engineer Remote
+14:41:26 DEBUG auto_applier.browser.platforms.indeed    Found 16 job cards via 'div[data-testid='slider_item']'
+14:41:27 INFO  auto_applier.browser.platforms.indeed    Indeed: Found 34 jobs for 'analytics engineer' in 'Remote'
+14:41:27 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:41:27 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 1 -- business intelligence analyst Remote
+14:41:29 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:41:32 DEBUG auto_applier.browser.platforms.indeed    Found 17 job cards via 'div[data-testid='slider_item']'
+14:41:34 INFO  auto_applier.browser.platforms.indeed    Indeed: Searching page 2 -- business intelligence analyst Remote
+14:41:36 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:41:39 DEBUG auto_applier.browser.platforms.indeed    Found 16 job cards via 'div[data-testid='slider_item']'
+14:41:39 INFO  auto_applier.browser.platforms.indeed    Indeed: Found 33 jobs for 'business intelligence analyst' in 'Remote'
+14:42:26 INFO  auto_applier.browser.platforms.dice      Dice: Not logged in. Navigating to login page for manual login...
+14:42:27 INFO  auto_applier.browser.base_platform       Waiting for manual login on Dice (timeout=300s)...
+14:42:27 INFO  auto_applier.browser.base_platform       Login detected via URL pattern
+14:42:27 INFO  auto_applier.browser.platforms.dice      Dice: Searching page 1 -- data analyst Remote
+14:42:36 DEBUG auto_applier.browser.platforms.dice      Found 20 job cards via '[data-testid='job-search-job-detail-link']'
+14:42:36 INFO  auto_applier.browser.platforms.dice      Dice: 20 cards detected but none parsed, falling back to anchor-based finder
+14:42:37 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/job-detail/'): 57 anchors matched selector, kept 19, rejected 19 empty / 0 length / 6 excluded
+14:42:37 INFO  auto_applier.browser.platforms.dice      Dice: anchor fallback recovered 19 jobs
+14:42:38 INFO  auto_applier.browser.platforms.dice      Dice: Searching page 2 -- data analyst Remote
+14:42:44 DEBUG auto_applier.browser.platforms.dice      Found 20 job cards via '[data-testid='job-search-job-detail-link']'
+14:42:44 INFO  auto_applier.browser.platforms.dice      Dice: 20 cards detected but none parsed, falling back to anchor-based finder
+14:42:45 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/job-detail/'): 54 anchors matched selector, kept 18, rejected 18 empty / 0 length / 5 excluded
+14:42:45 INFO  auto_applier.browser.platforms.dice      Dice: anchor fallback recovered 18 jobs
+14:42:45 INFO  auto_applier.browser.platforms.dice      Dice: Found 37 jobs for 'data analyst' in 'Remote'
+14:43:17 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-2930108224 (3570 chars)
+14:43:17 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.90) — filtering resumes
+14:44:21 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:44:51 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-8865326591 (8281 chars)
+14:44:52 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:44:53 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:45:23 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-1181997523 (2473 chars)
+14:45:24 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:45:24 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.95) — filtering resumes
+14:45:25 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+14:47:10 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-3885605323 (1297 chars)
+14:47:10 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.80) — filtering resumes
+14:47:43 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-8533574514 (5732 chars)
+14:47:43 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.90) — filtering resumes
+14:49:18 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-8767750990 (3221 chars)
+14:49:19 DEBUG httpcore.connection                      close.started
+14:49:19 DEBUG httpcore.connection                      close.complete
+14:49:19 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+14:49:19 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF885363F0>
+14:49:19 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:49:19 DEBUG httpcore.http11                          send_request_headers.complete
+14:49:19 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:49:19 DEBUG httpcore.http11                          send_request_body.complete
+14:49:19 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:49:28 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:49:28 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:49:28 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:49:28 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:49:28 DEBUG httpcore.http11                          receive_response_body.complete
+14:49:28 DEBUG httpcore.http11                          response_closed.started
+14:49:28 DEBUG httpcore.http11                          response_closed.complete
+14:49:28 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:49:28 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:49:28 DEBUG httpcore.http11                          send_request_headers.complete
+14:49:28 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:49:28 DEBUG httpcore.http11                          send_request_body.complete
+14:49:28 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:49:30 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:49:30 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:49:30 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:49:30 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:49:30 DEBUG httpcore.http11                          receive_response_body.complete
+14:49:30 DEBUG httpcore.http11                          response_closed.started
+14:49:30 DEBUG httpcore.http11                          response_closed.complete
+14:49:30 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:49:30 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.90) — filtering resumes
+14:49:30 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:49:30 DEBUG httpcore.http11                          send_request_headers.complete
+14:49:30 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:49:30 DEBUG httpcore.http11                          send_request_body.complete
+14:49:30 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:49:34 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:49:34 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:49:34 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:49:34 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:49:34 DEBUG httpcore.http11                          receive_response_body.complete
+14:49:34 DEBUG httpcore.http11                          response_closed.started
+14:49:34 DEBUG httpcore.http11                          response_closed.complete
+14:49:34 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:51:34 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-7795097035 (6532 chars)
+14:51:34 DEBUG httpcore.connection                      close.started
+14:51:34 DEBUG httpcore.connection                      close.complete
+14:51:34 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+14:51:34 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88578200>
+14:51:34 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:51:34 DEBUG httpcore.http11                          send_request_headers.complete
+14:51:34 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:51:34 DEBUG httpcore.http11                          send_request_body.complete
+14:51:34 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:51:37 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:51:37 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:51:37 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:51:37 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:51:37 DEBUG httpcore.http11                          receive_response_body.complete
+14:51:37 DEBUG httpcore.http11                          response_closed.started
+14:51:37 DEBUG httpcore.http11                          response_closed.complete
+14:51:37 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:51:37 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:51:37 DEBUG httpcore.http11                          send_request_headers.complete
+14:51:37 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:51:37 DEBUG httpcore.http11                          send_request_body.complete
+14:51:37 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:51:39 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:51:39 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:51:39 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:51:39 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:51:39 DEBUG httpcore.http11                          receive_response_body.complete
+14:51:39 DEBUG httpcore.http11                          response_closed.started
+14:51:39 DEBUG httpcore.http11                          response_closed.complete
+14:51:39 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:51:39 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.90) — filtering resumes
+14:51:39 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:51:39 DEBUG httpcore.http11                          send_request_headers.complete
+14:51:39 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:51:39 DEBUG httpcore.http11                          send_request_body.complete
+14:51:39 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:51:46 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:51:46 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:51:46 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:51:46 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:51:46 DEBUG httpcore.http11                          receive_response_body.complete
+14:51:46 DEBUG httpcore.http11                          response_closed.started
+14:51:46 DEBUG httpcore.http11                          response_closed.complete
+14:51:46 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:53:46 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-5049573642 (2696 chars)
+14:53:46 DEBUG httpcore.connection                      close.started
+14:53:46 DEBUG httpcore.connection                      close.complete
+14:53:46 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+14:53:47 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF8858F200>
+14:53:47 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:53:47 DEBUG httpcore.http11                          send_request_headers.complete
+14:53:47 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:53:47 DEBUG httpcore.http11                          send_request_body.complete
+14:53:47 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:53:49 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:53:49 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:53:49 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:53:49 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:53:49 DEBUG httpcore.http11                          receive_response_body.complete
+14:53:49 DEBUG httpcore.http11                          response_closed.started
+14:53:49 DEBUG httpcore.http11                          response_closed.complete
+14:53:49 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:53:49 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:53:49 DEBUG httpcore.http11                          send_request_headers.complete
+14:53:49 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:53:49 DEBUG httpcore.http11                          send_request_body.complete
+14:53:49 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:53:51 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:53:51 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:53:51 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:53:51 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:53:51 DEBUG httpcore.http11                          receive_response_body.complete
+14:53:51 DEBUG httpcore.http11                          response_closed.started
+14:53:51 DEBUG httpcore.http11                          response_closed.complete
+14:53:51 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:53:51 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.80) — filtering resumes
+14:53:51 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:53:51 DEBUG httpcore.http11                          send_request_headers.complete
+14:53:51 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:53:51 DEBUG httpcore.http11                          send_request_body.complete
+14:53:51 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:53:58 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:53:58 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:53:58 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:53:58 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:53:58 DEBUG httpcore.http11                          receive_response_body.complete
+14:53:58 DEBUG httpcore.http11                          response_closed.started
+14:53:58 DEBUG httpcore.http11                          response_closed.complete
+14:53:58 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:55:52 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-5028184518 (7017 chars)
+14:55:53 DEBUG httpcore.connection                      close.started
+14:55:53 DEBUG httpcore.connection                      close.complete
+14:55:53 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+14:55:53 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF885C3C50>
+14:55:53 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:55:53 DEBUG httpcore.http11                          send_request_headers.complete
+14:55:53 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:55:53 DEBUG httpcore.http11                          send_request_body.complete
+14:55:53 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:55:55 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:55:55 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:55:55 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:55:55 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:55:55 DEBUG httpcore.http11                          receive_response_body.complete
+14:55:55 DEBUG httpcore.http11                          response_closed.started
+14:55:55 DEBUG httpcore.http11                          response_closed.complete
+14:55:55 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:55:55 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:55:55 DEBUG httpcore.http11                          send_request_headers.complete
+14:55:55 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:55:55 DEBUG httpcore.http11                          send_request_body.complete
+14:55:55 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:55:58 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:55:58 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:55:58 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:55:58 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:55:58 DEBUG httpcore.http11                          receive_response_body.complete
+14:55:58 DEBUG httpcore.http11                          response_closed.started
+14:55:58 DEBUG httpcore.http11                          response_closed.complete
+14:55:58 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:55:58 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.80) — filtering resumes
+14:55:58 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:55:58 DEBUG httpcore.http11                          send_request_headers.complete
+14:55:58 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:55:58 DEBUG httpcore.http11                          send_request_body.complete
+14:55:58 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:56:05 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:56:05 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:56:05 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:56:05 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:56:05 DEBUG httpcore.http11                          receive_response_body.complete
+14:56:05 DEBUG httpcore.http11                          response_closed.started
+14:56:05 DEBUG httpcore.http11                          response_closed.complete
+14:56:05 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:58:00 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-4892115198 (1356 chars)
+14:58:00 DEBUG httpcore.connection                      close.started
+14:58:00 DEBUG httpcore.connection                      close.complete
+14:58:00 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+14:58:00 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88602C00>
+14:58:00 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:58:00 DEBUG httpcore.http11                          send_request_headers.complete
+14:58:00 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:58:00 DEBUG httpcore.http11                          send_request_body.complete
+14:58:00 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:58:02 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:58:02 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:58:02 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:58:02 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:58:02 DEBUG httpcore.http11                          receive_response_body.complete
+14:58:02 DEBUG httpcore.http11                          response_closed.started
+14:58:02 DEBUG httpcore.http11                          response_closed.complete
+14:58:02 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:58:02 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:58:02 DEBUG httpcore.http11                          send_request_headers.complete
+14:58:02 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:58:02 DEBUG httpcore.http11                          send_request_body.complete
+14:58:02 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:58:04 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:58:04 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:58:04 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:58:04 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:58:04 DEBUG httpcore.http11                          receive_response_body.complete
+14:58:04 DEBUG httpcore.http11                          response_closed.started
+14:58:04 DEBUG httpcore.http11                          response_closed.complete
+14:58:04 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:58:04 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.95) — filtering resumes
+14:58:04 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+14:58:04 DEBUG httpcore.http11                          send_request_headers.complete
+14:58:04 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+14:58:04 DEBUG httpcore.http11                          send_request_body.complete
+14:58:04 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+14:58:09 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 19:58:09 GMT'), (b'Transfer-Encoding', b'chunked')])
+14:58:09 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+14:58:09 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+14:58:09 DEBUG httpcore.http11                          receive_response_body.complete
+14:58:09 DEBUG httpcore.http11                          response_closed.started
+14:58:09 DEBUG httpcore.http11                          response_closed.complete
+14:58:09 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+14:59:59 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-5268014505 (6900 chars)
+14:59:59 DEBUG httpcore.connection                      close.started
+14:59:59 DEBUG httpcore.connection                      close.complete
+14:59:59 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:00:00 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88601400>
+15:00:00 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:00:00 DEBUG httpcore.http11                          send_request_headers.complete
+15:00:00 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:00:00 DEBUG httpcore.http11                          send_request_body.complete
+15:00:00 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:00:02 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:00:02 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:00:02 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:00:02 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:00:02 DEBUG httpcore.http11                          receive_response_body.complete
+15:00:02 DEBUG httpcore.http11                          response_closed.started
+15:00:02 DEBUG httpcore.http11                          response_closed.complete
+15:00:02 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:00:02 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:00:02 DEBUG httpcore.http11                          send_request_headers.complete
+15:00:02 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:00:02 DEBUG httpcore.http11                          send_request_body.complete
+15:00:02 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:00:04 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:00:04 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:00:04 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:00:04 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:00:04 DEBUG httpcore.http11                          receive_response_body.complete
+15:00:04 DEBUG httpcore.http11                          response_closed.started
+15:00:04 DEBUG httpcore.http11                          response_closed.complete
+15:00:04 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:00:04 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.95) — filtering resumes
+15:00:04 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:00:04 DEBUG httpcore.http11                          send_request_headers.complete
+15:00:04 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:00:04 DEBUG httpcore.http11                          send_request_body.complete
+15:00:04 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:00:11 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:00:11 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:00:11 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:00:11 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:00:11 DEBUG httpcore.http11                          receive_response_body.complete
+15:00:11 DEBUG httpcore.http11                          response_closed.started
+15:00:11 DEBUG httpcore.http11                          response_closed.complete
+15:00:11 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:01:46 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-5968472631 (6532 chars)
+15:01:46 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.90) — filtering resumes
+15:02:58 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:03:29 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-6609403438 (3731 chars)
+15:03:29 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:03:29 DEBUG httpcore.connection                      close.started
+15:03:29 DEBUG httpcore.connection                      close.complete
+15:03:29 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:03:29 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88717680>
+15:03:29 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:03:29 DEBUG httpcore.http11                          send_request_headers.complete
+15:03:29 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:03:29 DEBUG httpcore.http11                          send_request_body.complete
+15:03:29 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:03:31 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:03:31 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:03:31 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:03:31 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:03:31 DEBUG httpcore.http11                          receive_response_body.complete
+15:03:31 DEBUG httpcore.http11                          response_closed.started
+15:03:31 DEBUG httpcore.http11                          response_closed.complete
+15:03:31 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:03:31 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:03:31 DEBUG httpcore.http11                          send_request_headers.complete
+15:03:31 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:03:31 DEBUG httpcore.http11                          send_request_body.complete
+15:03:31 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:03:34 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:03:34 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:03:34 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:03:34 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:03:34 DEBUG httpcore.http11                          receive_response_body.complete
+15:03:34 DEBUG httpcore.http11                          response_closed.started
+15:03:34 DEBUG httpcore.http11                          response_closed.complete
+15:03:34 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:03:34 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.80) — filtering resumes
+15:03:34 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:03:34 DEBUG httpcore.http11                          send_request_headers.complete
+15:03:34 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:03:34 DEBUG httpcore.http11                          send_request_body.complete
+15:03:34 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:03:41 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:03:41 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:03:41 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:03:41 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:03:41 DEBUG httpcore.http11                          receive_response_body.complete
+15:03:41 DEBUG httpcore.http11                          response_closed.started
+15:03:41 DEBUG httpcore.http11                          response_closed.complete
+15:03:41 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:03:42 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:05:43 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-2296521076 (2506 chars)
+15:05:44 DEBUG httpcore.connection                      close.started
+15:05:44 DEBUG httpcore.connection                      close.complete
+15:05:44 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:05:44 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF883FA120>
+15:05:44 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:05:44 DEBUG httpcore.http11                          send_request_headers.complete
+15:05:44 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:05:44 DEBUG httpcore.http11                          send_request_body.complete
+15:05:44 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:05:46 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:05:46 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:05:46 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:05:46 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:05:46 DEBUG httpcore.http11                          receive_response_body.complete
+15:05:46 DEBUG httpcore.http11                          response_closed.started
+15:05:46 DEBUG httpcore.http11                          response_closed.complete
+15:05:46 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:05:46 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:05:46 DEBUG httpcore.http11                          send_request_headers.complete
+15:05:46 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:05:46 DEBUG httpcore.http11                          send_request_body.complete
+15:05:46 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:05:48 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:05:48 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:05:48 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:05:48 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:05:48 DEBUG httpcore.http11                          receive_response_body.complete
+15:05:48 DEBUG httpcore.http11                          response_closed.started
+15:05:48 DEBUG httpcore.http11                          response_closed.complete
+15:05:48 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:05:48 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.80) — filtering resumes
+15:05:48 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:05:48 DEBUG httpcore.http11                          send_request_headers.complete
+15:05:48 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:05:48 DEBUG httpcore.http11                          send_request_body.complete
+15:05:48 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:05:55 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:05:55 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:05:55 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:05:55 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:05:55 DEBUG httpcore.http11                          receive_response_body.complete
+15:05:55 DEBUG httpcore.http11                          response_closed.started
+15:05:55 DEBUG httpcore.http11                          response_closed.complete
+15:05:55 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:07:23 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:07:53 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-9080590794 (1373 chars)
+15:07:54 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:07:54 DEBUG httpcore.connection                      close.started
+15:07:54 DEBUG httpcore.connection                      close.complete
+15:07:54 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:07:54 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF8821FFE0>
+15:07:54 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:07:54 DEBUG httpcore.http11                          send_request_headers.complete
+15:07:54 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:07:54 DEBUG httpcore.http11                          send_request_body.complete
+15:07:54 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:07:56 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:07:56 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:07:56 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:07:56 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:07:56 DEBUG httpcore.http11                          receive_response_body.complete
+15:07:56 DEBUG httpcore.http11                          response_closed.started
+15:07:56 DEBUG httpcore.http11                          response_closed.complete
+15:07:56 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:07:56 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:07:56 DEBUG httpcore.http11                          send_request_headers.complete
+15:07:56 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:07:56 DEBUG httpcore.http11                          send_request_body.complete
+15:07:56 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:07:58 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:07:58 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:07:58 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:07:58 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:07:58 DEBUG httpcore.http11                          receive_response_body.complete
+15:07:58 DEBUG httpcore.http11                          response_closed.started
+15:07:58 DEBUG httpcore.http11                          response_closed.complete
+15:07:58 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:07:58 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.95) — filtering resumes
+15:07:58 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:07:58 DEBUG httpcore.http11                          send_request_headers.complete
+15:07:58 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:07:58 DEBUG httpcore.http11                          send_request_body.complete
+15:07:58 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:08:04 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:08:04 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:08:04 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:08:04 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:08:04 DEBUG httpcore.http11                          receive_response_body.complete
+15:08:04 DEBUG httpcore.http11                          response_closed.started
+15:08:04 DEBUG httpcore.http11                          response_closed.complete
+15:08:04 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:08:05 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:09:28 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:09:59 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-9771084414 (3068 chars)
+15:09:59 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:09:59 DEBUG httpcore.connection                      close.started
+15:09:59 DEBUG httpcore.connection                      close.complete
+15:09:59 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:09:59 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88258B30>
+15:09:59 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:09:59 DEBUG httpcore.http11                          send_request_headers.complete
+15:09:59 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:09:59 DEBUG httpcore.http11                          send_request_body.complete
+15:09:59 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:10:01 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:10:01 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:10:01 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:10:01 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:10:01 DEBUG httpcore.http11                          receive_response_body.complete
+15:10:01 DEBUG httpcore.http11                          response_closed.started
+15:10:01 DEBUG httpcore.http11                          response_closed.complete
+15:10:01 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:10:01 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:10:01 DEBUG httpcore.http11                          send_request_headers.complete
+15:10:01 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:10:01 DEBUG httpcore.http11                          send_request_body.complete
+15:10:01 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:10:03 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:10:03 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:10:03 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:10:03 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:10:03 DEBUG httpcore.http11                          receive_response_body.complete
+15:10:03 DEBUG httpcore.http11                          response_closed.started
+15:10:03 DEBUG httpcore.http11                          response_closed.complete
+15:10:03 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:10:03 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.95) — filtering resumes
+15:10:03 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:10:03 DEBUG httpcore.http11                          send_request_headers.complete
+15:10:03 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:10:03 DEBUG httpcore.http11                          send_request_body.complete
+15:10:03 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:10:10 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:10:10 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:10:10 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:10:10 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:10:10 DEBUG httpcore.http11                          receive_response_body.complete
+15:10:10 DEBUG httpcore.http11                          response_closed.started
+15:10:10 DEBUG httpcore.http11                          response_closed.complete
+15:10:10 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:10:11 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:11:47 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-1600418046 (1971 chars)
+15:11:47 DEBUG httpcore.connection                      close.started
+15:11:47 DEBUG httpcore.connection                      close.complete
+15:11:47 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:11:47 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF8880B260>
+15:11:47 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:11:47 DEBUG httpcore.http11                          send_request_headers.complete
+15:11:47 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:11:47 DEBUG httpcore.http11                          send_request_body.complete
+15:11:47 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:11:49 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:11:49 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:11:49 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:11:49 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:11:49 DEBUG httpcore.http11                          receive_response_body.complete
+15:11:49 DEBUG httpcore.http11                          response_closed.started
+15:11:49 DEBUG httpcore.http11                          response_closed.complete
+15:11:49 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:11:49 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:11:49 DEBUG httpcore.http11                          send_request_headers.complete
+15:11:49 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:11:49 DEBUG httpcore.http11                          send_request_body.complete
+15:11:49 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:11:52 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:11:52 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:11:52 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:11:52 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:11:52 DEBUG httpcore.http11                          receive_response_body.complete
+15:11:52 DEBUG httpcore.http11                          response_closed.started
+15:11:52 DEBUG httpcore.http11                          response_closed.complete
+15:11:52 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:11:52 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.80) — filtering resumes
+15:11:52 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:11:52 DEBUG httpcore.http11                          send_request_headers.complete
+15:11:52 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:11:52 DEBUG httpcore.http11                          send_request_body.complete
+15:11:52 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:11:58 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:11:58 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:11:58 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:11:58 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:11:58 DEBUG httpcore.http11                          receive_response_body.complete
+15:11:58 DEBUG httpcore.http11                          response_closed.started
+15:11:58 DEBUG httpcore.http11                          response_closed.complete
+15:11:58 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:13:55 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-2187222519 (6367 chars)
+15:13:55 DEBUG httpcore.connection                      close.started
+15:13:55 DEBUG httpcore.connection                      close.complete
+15:13:55 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:13:55 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF888461B0>
+15:13:55 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:13:55 DEBUG httpcore.http11                          send_request_headers.complete
+15:13:55 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:13:55 DEBUG httpcore.http11                          send_request_body.complete
+15:13:55 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:13:58 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:13:58 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:13:58 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:13:58 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:13:58 DEBUG httpcore.http11                          receive_response_body.complete
+15:13:58 DEBUG httpcore.http11                          response_closed.started
+15:13:58 DEBUG httpcore.http11                          response_closed.complete
+15:13:58 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:13:58 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:13:58 DEBUG httpcore.http11                          send_request_headers.complete
+15:13:58 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:13:58 DEBUG httpcore.http11                          send_request_body.complete
+15:13:58 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:14:00 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:14:00 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:14:00 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:14:00 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:14:00 DEBUG httpcore.http11                          receive_response_body.complete
+15:14:00 DEBUG httpcore.http11                          response_closed.started
+15:14:00 DEBUG httpcore.http11                          response_closed.complete
+15:14:00 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:14:00 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.90) — filtering resumes
+15:14:00 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:14:00 DEBUG httpcore.http11                          send_request_headers.complete
+15:14:00 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:14:00 DEBUG httpcore.http11                          send_request_body.complete
+15:14:00 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:14:07 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:14:07 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:14:07 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:14:07 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:14:07 DEBUG httpcore.http11                          receive_response_body.complete
+15:14:07 DEBUG httpcore.http11                          response_closed.started
+15:14:07 DEBUG httpcore.http11                          response_closed.complete
+15:14:07 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:15:13 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:15:43 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-3382917713 (4029 chars)
+15:15:43 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:15:43 DEBUG httpcore.connection                      close.started
+15:15:43 DEBUG httpcore.connection                      close.complete
+15:15:43 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:15:44 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF888F0530>
+15:15:44 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:15:44 DEBUG httpcore.http11                          send_request_headers.complete
+15:15:44 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:15:44 DEBUG httpcore.http11                          send_request_body.complete
+15:15:44 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:15:46 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:15:46 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:15:46 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:15:46 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:15:46 DEBUG httpcore.http11                          receive_response_body.complete
+15:15:46 DEBUG httpcore.http11                          response_closed.started
+15:15:46 DEBUG httpcore.http11                          response_closed.complete
+15:15:46 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:15:46 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:15:46 DEBUG httpcore.http11                          send_request_headers.complete
+15:15:46 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:15:46 DEBUG httpcore.http11                          send_request_body.complete
+15:15:46 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:15:48 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:15:48 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:15:48 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:15:48 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:15:48 DEBUG httpcore.http11                          receive_response_body.complete
+15:15:48 DEBUG httpcore.http11                          response_closed.started
+15:15:48 DEBUG httpcore.http11                          response_closed.complete
+15:15:48 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:15:48 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.80) — filtering resumes
+15:15:48 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:15:48 DEBUG httpcore.http11                          send_request_headers.complete
+15:15:48 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:15:48 DEBUG httpcore.http11                          send_request_body.complete
+15:15:48 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:15:56 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:15:56 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:15:56 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:15:56 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:15:56 DEBUG httpcore.http11                          receive_response_body.complete
+15:15:56 DEBUG httpcore.http11                          response_closed.started
+15:15:56 DEBUG httpcore.http11                          response_closed.complete
+15:15:56 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:15:58 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:17:14 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:17:45 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-6349363924 (1319 chars)
+15:17:45 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:17:45 DEBUG httpcore.connection                      close.started
+15:17:45 DEBUG httpcore.connection                      close.complete
+15:17:45 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:17:45 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF8892F3B0>
+15:17:45 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:17:45 DEBUG httpcore.http11                          send_request_headers.complete
+15:17:45 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:17:45 DEBUG httpcore.http11                          send_request_body.complete
+15:17:45 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:17:47 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:17:47 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:17:47 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:17:47 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:17:47 DEBUG httpcore.http11                          receive_response_body.complete
+15:17:47 DEBUG httpcore.http11                          response_closed.started
+15:17:47 DEBUG httpcore.http11                          response_closed.complete
+15:17:47 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:17:47 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:17:47 DEBUG httpcore.http11                          send_request_headers.complete
+15:17:47 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:17:47 DEBUG httpcore.http11                          send_request_body.complete
+15:17:47 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:17:49 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:17:49 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:17:49 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:17:49 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:17:49 DEBUG httpcore.http11                          receive_response_body.complete
+15:17:49 DEBUG httpcore.http11                          response_closed.started
+15:17:49 DEBUG httpcore.http11                          response_closed.complete
+15:17:49 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:17:49 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.95) — filtering resumes
+15:17:49 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:17:49 DEBUG httpcore.http11                          send_request_headers.complete
+15:17:49 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:17:49 DEBUG httpcore.http11                          send_request_body.complete
+15:17:49 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:17:55 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:17:55 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:17:55 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:17:55 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:17:55 DEBUG httpcore.http11                          receive_response_body.complete
+15:17:55 DEBUG httpcore.http11                          response_closed.started
+15:17:55 DEBUG httpcore.http11                          response_closed.complete
+15:17:55 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:17:55 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:19:31 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-6163211913 (7464 chars)
+15:19:31 DEBUG httpcore.connection                      close.started
+15:19:31 DEBUG httpcore.connection                      close.complete
+15:19:31 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:19:31 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF889797F0>
+15:19:31 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:19:31 DEBUG httpcore.http11                          send_request_headers.complete
+15:19:31 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:19:31 DEBUG httpcore.http11                          send_request_body.complete
+15:19:31 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:19:33 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:19:33 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:19:33 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:19:33 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:19:33 DEBUG httpcore.http11                          receive_response_body.complete
+15:19:33 DEBUG httpcore.http11                          response_closed.started
+15:19:33 DEBUG httpcore.http11                          response_closed.complete
+15:19:33 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:19:33 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:19:33 DEBUG httpcore.http11                          send_request_headers.complete
+15:19:33 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:19:33 DEBUG httpcore.http11                          send_request_body.complete
+15:19:33 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:19:35 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:19:35 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:19:35 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:19:35 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:19:35 DEBUG httpcore.http11                          receive_response_body.complete
+15:19:35 DEBUG httpcore.http11                          response_closed.started
+15:19:35 DEBUG httpcore.http11                          response_closed.complete
+15:19:35 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:19:35 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.90) — filtering resumes
+15:19:35 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:19:35 DEBUG httpcore.http11                          send_request_headers.complete
+15:19:35 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:19:35 DEBUG httpcore.http11                          send_request_body.complete
+15:19:35 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:19:40 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:19:40 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:19:40 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:19:40 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:19:40 DEBUG httpcore.http11                          receive_response_body.complete
+15:19:40 DEBUG httpcore.http11                          response_closed.started
+15:19:40 DEBUG httpcore.http11                          response_closed.complete
+15:19:40 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:21:42 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-5774438064 (4385 chars)
+15:21:43 DEBUG httpcore.connection                      close.started
+15:21:43 DEBUG httpcore.connection                      close.complete
+15:21:43 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:21:43 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88996540>
+15:21:43 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:21:43 DEBUG httpcore.http11                          send_request_headers.complete
+15:21:43 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:21:43 DEBUG httpcore.http11                          send_request_body.complete
+15:21:43 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:21:46 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:21:46 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:21:46 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:21:46 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:21:46 DEBUG httpcore.http11                          receive_response_body.complete
+15:21:46 DEBUG httpcore.http11                          response_closed.started
+15:21:46 DEBUG httpcore.http11                          response_closed.complete
+15:21:46 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:21:46 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:21:46 DEBUG httpcore.http11                          send_request_headers.complete
+15:21:46 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:21:46 DEBUG httpcore.http11                          send_request_body.complete
+15:21:46 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:21:48 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:21:48 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:21:48 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:21:48 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:21:48 DEBUG httpcore.http11                          receive_response_body.complete
+15:21:48 DEBUG httpcore.http11                          response_closed.started
+15:21:48 DEBUG httpcore.http11                          response_closed.complete
+15:21:48 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:21:48 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.90) — filtering resumes
+15:21:48 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:21:48 DEBUG httpcore.http11                          send_request_headers.complete
+15:21:48 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:21:48 DEBUG httpcore.http11                          send_request_body.complete
+15:21:48 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:21:56 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:21:56 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:21:56 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:21:56 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:21:56 DEBUG httpcore.http11                          receive_response_body.complete
+15:21:56 DEBUG httpcore.http11                          response_closed.started
+15:21:56 DEBUG httpcore.http11                          response_closed.complete
+15:21:56 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:23:16 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:23:46 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-4536035078 (7458 chars)
+15:23:46 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:23:46 DEBUG httpcore.connection                      close.started
+15:23:46 DEBUG httpcore.connection                      close.complete
+15:23:46 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:23:46 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88994290>
+15:23:46 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:23:46 DEBUG httpcore.http11                          send_request_headers.complete
+15:23:46 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:23:46 DEBUG httpcore.http11                          send_request_body.complete
+15:23:46 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:23:48 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:23:48 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:23:48 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:23:48 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:23:48 DEBUG httpcore.http11                          receive_response_body.complete
+15:23:48 DEBUG httpcore.http11                          response_closed.started
+15:23:48 DEBUG httpcore.http11                          response_closed.complete
+15:23:48 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:23:48 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:23:48 DEBUG httpcore.http11                          send_request_headers.complete
+15:23:48 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:23:48 DEBUG httpcore.http11                          send_request_body.complete
+15:23:48 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:23:50 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:23:50 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:23:50 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:23:50 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:23:50 DEBUG httpcore.http11                          receive_response_body.complete
+15:23:50 DEBUG httpcore.http11                          response_closed.started
+15:23:50 DEBUG httpcore.http11                          response_closed.complete
+15:23:50 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:23:50 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.90) — filtering resumes
+15:23:50 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:23:50 DEBUG httpcore.http11                          send_request_headers.complete
+15:23:50 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:23:50 DEBUG httpcore.http11                          send_request_body.complete
+15:23:50 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:23:55 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:23:55 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:23:55 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:23:55 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:23:55 DEBUG httpcore.http11                          receive_response_body.complete
+15:23:55 DEBUG httpcore.http11                          response_closed.started
+15:23:55 DEBUG httpcore.http11                          response_closed.complete
+15:23:55 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:23:55 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:25:26 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:25:57 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-4459197948 (5558 chars)
+15:25:57 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:25:57 DEBUG httpcore.connection                      close.started
+15:25:57 DEBUG httpcore.connection                      close.complete
+15:25:57 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:25:57 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88AD3380>
+15:25:57 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:25:57 DEBUG httpcore.http11                          send_request_headers.complete
+15:25:57 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:25:57 DEBUG httpcore.http11                          send_request_body.complete
+15:25:57 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:25:59 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:25:59 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:25:59 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:25:59 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:25:59 DEBUG httpcore.http11                          receive_response_body.complete
+15:25:59 DEBUG httpcore.http11                          response_closed.started
+15:25:59 DEBUG httpcore.http11                          response_closed.complete
+15:25:59 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:25:59 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:25:59 DEBUG httpcore.http11                          send_request_headers.complete
+15:25:59 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:25:59 DEBUG httpcore.http11                          send_request_body.complete
+15:25:59 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:26:01 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:26:01 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:26:01 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:26:01 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:26:01 DEBUG httpcore.http11                          receive_response_body.complete
+15:26:01 DEBUG httpcore.http11                          response_closed.started
+15:26:01 DEBUG httpcore.http11                          response_closed.complete
+15:26:02 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:26:02 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.95) — filtering resumes
+15:26:02 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:26:02 DEBUG httpcore.http11                          send_request_headers.complete
+15:26:02 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:26:02 DEBUG httpcore.http11                          send_request_body.complete
+15:26:02 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:26:09 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:26:09 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:26:09 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:26:09 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:26:09 DEBUG httpcore.http11                          receive_response_body.complete
+15:26:09 DEBUG httpcore.http11                          response_closed.started
+15:26:09 DEBUG httpcore.http11                          response_closed.complete
+15:26:09 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:26:10 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:28:12 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-1261943542 (4903 chars)
+15:28:12 DEBUG httpcore.connection                      close.started
+15:28:12 DEBUG httpcore.connection                      close.complete
+15:28:12 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:28:12 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88B0DCD0>
+15:28:12 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:28:12 DEBUG httpcore.http11                          send_request_headers.complete
+15:28:12 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:28:12 DEBUG httpcore.http11                          send_request_body.complete
+15:28:12 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:28:15 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:28:15 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:28:15 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:28:15 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:28:15 DEBUG httpcore.http11                          receive_response_body.complete
+15:28:15 DEBUG httpcore.http11                          response_closed.started
+15:28:15 DEBUG httpcore.http11                          response_closed.complete
+15:28:15 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:28:15 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:28:15 DEBUG httpcore.http11                          send_request_headers.complete
+15:28:15 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:28:15 DEBUG httpcore.http11                          send_request_body.complete
+15:28:15 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:28:17 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:28:17 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:28:17 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:28:17 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:28:17 DEBUG httpcore.http11                          receive_response_body.complete
+15:28:17 DEBUG httpcore.http11                          response_closed.started
+15:28:17 DEBUG httpcore.http11                          response_closed.complete
+15:28:17 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:28:17 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.95) — filtering resumes
+15:28:17 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:28:17 DEBUG httpcore.http11                          send_request_headers.complete
+15:28:17 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:28:17 DEBUG httpcore.http11                          send_request_body.complete
+15:28:17 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:28:23 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:28:23 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:28:23 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:28:23 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:28:23 DEBUG httpcore.http11                          receive_response_body.complete
+15:28:23 DEBUG httpcore.http11                          response_closed.started
+15:28:23 DEBUG httpcore.http11                          response_closed.complete
+15:28:23 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:29:29 INFO  auto_applier.browser.platforms.dice      Dice: Searching page 1 -- analytics engineer Remote
+15:29:36 DEBUG auto_applier.browser.platforms.dice      Found 20 job cards via '[data-testid='job-search-job-detail-link']'
+15:29:37 INFO  auto_applier.browser.platforms.dice      Dice: 20 cards detected but none parsed, falling back to anchor-based finder
+15:29:37 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/job-detail/'): 60 anchors matched selector, kept 20, rejected 20 empty / 0 length / 11 excluded
+15:29:37 INFO  auto_applier.browser.platforms.dice      Dice: anchor fallback recovered 20 jobs
+15:29:38 INFO  auto_applier.browser.platforms.dice      Dice: Searching page 2 -- analytics engineer Remote
+15:29:45 DEBUG auto_applier.browser.platforms.dice      Found 20 job cards via '[data-testid='job-search-job-detail-link']'
+15:29:46 INFO  auto_applier.browser.platforms.dice      Dice: 20 cards detected but none parsed, falling back to anchor-based finder
+15:29:47 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/job-detail/'): 60 anchors matched selector, kept 20, rejected 20 empty / 0 length / 0 excluded
+15:29:47 INFO  auto_applier.browser.platforms.dice      Dice: anchor fallback recovered 20 jobs
+15:29:47 INFO  auto_applier.browser.platforms.dice      Dice: Found 40 jobs for 'analytics engineer' in 'Remote'
+15:30:19 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-2504544041 (2829 chars)
+15:30:19 DEBUG httpcore.connection                      close.started
+15:30:19 DEBUG httpcore.connection                      close.complete
+15:30:19 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:30:20 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88BEF200>
+15:30:20 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:30:20 DEBUG httpcore.http11                          send_request_headers.complete
+15:30:20 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:30:20 DEBUG httpcore.http11                          send_request_body.complete
+15:30:20 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:30:22 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:30:22 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:30:22 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:30:22 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:30:22 DEBUG httpcore.http11                          receive_response_body.complete
+15:30:22 DEBUG httpcore.http11                          response_closed.started
+15:30:22 DEBUG httpcore.http11                          response_closed.complete
+15:30:22 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:30:22 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:30:22 DEBUG httpcore.http11                          send_request_headers.complete
+15:30:22 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:30:22 DEBUG httpcore.http11                          send_request_body.complete
+15:30:22 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:30:24 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:30:24 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:30:24 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:30:24 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:30:24 DEBUG httpcore.http11                          receive_response_body.complete
+15:30:24 DEBUG httpcore.http11                          response_closed.started
+15:30:24 DEBUG httpcore.http11                          response_closed.complete
+15:30:24 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:30:24 DEBUG auto_applier.scoring.scorer              Archetype 'analytics_engineer' (conf=0.90) — filtering resumes
+15:30:24 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:30:24 DEBUG httpcore.http11                          send_request_headers.complete
+15:30:24 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:30:24 DEBUG httpcore.http11                          send_request_body.complete
+15:30:24 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:30:31 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:30:31 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:30:31 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:30:31 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:30:31 DEBUG httpcore.http11                          receive_response_body.complete
+15:30:31 DEBUG httpcore.http11                          response_closed.started
+15:30:31 DEBUG httpcore.http11                          response_closed.complete
+15:30:31 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:32:22 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-8579222147 (1390 chars)
+15:32:22 DEBUG httpcore.connection                      close.started
+15:32:22 DEBUG httpcore.connection                      close.complete
+15:32:22 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:32:22 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88C54200>
+15:32:22 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:32:22 DEBUG httpcore.http11                          send_request_headers.complete
+15:32:22 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:32:22 DEBUG httpcore.http11                          send_request_body.complete
+15:32:22 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:32:24 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:32:24 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:32:24 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:32:24 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:32:24 DEBUG httpcore.http11                          receive_response_body.complete
+15:32:24 DEBUG httpcore.http11                          response_closed.started
+15:32:24 DEBUG httpcore.http11                          response_closed.complete
+15:32:24 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:32:24 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:32:24 DEBUG httpcore.http11                          send_request_headers.complete
+15:32:24 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:32:24 DEBUG httpcore.http11                          send_request_body.complete
+15:32:24 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:32:26 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:32:26 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:32:26 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:32:26 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:32:26 DEBUG httpcore.http11                          receive_response_body.complete
+15:32:26 DEBUG httpcore.http11                          response_closed.started
+15:32:26 DEBUG httpcore.http11                          response_closed.complete
+15:32:26 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:32:26 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.80) — filtering resumes
+15:32:26 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:32:26 DEBUG httpcore.http11                          send_request_headers.complete
+15:32:26 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:32:26 DEBUG httpcore.http11                          send_request_body.complete
+15:32:26 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:32:30 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:32:30 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:32:30 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:32:30 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:32:30 DEBUG httpcore.http11                          receive_response_body.complete
+15:32:30 DEBUG httpcore.http11                          response_closed.started
+15:32:30 DEBUG httpcore.http11                          response_closed.complete
+15:32:30 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:33:03 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-6551958894 (2677 chars)
+15:33:03 DEBUG httpcore.connection                      close.started
+15:33:03 DEBUG httpcore.connection                      close.complete
+15:33:03 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:33:03 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88C54890>
+15:33:03 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:33:03 DEBUG httpcore.http11                          send_request_headers.complete
+15:33:03 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:33:03 DEBUG httpcore.http11                          send_request_body.complete
+15:33:03 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:33:05 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:33:05 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:33:05 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:33:05 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:33:05 DEBUG httpcore.http11                          receive_response_body.complete
+15:33:05 DEBUG httpcore.http11                          response_closed.started
+15:33:05 DEBUG httpcore.http11                          response_closed.complete
+15:33:05 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:33:05 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:33:05 DEBUG httpcore.http11                          send_request_headers.complete
+15:33:05 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:33:05 DEBUG httpcore.http11                          send_request_body.complete
+15:33:05 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:33:07 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:33:07 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:33:07 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:33:07 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:33:07 DEBUG httpcore.http11                          receive_response_body.complete
+15:33:07 DEBUG httpcore.http11                          response_closed.started
+15:33:07 DEBUG httpcore.http11                          response_closed.complete
+15:33:07 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:33:07 DEBUG auto_applier.scoring.scorer              Archetype 'analytics_engineer' (conf=0.95) — filtering resumes
+15:33:07 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:33:07 DEBUG httpcore.http11                          send_request_headers.complete
+15:33:07 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:33:07 DEBUG httpcore.http11                          send_request_body.complete
+15:33:07 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:33:12 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:33:12 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:33:12 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:33:12 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:33:12 DEBUG httpcore.http11                          receive_response_body.complete
+15:33:12 DEBUG httpcore.http11                          response_closed.started
+15:33:12 DEBUG httpcore.http11                          response_closed.complete
+15:33:12 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:34:38 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:35:09 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-5568402161 (1292 chars)
+15:35:09 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:35:09 DEBUG httpcore.connection                      close.started
+15:35:09 DEBUG httpcore.connection                      close.complete
+15:35:09 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:35:09 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88BEF800>
+15:35:09 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:35:09 DEBUG httpcore.http11                          send_request_headers.complete
+15:35:09 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:35:09 DEBUG httpcore.http11                          send_request_body.complete
+15:35:09 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:35:11 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:35:11 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:35:11 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:35:11 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:35:11 DEBUG httpcore.http11                          receive_response_body.complete
+15:35:11 DEBUG httpcore.http11                          response_closed.started
+15:35:11 DEBUG httpcore.http11                          response_closed.complete
+15:35:11 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:35:11 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:35:11 DEBUG httpcore.http11                          send_request_headers.complete
+15:35:11 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:35:11 DEBUG httpcore.http11                          send_request_body.complete
+15:35:11 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:35:14 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:35:14 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:35:14 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:35:14 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:35:14 DEBUG httpcore.http11                          receive_response_body.complete
+15:35:14 DEBUG httpcore.http11                          response_closed.started
+15:35:14 DEBUG httpcore.http11                          response_closed.complete
+15:35:14 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:35:14 DEBUG auto_applier.scoring.scorer              Archetype 'analytics_engineer' (conf=0.80) — filtering resumes
+15:35:14 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:35:14 DEBUG httpcore.http11                          send_request_headers.complete
+15:35:14 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:35:14 DEBUG httpcore.http11                          send_request_body.complete
+15:35:14 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:35:20 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:35:20 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:35:20 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:35:20 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:35:20 DEBUG httpcore.http11                          receive_response_body.complete
+15:35:20 DEBUG httpcore.http11                          response_closed.started
+15:35:20 DEBUG httpcore.http11                          response_closed.complete
+15:35:20 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:35:21 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:36:56 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-2952302699 (2975 chars)
+15:36:56 DEBUG httpcore.connection                      close.started
+15:36:56 DEBUG httpcore.connection                      close.complete
+15:36:56 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:36:56 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88B5D490>
+15:36:56 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:36:56 DEBUG httpcore.http11                          send_request_headers.complete
+15:36:56 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:36:56 DEBUG httpcore.http11                          send_request_body.complete
+15:36:56 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:36:58 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:36:58 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:36:58 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:36:58 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:36:58 DEBUG httpcore.http11                          receive_response_body.complete
+15:36:58 DEBUG httpcore.http11                          response_closed.started
+15:36:58 DEBUG httpcore.http11                          response_closed.complete
+15:36:58 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:36:58 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:36:58 DEBUG httpcore.http11                          send_request_headers.complete
+15:36:58 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:36:58 DEBUG httpcore.http11                          send_request_body.complete
+15:36:58 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:37:00 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:37:00 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:37:00 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:37:00 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:37:00 DEBUG httpcore.http11                          receive_response_body.complete
+15:37:00 DEBUG httpcore.http11                          response_closed.started
+15:37:00 DEBUG httpcore.http11                          response_closed.complete
+15:37:00 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:37:00 DEBUG auto_applier.scoring.scorer              Archetype 'analytics_engineer' (conf=0.90) — filtering resumes
+15:37:00 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:37:00 DEBUG httpcore.http11                          send_request_headers.complete
+15:37:00 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:37:00 DEBUG httpcore.http11                          send_request_body.complete
+15:37:00 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:37:07 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:37:07 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:37:07 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:37:07 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:37:07 DEBUG httpcore.http11                          receive_response_body.complete
+15:37:07 DEBUG httpcore.http11                          response_closed.started
+15:37:07 DEBUG httpcore.http11                          response_closed.complete
+15:37:07 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:38:24 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:38:54 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-5210265808 (6502 chars)
+15:38:54 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:38:54 DEBUG httpcore.connection                      close.started
+15:38:54 DEBUG httpcore.connection                      close.complete
+15:38:54 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:38:54 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88C2FEF0>
+15:38:54 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:38:54 DEBUG httpcore.http11                          send_request_headers.complete
+15:38:54 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:38:54 DEBUG httpcore.http11                          send_request_body.complete
+15:38:54 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:38:57 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:38:57 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:38:57 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:38:57 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:38:57 DEBUG httpcore.http11                          receive_response_body.complete
+15:38:57 DEBUG httpcore.http11                          response_closed.started
+15:38:57 DEBUG httpcore.http11                          response_closed.complete
+15:38:57 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:38:57 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:38:57 DEBUG httpcore.http11                          send_request_headers.complete
+15:38:57 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:38:57 DEBUG httpcore.http11                          send_request_body.complete
+15:38:57 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:38:59 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:38:59 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:38:59 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:38:59 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:38:59 DEBUG httpcore.http11                          receive_response_body.complete
+15:38:59 DEBUG httpcore.http11                          response_closed.started
+15:38:59 DEBUG httpcore.http11                          response_closed.complete
+15:38:59 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:38:59 DEBUG auto_applier.scoring.scorer              Archetype 'analytics_engineer' (conf=0.90) — filtering resumes
+15:38:59 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:38:59 DEBUG httpcore.http11                          send_request_headers.complete
+15:38:59 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:38:59 DEBUG httpcore.http11                          send_request_body.complete
+15:38:59 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:39:06 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:39:06 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:39:06 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:39:06 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:39:06 DEBUG httpcore.http11                          receive_response_body.complete
+15:39:06 DEBUG httpcore.http11                          response_closed.started
+15:39:06 DEBUG httpcore.http11                          response_closed.complete
+15:39:06 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:39:07 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:40:45 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-3924780147 (959 chars)
+15:40:45 DEBUG httpcore.connection                      close.started
+15:40:45 DEBUG httpcore.connection                      close.complete
+15:40:45 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:40:45 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88D27FB0>
+15:40:45 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:40:45 DEBUG httpcore.http11                          send_request_headers.complete
+15:40:45 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:40:45 DEBUG httpcore.http11                          send_request_body.complete
+15:40:45 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:40:48 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:40:48 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:40:48 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:40:48 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:40:48 DEBUG httpcore.http11                          receive_response_body.complete
+15:40:48 DEBUG httpcore.http11                          response_closed.started
+15:40:48 DEBUG httpcore.http11                          response_closed.complete
+15:40:48 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:40:48 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:40:48 DEBUG httpcore.http11                          send_request_headers.complete
+15:40:48 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:40:48 DEBUG httpcore.http11                          send_request_body.complete
+15:40:48 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:40:50 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:40:50 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:40:50 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:40:50 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:40:50 DEBUG httpcore.http11                          receive_response_body.complete
+15:40:50 DEBUG httpcore.http11                          response_closed.started
+15:40:50 DEBUG httpcore.http11                          response_closed.complete
+15:40:50 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:40:50 DEBUG auto_applier.scoring.scorer              Archetype 'analytics_engineer' (conf=0.95) — filtering resumes
+15:40:50 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:40:50 DEBUG httpcore.http11                          send_request_headers.complete
+15:40:50 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:40:50 DEBUG httpcore.http11                          send_request_body.complete
+15:40:50 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:40:57 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:40:57 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:40:57 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:40:57 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:40:57 DEBUG httpcore.http11                          receive_response_body.complete
+15:40:57 DEBUG httpcore.http11                          response_closed.started
+15:40:57 DEBUG httpcore.http11                          response_closed.complete
+15:40:57 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:42:48 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-8523597961 (4453 chars)
+15:42:48 DEBUG httpcore.connection                      close.started
+15:42:48 DEBUG httpcore.connection                      close.complete
+15:42:48 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:42:48 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF88D56DB0>
+15:42:48 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:42:48 DEBUG httpcore.http11                          send_request_headers.complete
+15:42:48 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:42:48 DEBUG httpcore.http11                          send_request_body.complete
+15:42:48 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:42:51 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:42:51 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:42:51 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:42:51 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:42:51 DEBUG httpcore.http11                          receive_response_body.complete
+15:42:51 DEBUG httpcore.http11                          response_closed.started
+15:42:51 DEBUG httpcore.http11                          response_closed.complete
+15:42:51 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:42:51 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:42:51 DEBUG httpcore.http11                          send_request_headers.complete
+15:42:51 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:42:51 DEBUG httpcore.http11                          send_request_body.complete
+15:42:51 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:42:53 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:42:53 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:42:53 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:42:53 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:42:53 DEBUG httpcore.http11                          receive_response_body.complete
+15:42:53 DEBUG httpcore.http11                          response_closed.started
+15:42:53 DEBUG httpcore.http11                          response_closed.complete
+15:42:53 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:42:53 DEBUG auto_applier.scoring.scorer              Archetype 'analytics_engineer' (conf=0.98) — filtering resumes
+15:42:53 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:42:53 DEBUG httpcore.http11                          send_request_headers.complete
+15:42:53 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:42:53 DEBUG httpcore.http11                          send_request_body.complete
+15:42:53 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:43:01 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:43:01 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:43:01 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:43:01 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:43:01 DEBUG httpcore.http11                          receive_response_body.complete
+15:43:01 DEBUG httpcore.http11                          response_closed.started
+15:43:01 DEBUG httpcore.http11                          response_closed.complete
+15:43:01 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:44:48 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-8004068036 (3786 chars)
+15:44:48 DEBUG httpcore.connection                      close.started
+15:44:48 DEBUG httpcore.connection                      close.complete
+15:44:48 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:44:48 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF89D5B9E0>
+15:44:48 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:44:48 DEBUG httpcore.http11                          send_request_headers.complete
+15:44:48 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:44:48 DEBUG httpcore.http11                          send_request_body.complete
+15:44:48 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:44:50 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:44:50 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:44:50 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:44:50 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:44:50 DEBUG httpcore.http11                          receive_response_body.complete
+15:44:50 DEBUG httpcore.http11                          response_closed.started
+15:44:50 DEBUG httpcore.http11                          response_closed.complete
+15:44:50 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:44:50 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:44:50 DEBUG httpcore.http11                          send_request_headers.complete
+15:44:50 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:44:50 DEBUG httpcore.http11                          send_request_body.complete
+15:44:50 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:44:52 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:44:52 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:44:52 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:44:52 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:44:52 DEBUG httpcore.http11                          receive_response_body.complete
+15:44:52 DEBUG httpcore.http11                          response_closed.started
+15:44:52 DEBUG httpcore.http11                          response_closed.complete
+15:44:52 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:44:52 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.70) — filtering resumes
+15:44:52 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:44:52 DEBUG httpcore.http11                          send_request_headers.complete
+15:44:52 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:44:52 DEBUG httpcore.http11                          send_request_body.complete
+15:44:52 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:44:59 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:44:59 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:44:59 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:44:59 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:44:59 DEBUG httpcore.http11                          receive_response_body.complete
+15:44:59 DEBUG httpcore.http11                          response_closed.started
+15:44:59 DEBUG httpcore.http11                          response_closed.complete
+15:44:59 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:46:52 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-7981166387 (6067 chars)
+15:46:52 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:46:52 DEBUG httpcore.connection                      close.started
+15:46:52 DEBUG httpcore.connection                      close.complete
+15:46:52 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:46:52 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF89DC6780>
+15:46:52 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:46:52 DEBUG httpcore.http11                          send_request_headers.complete
+15:46:52 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:46:52 DEBUG httpcore.http11                          send_request_body.complete
+15:46:52 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:46:55 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:46:55 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:46:55 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:46:55 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:46:55 DEBUG httpcore.http11                          receive_response_body.complete
+15:46:55 DEBUG httpcore.http11                          response_closed.started
+15:46:55 DEBUG httpcore.http11                          response_closed.complete
+15:46:55 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:46:55 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:46:55 DEBUG httpcore.http11                          send_request_headers.complete
+15:46:55 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:46:55 DEBUG httpcore.http11                          send_request_body.complete
+15:46:55 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:46:57 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:46:57 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:46:57 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:46:57 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:46:57 DEBUG httpcore.http11                          receive_response_body.complete
+15:46:57 DEBUG httpcore.http11                          response_closed.started
+15:46:57 DEBUG httpcore.http11                          response_closed.complete
+15:46:57 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:46:57 DEBUG auto_applier.scoring.scorer              Archetype 'analytics_engineer' (conf=1.00) — filtering resumes
+15:46:57 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:46:57 DEBUG httpcore.http11                          send_request_headers.complete
+15:46:57 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:46:57 DEBUG httpcore.http11                          send_request_body.complete
+15:46:57 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:47:04 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:47:04 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:47:04 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:47:04 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:47:04 DEBUG httpcore.http11                          receive_response_body.complete
+15:47:04 DEBUG httpcore.http11                          response_closed.started
+15:47:04 DEBUG httpcore.http11                          response_closed.complete
+15:47:04 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:47:05 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:48:58 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-1406025958 (2681 chars)
+15:48:59 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:48:59 DEBUG httpcore.connection                      close.started
+15:48:59 DEBUG httpcore.connection                      close.complete
+15:48:59 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:48:59 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF89E01040>
+15:48:59 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:48:59 DEBUG httpcore.http11                          send_request_headers.complete
+15:48:59 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:48:59 DEBUG httpcore.http11                          send_request_body.complete
+15:48:59 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:49:01 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:49:01 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:49:01 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:49:01 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:49:01 DEBUG httpcore.http11                          receive_response_body.complete
+15:49:01 DEBUG httpcore.http11                          response_closed.started
+15:49:01 DEBUG httpcore.http11                          response_closed.complete
+15:49:01 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:49:01 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:49:01 DEBUG httpcore.http11                          send_request_headers.complete
+15:49:01 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:49:01 DEBUG httpcore.http11                          send_request_body.complete
+15:49:01 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:49:03 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:49:03 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:49:03 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:49:03 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:49:03 DEBUG httpcore.http11                          receive_response_body.complete
+15:49:03 DEBUG httpcore.http11                          response_closed.started
+15:49:03 DEBUG httpcore.http11                          response_closed.complete
+15:49:03 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:49:03 DEBUG auto_applier.scoring.scorer              Archetype 'data_analyst' (conf=0.80) — filtering resumes
+15:49:03 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:49:03 DEBUG httpcore.http11                          send_request_headers.complete
+15:49:03 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:49:03 DEBUG httpcore.http11                          send_request_body.complete
+15:49:03 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:49:08 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:49:08 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:49:08 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:49:08 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:49:08 DEBUG httpcore.http11                          receive_response_body.complete
+15:49:08 DEBUG httpcore.http11                          response_closed.started
+15:49:08 DEBUG httpcore.http11                          response_closed.complete
+15:49:08 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:49:09 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:50:40 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:51:10 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-8104826593 (3732 chars)
+15:51:11 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:51:11 DEBUG httpcore.connection                      close.started
+15:51:11 DEBUG httpcore.connection                      close.complete
+15:51:11 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:51:11 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF89E9D2B0>
+15:51:11 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:51:11 DEBUG httpcore.http11                          send_request_headers.complete
+15:51:11 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:51:11 DEBUG httpcore.http11                          send_request_body.complete
+15:51:11 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:51:13 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:51:13 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:51:13 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:51:13 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:51:13 DEBUG httpcore.http11                          receive_response_body.complete
+15:51:13 DEBUG httpcore.http11                          response_closed.started
+15:51:13 DEBUG httpcore.http11                          response_closed.complete
+15:51:13 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:51:13 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:51:13 DEBUG httpcore.http11                          send_request_headers.complete
+15:51:13 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:51:13 DEBUG httpcore.http11                          send_request_body.complete
+15:51:13 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:51:15 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:51:15 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:51:15 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:51:15 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:51:15 DEBUG httpcore.http11                          receive_response_body.complete
+15:51:15 DEBUG httpcore.http11                          response_closed.started
+15:51:15 DEBUG httpcore.http11                          response_closed.complete
+15:51:15 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:51:15 DEBUG auto_applier.scoring.scorer              Archetype 'analytics_engineer' (conf=0.90) — filtering resumes
+15:51:15 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:51:15 DEBUG httpcore.http11                          send_request_headers.complete
+15:51:15 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:51:15 DEBUG httpcore.http11                          send_request_body.complete
+15:51:15 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:51:20 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:51:20 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:51:20 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:51:20 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:51:20 DEBUG httpcore.http11                          receive_response_body.complete
+15:51:20 DEBUG httpcore.http11                          response_closed.started
+15:51:20 DEBUG httpcore.http11                          response_closed.complete
+15:51:20 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:51:21 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:52:37 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:53:07 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-7853390721 (5899 chars)
+15:53:07 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:53:07 DEBUG httpcore.connection                      close.started
+15:53:07 DEBUG httpcore.connection                      close.complete
+15:53:07 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:53:07 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF89EDFC80>
+15:53:07 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:53:07 DEBUG httpcore.http11                          send_request_headers.complete
+15:53:07 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:53:07 DEBUG httpcore.http11                          send_request_body.complete
+15:53:07 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:53:09 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:53:09 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:53:09 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:53:09 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:53:09 DEBUG httpcore.http11                          receive_response_body.complete
+15:53:09 DEBUG httpcore.http11                          response_closed.started
+15:53:09 DEBUG httpcore.http11                          response_closed.complete
+15:53:09 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:53:09 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:53:09 DEBUG httpcore.http11                          send_request_headers.complete
+15:53:09 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:53:09 DEBUG httpcore.http11                          send_request_body.complete
+15:53:09 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:53:12 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:53:12 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:53:12 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:53:12 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:53:12 DEBUG httpcore.http11                          receive_response_body.complete
+15:53:12 DEBUG httpcore.http11                          response_closed.started
+15:53:12 DEBUG httpcore.http11                          response_closed.complete
+15:53:12 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:53:12 DEBUG auto_applier.scoring.scorer              Archetype 'analytics_engineer' (conf=0.90) — filtering resumes
+15:53:12 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:53:12 DEBUG httpcore.http11                          send_request_headers.complete
+15:53:12 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:53:12 DEBUG httpcore.http11                          send_request_body.complete
+15:53:12 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:53:17 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:53:17 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:53:17 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:53:17 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:53:17 DEBUG httpcore.http11                          receive_response_body.complete
+15:53:17 DEBUG httpcore.http11                          response_closed.started
+15:53:17 DEBUG httpcore.http11                          response_closed.complete
+15:53:17 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:53:18 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:54:55 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-5537700056 (3008 chars)
+15:54:55 DEBUG httpcore.connection                      close.started
+15:54:55 DEBUG httpcore.connection                      close.complete
+15:54:55 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:54:55 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF89EFC500>
+15:54:55 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:54:55 DEBUG httpcore.http11                          send_request_headers.complete
+15:54:55 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:54:55 DEBUG httpcore.http11                          send_request_body.complete
+15:54:55 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:54:57 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:54:57 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:54:57 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:54:57 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:54:57 DEBUG httpcore.http11                          receive_response_body.complete
+15:54:57 DEBUG httpcore.http11                          response_closed.started
+15:54:57 DEBUG httpcore.http11                          response_closed.complete
+15:54:57 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:54:57 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:54:57 DEBUG httpcore.http11                          send_request_headers.complete
+15:54:57 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:54:57 DEBUG httpcore.http11                          send_request_body.complete
+15:54:57 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:54:59 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:54:59 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:54:59 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:54:59 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:54:59 DEBUG httpcore.http11                          receive_response_body.complete
+15:54:59 DEBUG httpcore.http11                          response_closed.started
+15:54:59 DEBUG httpcore.http11                          response_closed.complete
+15:54:59 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:54:59 DEBUG auto_applier.scoring.scorer              Archetype 'data_engineer' (conf=0.90) — filtering resumes
+15:54:59 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:54:59 DEBUG httpcore.http11                          send_request_headers.complete
+15:54:59 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:54:59 DEBUG httpcore.http11                          send_request_body.complete
+15:54:59 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:55:04 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:55:04 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:55:04 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:55:04 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:55:04 DEBUG httpcore.http11                          receive_response_body.complete
+15:55:04 DEBUG httpcore.http11                          response_closed.started
+15:55:04 DEBUG httpcore.http11                          response_closed.complete
+15:55:04 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:56:40 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-3825912908 (5454 chars)
+15:56:41 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:56:41 DEBUG httpcore.connection                      close.started
+15:56:41 DEBUG httpcore.connection                      close.complete
+15:56:41 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:56:41 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF89EFD5E0>
+15:56:41 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:56:41 DEBUG httpcore.http11                          send_request_headers.complete
+15:56:41 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:56:41 DEBUG httpcore.http11                          send_request_body.complete
+15:56:41 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:56:43 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:56:43 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:56:43 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:56:43 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:56:43 DEBUG httpcore.http11                          receive_response_body.complete
+15:56:43 DEBUG httpcore.http11                          response_closed.started
+15:56:43 DEBUG httpcore.http11                          response_closed.complete
+15:56:43 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:56:43 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:56:43 DEBUG httpcore.http11                          send_request_headers.complete
+15:56:43 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:56:43 DEBUG httpcore.http11                          send_request_body.complete
+15:56:43 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:56:45 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:56:45 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:56:45 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:56:45 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:56:45 DEBUG httpcore.http11                          receive_response_body.complete
+15:56:45 DEBUG httpcore.http11                          response_closed.started
+15:56:45 DEBUG httpcore.http11                          response_closed.complete
+15:56:45 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:56:45 DEBUG auto_applier.scoring.scorer              Archetype 'analytics_engineer' (conf=0.95) — filtering resumes
+15:56:45 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:56:45 DEBUG httpcore.http11                          send_request_headers.complete
+15:56:45 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:56:45 DEBUG httpcore.http11                          send_request_body.complete
+15:56:45 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:56:50 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:56:50 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:56:50 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:56:50 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:56:50 DEBUG httpcore.http11                          receive_response_body.complete
+15:56:50 DEBUG httpcore.http11                          response_closed.started
+15:56:50 DEBUG httpcore.http11                          response_closed.complete
+15:56:50 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:56:51 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:58:20 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:58:50 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-4592585328 (7674 chars)
+15:58:50 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+15:58:50 DEBUG httpcore.connection                      close.started
+15:58:50 DEBUG httpcore.connection                      close.complete
+15:58:50 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+15:58:51 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF8A0545F0>
+15:58:51 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:58:51 DEBUG httpcore.http11                          send_request_headers.complete
+15:58:51 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:58:51 DEBUG httpcore.http11                          send_request_body.complete
+15:58:51 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:58:52 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:58:52 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:58:52 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:58:52 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:58:52 DEBUG httpcore.http11                          receive_response_body.complete
+15:58:52 DEBUG httpcore.http11                          response_closed.started
+15:58:52 DEBUG httpcore.http11                          response_closed.complete
+15:58:52 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:58:52 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:58:52 DEBUG httpcore.http11                          send_request_headers.complete
+15:58:52 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:58:52 DEBUG httpcore.http11                          send_request_body.complete
+15:58:52 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:58:54 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:58:54 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:58:54 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:58:54 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:58:54 DEBUG httpcore.http11                          receive_response_body.complete
+15:58:54 DEBUG httpcore.http11                          response_closed.started
+15:58:54 DEBUG httpcore.http11                          response_closed.complete
+15:58:54 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:58:54 DEBUG auto_applier.scoring.scorer              Archetype 'analytics_engineer' (conf=0.95) — filtering resumes
+15:58:54 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+15:58:54 DEBUG httpcore.http11                          send_request_headers.complete
+15:58:54 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+15:58:54 DEBUG httpcore.http11                          send_request_body.complete
+15:58:54 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+15:59:00 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 20:59:00 GMT'), (b'Transfer-Encoding', b'chunked')])
+15:59:00 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+15:59:00 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+15:59:00 DEBUG httpcore.http11                          receive_response_body.complete
+15:59:00 DEBUG httpcore.http11                          response_closed.started
+15:59:00 DEBUG httpcore.http11                          response_closed.complete
+15:59:00 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+15:59:01 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+16:00:06 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+16:00:36 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-6368019054 (9154 chars)
+16:00:37 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+16:00:37 DEBUG httpcore.connection                      close.started
+16:00:37 DEBUG httpcore.connection                      close.complete
+16:00:37 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+16:00:37 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF8A097DD0>
+16:00:37 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+16:00:37 DEBUG httpcore.http11                          send_request_headers.complete
+16:00:37 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+16:00:37 DEBUG httpcore.http11                          send_request_body.complete
+16:00:37 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+16:00:39 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 21:00:39 GMT'), (b'Transfer-Encoding', b'chunked')])
+16:00:39 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+16:00:39 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+16:00:39 DEBUG httpcore.http11                          receive_response_body.complete
+16:00:39 DEBUG httpcore.http11                          response_closed.started
+16:00:39 DEBUG httpcore.http11                          response_closed.complete
+16:00:39 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+16:00:39 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+16:00:39 DEBUG httpcore.http11                          send_request_headers.complete
+16:00:39 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+16:00:39 DEBUG httpcore.http11                          send_request_body.complete
+16:00:39 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+16:00:40 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 21:00:40 GMT'), (b'Transfer-Encoding', b'chunked')])
+16:00:40 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+16:00:40 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+16:00:40 DEBUG httpcore.http11                          receive_response_body.complete
+16:00:40 DEBUG httpcore.http11                          response_closed.started
+16:00:40 DEBUG httpcore.http11                          response_closed.complete
+16:00:40 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+16:00:40 DEBUG auto_applier.scoring.scorer              Archetype 'analytics_engineer' (conf=0.95) — filtering resumes
+16:00:40 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+16:00:40 DEBUG httpcore.http11                          send_request_headers.complete
+16:00:40 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+16:00:40 DEBUG httpcore.http11                          send_request_body.complete
+16:00:40 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+16:00:46 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sat, 11 Apr 2026 21:00:46 GMT'), (b'Transfer-Encoding', b'chunked')])
+16:00:46 INFO  httpx                                    HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+16:00:46 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'POST']>
+16:00:46 DEBUG httpcore.http11                          receive_response_body.complete
+16:00:46 DEBUG httpcore.http11                          response_closed.started
+16:00:46 DEBUG httpcore.http11                          response_closed.complete
+16:00:46 DEBUG auto_applier.llm.router                  Backend ollama returned JSON
+16:00:47 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+16:01:55 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+16:02:25 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-7933218045 (4722 chars)
+16:02:25 DEBUG auto_applier.browser.base_platform       Ignoring hidden CAPTCHA element 'iframe[src*='recaptcha']' (likely invisible reCAPTCHA v3 tracker)
+16:02:25 DEBUG httpcore.connection                      close.started
+16:02:25 DEBUG httpcore.connection                      close.complete
+16:02:25 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+16:02:26 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000002AF8A0D59A0>
+16:02:26 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+16:02:26 DEBUG httpcore.http11                          send_request_headers.complete
+16:02:26 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+16:02:26 DEBUG httpcore.http11                          send_request_body.complete
+16:02:26 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>

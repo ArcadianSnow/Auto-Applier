@@ -964,6 +964,136 @@ class IndeedPlatform(JobPlatform):
             pass
         return []
 
+    async def _handle_questions(self, page: Page, job: Job) -> list:
+        """questions-module: screener questions with custom widgets.
+
+        Indeed's questions use non-standard DOM: not label/input pairs
+        but custom React widgets. If find_form_fields returns 0, try
+        broader detection and dump the DOM for debugging.
+        """
+        fields = await find_form_fields(page)
+        if not fields:
+            # Indeed questions use hash-based names (q_13ae933...)
+            # with the actual question text in a parent wrapper.
+            # Walk up from each visible input to find the real label.
+            try:
+                from auto_applier.browser.selector_utils import FormField, _classify_element
+                # Find question containers — Indeed wraps each screener
+                # in a container with a question-text element + input(s)
+                question_labels = await page.evaluate("""() => {
+                    const results = [];
+                    const seen = new Set();
+                    // Indeed wraps each question in a div whose class
+                    // contains 'mosaic-provider-module-apply-questions'.
+                    // The question text is in a child div/span BEFORE
+                    // the inputs — no semantic label/legend/heading.
+                    const wrappers = document.querySelectorAll(
+                        '[class*=questions], [class*=question], ' +
+                        'fieldset, [role=group], [role=radiogroup]'
+                    );
+                    for (const wrapper of wrappers) {
+                        const inp = wrapper.querySelector(
+                            'input:not([type=hidden]), textarea, select'
+                        );
+                        if (!inp || inp.offsetParent === null) continue;
+                        const name = inp.name || '';
+                        if (!name || seen.has(name)) continue;
+                        seen.add(name);
+                        // Extract question text: walk child elements
+                        // and grab the first one with substantial text
+                        // that isn't an option label (Yes/No/etc.)
+                        let text = '';
+                        const optionTexts = new Set();
+                        wrapper.querySelectorAll('label').forEach(l => {
+                            const t = l.innerText?.trim();
+                            if (t && t.length < 30) optionTexts.add(t.toLowerCase());
+                        });
+                        // Check all direct and nested children for
+                        // question text
+                        for (const child of wrapper.querySelectorAll('*')) {
+                            if (['INPUT','TEXTAREA','SELECT'].includes(child.tagName)) continue;
+                            const t = child.innerText?.trim();
+                            if (!t || t.length < 5 || t.length > 300) continue;
+                            if (t.startsWith('q_')) continue;
+                            if (optionTexts.has(t.toLowerCase())) continue;
+                            // Skip if it contains multiple inputs (it's the whole wrapper)
+                            if (child.querySelectorAll('input, textarea, select').length > 1) continue;
+                            text = t;
+                            break;
+                        }
+                        if (!text) continue;
+                        // Filter out section headers that aren't
+                        // actual questions — these corrupt the form
+                        // when the filler tries to type into them.
+                        const headerPhrases = [
+                            'answer these questions',
+                            'key qualifications',
+                            'we\'ll save your answers',
+                            'required fields are marked',
+                        ];
+                        if (headerPhrases.some(p => text.toLowerCase().includes(p))) continue;
+                        results.push({
+                            text: text.substring(0, 200),
+                            name: name,
+                            type: inp.type || inp.tagName.toLowerCase(),
+                            selector: '[name="' + name + '"]',
+                        });
+                    }
+                    return results;
+                }""")
+                for q in (question_labels or []):
+                    if not q.get("text"):
+                        continue
+                    sel = q.get("selector")
+                    if not sel:
+                        continue
+                    inp = await page.query_selector(sel)
+                    if not inp:
+                        continue
+                    f = await _classify_element(inp, q["text"], page)
+                    if f and f.label.lower() not in {
+                        ff.label.lower() for ff in fields
+                    }:
+                        fields.append(f)
+                        logger.debug(
+                            "  questions: extracted label=%r for name=%s",
+                            q["text"][:60], q.get("name", "?"),
+                        )
+            except Exception as e:
+                logger.debug("questions handler broader detection failed: %s", e)
+
+        if not fields:
+            # Diagnostic dump — log what the questions page looks like
+            try:
+                diag = await page.evaluate("""() => {
+                    const inputs = [...document.querySelectorAll(
+                        'input, textarea, select, [role=radio], [role=checkbox]'
+                    )].filter(el => el.offsetParent !== null).slice(0, 10);
+                    return inputs.map(el => ({
+                        tag: el.tagName,
+                        type: el.type || '',
+                        name: el.name || '',
+                        aria: el.getAttribute('aria-label') || '',
+                        role: el.getAttribute('role') || '',
+                        parent: el.parentElement?.className?.substring(0, 60) || '',
+                    }));
+                }""")
+                import json as _json
+                logger.info(
+                    "Indeed: questions-module diagnostic (0 fields): %s",
+                    _json.dumps(diag, indent=2)[:1500],
+                )
+            except Exception:
+                pass
+
+        if self.form_filler:
+            for field in fields:
+                await self.form_filler.fill_field(
+                    page, field, job_id=job.job_id,
+                )
+                await random_delay(0.5, 1.5)
+        return fields
+
     async def _handle_review(self, page: Page, job: Job) -> list:
         """review-module: nothing to fill, let submit logic fire."""
         return []
@@ -994,8 +1124,18 @@ class IndeedPlatform(JobPlatform):
             return "resume-selection", await self._handle_resume_selection(
                 page, resume_path,
             )
-        if "review-module" in url or "review" in url:
+        if "review-module" in url:
             return "review", await self._handle_review(page, job)
+        if "intervention" in url:
+            # Indeed's screening intervention — "you may not qualify
+            # but you can apply anyway". Click "Apply anyway" to
+            # proceed, or bail if it's a hard block.
+            logger.info(
+                "Indeed: intervention page — clicking 'Apply anyway' if available"
+            )
+            return "intervention", []
+        if "questions-module" in url or "questions/" in url:
+            return "questions", await self._handle_questions(page, job)
         return "generic", await self._handle_generic(page, job)
 
     async def _click_continue_and_wait(
@@ -1032,9 +1172,31 @@ class IndeedPlatform(JobPlatform):
                     "use this",
                     "looks good",
                     "review and submit",
+                    "apply anyway",
                 ),
             )
         if not clicked:
+            # Dump all visible buttons so the log shows what's
+            # actually clickable on pages where our selectors miss.
+            try:
+                btns = await page.evaluate("""() => {
+                    return [...document.querySelectorAll('button, a[role=button], [role=button]')]
+                        .filter(el => el.offsetParent !== null)
+                        .slice(0, 10)
+                        .map(el => ({
+                            tag: el.tagName,
+                            text: el.innerText?.trim().substring(0, 50),
+                            class: el.className?.substring(0, 60),
+                            testid: el.getAttribute('data-testid') || '',
+                        }));
+                }""")
+                import json as _json
+                logger.info(
+                    "Indeed: no continue button — visible buttons: %s",
+                    _json.dumps(btns, indent=2)[:1000],
+                )
+            except Exception:
+                pass
             return False, "no continue button clickable"
 
         # Wait for the URL to differ. If that fires, we advanced.

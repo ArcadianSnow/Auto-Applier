@@ -1,0 +1,119 @@
+09:50:30 INFO  auto_applier.log_setup                   Run logging enabled. Debug output: C:\Users\jar85\AI Projects\Auto Applier\data\logs\run-20260412-095030.log
+09:50:30 DEBUG asyncio                                  Using proactor: IocpProactor
+09:50:31 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+09:50:31 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x0000023D5C230650>
+09:50:31 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'GET']>
+09:50:31 DEBUG httpcore.http11                          send_request_headers.complete
+09:50:31 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'GET']>
+09:50:31 DEBUG httpcore.http11                          send_request_body.complete
+09:50:31 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'GET']>
+09:50:31 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 12 Apr 2026 14:50:31 GMT'), (b'Content-Length', b'339')])
+09:50:31 INFO  httpx                                    HTTP Request: GET http://localhost:11434/api/tags "HTTP/1.1 200 OK"
+09:50:31 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'GET']>
+09:50:31 DEBUG httpcore.http11                          receive_response_body.complete
+09:50:31 DEBUG httpcore.http11                          response_closed.started
+09:50:31 DEBUG httpcore.http11                          response_closed.complete
+09:50:31 INFO  auto_applier.llm.router                  LLM backend ollama       : available
+09:50:31 INFO  auto_applier.llm.router                  LLM backend gemini       : unavailable
+09:50:31 INFO  auto_applier.llm.router                  LLM backend rule-based   : available
+09:50:31 INFO  auto_applier.browser.session             Using patchright (CDP leak patches active)
+09:50:32 INFO  auto_applier.browser.session             Detected real Chrome installation, using channel=chrome
+09:50:32 INFO  auto_applier.browser.session             Browser session started (patchright=True)
+09:50:32 INFO  auto_applier.browser.anti_detect         Anti-detect fast mode: ON
+09:51:19 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Not logged in. Navigating to login page for manual login...
+09:51:19 INFO  auto_applier.browser.base_platform       Waiting for manual login on ZipRecruiter (timeout=300s)...
+09:51:19 INFO  auto_applier.browser.base_platform       Login detected via URL pattern
+09:51:20 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Searching page 1 -- data analyst Remote
+09:51:28 DEBUG auto_applier.browser.platforms.ziprecruiter Found 40 job cards via 'article:has(h2)'
+09:51:28 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: CARD DIAGNOSTIC:\nCARD attrs: class=relative flex flex-col justify-between p-24 rounded-12 h-full w-full pt-[14px] sm:pt-18 bg-white, id=job-card-F_aJIgQr8c5c8qYgC5i5ow
+ANCHORS:
+  {text: "HTP Solutions", href: "/co/HTP-Solutions/Jobs/-in-Oakbrook-Terrace,IL?uuid=&radius=25", data: "testid"}
+  {text: "Oakbrook Terrace, IL", href: "/jobs-search?location=Oakbrook+Terrace%2CIL&search=data+analyst", data: "testid"}
+BUTTONS:
+  {text: "", data: ""}
+  {text: "Financial Data Analyst", data: ""}
+HTML (500 chars): <article class="relative flex flex-col justify-between p-24 rounded-12 h-full w-full pt-[14px] sm:pt-18 bg-white" id="job-card-F_aJIgQr8c5c8qYgC5i5ow"><section class="flex flex-col gap-8 w-full"><div class="flex justify-between items-center h-[40px]"><div class="h-full flex items-center gap-8 pr-8 overflow-auto"><div class="flex flex-row justify-center items-center h-[32px] gap-16"><div class="padding-10 bg-light-gray rounded-[5px] flex items-center justify-center w-[32px] h-[32px] text-secondar
+09:51:33 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Found 40 jobs for 'data analyst' in 'Remote'
+09:51:34 INFO  auto_applier.orchestrator.pipeline       discover_jobs[ziprecruiter/data analyst]: raw=25 kept=13 filtered=12 (already_applied=0, canonical_dup=0, batch_dup=12) dry_run=True
+09:51:36 DEBUG auto_applier.browser.platforms.ziprecruiter ZipRecruiter: clicked card F_aJIgQr8c5c8qYgC5i5, url=https://www.ziprecruiter.com/jobs-search?location=Oakbrook+Terrace%2CIL&search=data+analyst&lk=F_aJIgQr8c5c8qYgC5i5ow
+09:52:12 DEBUG auto_applier.browser.platforms.ziprecruiter ZipRecruiter: extracted description via text-block fallback (4980 chars)
+09:52:12 DEBUG auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Got description for zr-F_aJIgQr8c5c8qYgC5i5ow (4980 chars)
+09:52:13 DEBUG httpcore.connection                      close.started
+09:52:13 DEBUG httpcore.connection                      close.complete
+09:52:13 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+09:52:13 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x0000023D5E23A3C0>
+09:52:13 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'POST']>
+09:52:13 DEBUG httpcore.http11                          send_request_headers.complete
+09:52:13 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'POST']>
+09:52:13 DEBUG httpcore.http11                          send_request_body.complete
+09:52:13 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'POST']>
+09:54:13 DEBUG httpcore.http11                          receive_response_headers.failed exception=ReadTimeout(TimeoutError())
+09:54:13 DEBUG httpcore.http11                          response_closed.started
+09:54:13 DEBUG httpcore.http11                          response_closed.complete
+09:54:13 WARNING auto_applier.llm.router                  Backend ollama JSON failed: 
+09:54:13 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:13 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:13 INFO  auto_applier.orchestrator.engine         Score: Financial Data Analyst @ ziprecruiter → 5.0 (user_review) [resume=Testpilot]
+09:54:13 WARNING auto_applier.browser.platforms.ziprecruiter ZipRecruiter: card not found for zr-aSKsp8q2dwHS_C_JG6yIEg
+09:54:14 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:14 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:14 INFO  auto_applier.orchestrator.engine         Score: Clinical Data Analyst II - T @ ziprecruiter → 5.0 (user_review) [resume=Testpilot]
+09:54:16 DEBUG auto_applier.browser.platforms.ziprecruiter ZipRecruiter: clicked card O4gGswfzxKq1rl8H4AI5, url=https://www.ziprecruiter.com/jobs-search?location=Oakbrook+Terrace%2CIL&search=data+analyst&lk=tYiX7Nrye9mo0jqedmpdmw
+09:54:52 DEBUG auto_applier.browser.platforms.ziprecruiter ZipRecruiter: extracted description via text-block fallback (2545 chars)
+09:54:52 DEBUG auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Got description for zr-O4gGswfzxKq1rl8H4AI5rg (2545 chars)
+09:54:53 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:53 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:53 INFO  auto_applier.orchestrator.engine         Score: Data Analyst @ ziprecruiter → 5.0 (user_review) [resume=Testpilot]
+09:54:53 WARNING auto_applier.browser.platforms.ziprecruiter ZipRecruiter: card not found for zr-u_Odnw_7smg2pWzPtE9pqg
+09:54:53 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:53 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:53 INFO  auto_applier.orchestrator.engine         Score: Data Analyst (Thai) @ ziprecruiter → 5.0 (user_review) [resume=Testpilot]
+09:54:53 WARNING auto_applier.browser.platforms.ziprecruiter ZipRecruiter: card not found for zr--P0CZdqLlDLHBF1T4ew1Cw
+09:54:53 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:53 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:53 INFO  auto_applier.orchestrator.engine         Score: Senior Data Analyst/Compliance Manager @ ziprecruiter → 5.0 (user_review) [resume=Testpilot]
+09:54:54 WARNING auto_applier.browser.platforms.ziprecruiter ZipRecruiter: card not found for zr-7yyzTJC4HmcRBSIks8J1OA
+09:54:54 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:54 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:54 INFO  auto_applier.orchestrator.engine         Score: Data and Reporting Analyst @ ziprecruiter → 5.0 (user_review) [resume=Testpilot]
+09:54:54 WARNING auto_applier.browser.platforms.ziprecruiter ZipRecruiter: card not found for zr-ncQqvskqQ8NUl5w73U0dGA
+09:54:54 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:54 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:54 INFO  auto_applier.orchestrator.engine         Score: Product Data Analyst (US Remote) @ ziprecruiter → 5.0 (user_review) [resume=Testpilot]
+09:54:54 WARNING auto_applier.browser.platforms.ziprecruiter ZipRecruiter: card not found for zr-pwz0Bkw1o4TyrVb0SchL2A
+09:54:55 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:55 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:55 INFO  auto_applier.orchestrator.engine         Score: Remote Clinical Data Analyst @ ziprecruiter → 5.0 (user_review) [resume=Testpilot]
+09:54:55 WARNING auto_applier.browser.platforms.ziprecruiter ZipRecruiter: card not found for zr-x7c_M_dHdbq5TkPgGzk_3Q
+09:54:55 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:55 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:55 INFO  auto_applier.orchestrator.engine         Score: SQL Data Analyst - Healthcare Claims @ ziprecruiter → 5.0 (user_review) [resume=Testpilot]
+09:54:55 WARNING auto_applier.browser.platforms.ziprecruiter ZipRecruiter: card not found for zr-7xFaPadPAd7RXvMd5DSrlg
+09:54:56 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:56 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:56 INFO  auto_applier.orchestrator.engine         Score: Data Analyst III @ ziprecruiter → 5.0 (user_review) [resume=Testpilot]
+09:54:56 WARNING auto_applier.browser.platforms.ziprecruiter ZipRecruiter: card not found for zr-nOB3AIO-zTVZd73pb-yVcg
+09:54:56 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:56 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:56 INFO  auto_applier.orchestrator.engine         Score: Senior Data Analyst @ ziprecruiter → 5.0 (user_review) [resume=Testpilot]
+09:54:56 WARNING auto_applier.browser.platforms.ziprecruiter ZipRecruiter: card not found for zr-xcGZ2mY8hnhkcTSKwUCzmg
+09:54:57 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:57 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:57 INFO  auto_applier.orchestrator.engine         Score: Depot Distribution Analyst @ ziprecruiter → 5.0 (user_review) [resume=Testpilot]
+09:54:57 WARNING auto_applier.browser.platforms.ziprecruiter ZipRecruiter: card not found for zr-wgZY5v2fuIennvI_U-VkFQ
+09:54:57 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:57 ERROR auto_applier.llm.router                  All LLM backends failed for JSON prompt
+09:54:57 INFO  auto_applier.orchestrator.engine         Score: Sr. Data Analyst @ ziprecruiter → 5.0 (user_review) [resume=Testpilot]
+09:54:57 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Searching page 1 -- analytics engineer Remote
+09:55:04 DEBUG auto_applier.browser.platforms.ziprecruiter Found 40 job cards via 'article:has(h2)'
+09:55:04 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: CARD DIAGNOSTIC:\nCARD attrs: class=relative flex flex-col justify-between p-24 rounded-12 h-full w-full pt-[14px] sm:pt-18 bg-white, id=job-card-OvATyOUbK2JyGOp6epZwrw
+ANCHORS:
+  {text: "Turnitin, LLC", href: "/co/Turnitin,-LLC/Jobs/-in-Washington,DC?uuid=vp9KSG1qO%2FxMTFX7qWgEvgoaAR8%3D&radius=25", data: "testid"}
+  {text: "Washington, DC", href: "/jobs-search?location=Washington%2CDC&search=analytics+engineer", data: "testid"}
+BUTTONS:
+  {text: "", data: ""}
+  {text: "Business Intelligence Analyst - Analytics Engineer", data: ""}
+HTML (500 chars): <article class="relative flex flex-col justify-between p-24 rounded-12 h-full w-full pt-[14px] sm:pt-18 bg-white" id="job-card-OvATyOUbK2JyGOp6epZwrw"><section class="flex flex-col gap-8 w-full"><div class="flex justify-between items-center h-[40px]"><div class="h-full flex items-center gap-8 pr-8 overflow-auto"><div class="flex flex-row justify-center items-center h-[32px] gap-16"><div class="flex items-center justify-center flex-shrink-0 w-auto h-[32px]"><img alt="Business Intelligence Analyst
+09:55:09 INFO  auto_applier.browser.platforms.ziprecruiter ZipRecruiter: Found 40 jobs for 'analytics engineer' in 'Remote'
+09:55:09 INFO  auto_applier.orchestrator.pipeline       discover_jobs[ziprecruiter/analytics engineer]: raw=25 kept=13 filtered=12 (already_applied=0, canonical_dup=0, batch_dup=12) dry_run=True
+09:55:11 DEBUG auto_applier.browser.platforms.ziprecruiter ZipRecruiter: clicked card OvATyOUbK2JyGOp6epZw, url=https://www.ziprecruiter.com/jobs-search?location=Remote&search=analytics+engineer&lk=OvATyOUbK2JyGOp6epZwrw

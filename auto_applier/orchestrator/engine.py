@@ -271,13 +271,15 @@ class ApplicationEngine:
                 self.events.emit(EVOLUTION_TRIGGERS, triggers=triggers)
 
         except Exception as e:
-            self.events.emit(RUN_FINISHED, reason=f"Error: {e}")
+            run_reason = f"Error: {e}"
             raise
+        else:
+            run_reason = "Complete"
         finally:
             await self.stop()
             self.events.emit(
                 RUN_FINISHED,
-                reason="Complete",
+                reason=run_reason,
                 applied=self.applied_count,
                 skipped=self.skipped_count,
                 failed=self.failed_count,
@@ -651,8 +653,18 @@ class ApplicationEngine:
                 if app.status in ("applied", "dry_run"):
                     self.applied_count += 1
                     applied_this_platform += 1
+                    logger.info(
+                        "Apply: %s @ %s → %s [%d/%d fields]",
+                        job.title[:50], platform_key, app.status,
+                        app.fields_filled, app.fields_total,
+                    )
                 else:
                     self.failed_count += 1
+                    logger.info(
+                        "Apply FAILED: %s @ %s → %s",
+                        job.title[:50], platform_key,
+                        app.failure_reason[:80] if app.failure_reason else "unknown",
+                    )
 
                 self.events.emit(APPLICATION_COMPLETE, job=job, application=app)
 

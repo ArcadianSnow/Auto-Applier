@@ -1,0 +1,21 @@
+21:17:54 INFO  auto_applier.log_setup                   Run logging enabled. Debug output: C:\Users\jar85\AI Projects\Auto Applier\data\logs\run-20260411-211754.log
+21:17:55 DEBUG asyncio                                  Using proactor: IocpProactor
+21:17:55 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+21:17:56 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x00000209DDE09490>
+21:17:56 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'GET']>
+21:17:56 DEBUG httpcore.http11                          send_request_headers.complete
+21:17:56 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'GET']>
+21:17:56 DEBUG httpcore.http11                          send_request_body.complete
+21:17:56 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'GET']>
+21:17:56 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 12 Apr 2026 02:17:56 GMT'), (b'Content-Length', b'339')])
+21:17:56 INFO  httpx                                    HTTP Request: GET http://localhost:11434/api/tags "HTTP/1.1 200 OK"
+21:17:56 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'GET']>
+21:17:56 DEBUG httpcore.http11                          receive_response_body.complete
+21:17:56 DEBUG httpcore.http11                          response_closed.started
+21:17:56 DEBUG httpcore.http11                          response_closed.complete
+21:17:56 INFO  auto_applier.llm.router                  LLM backend ollama       : available
+21:17:56 INFO  auto_applier.llm.router                  LLM backend gemini       : unavailable
+21:17:56 INFO  auto_applier.llm.router                  LLM backend rule-based   : available
+21:17:56 INFO  auto_applier.browser.session             Using patchright (CDP leak patches active)
+21:17:56 INFO  auto_applier.browser.session             Detected real Chrome installation, using channel=chrome
+21:17:57 INFO  auto_applier.browser.session             Browser session stopped

@@ -633,11 +633,18 @@ class ZipRecruiterPlatform(JobPlatform):
         # which opens the detail side panel for that specific listing.
         if not job_url and job_id.startswith("zr-"):
             token = job_id.removeprefix("zr-")
-            from urllib.parse import quote_plus
+            from urllib.parse import quote_plus, urlparse, parse_qs
+            # Extract the actual location from the current search URL
+            # instead of hardcoding "Remote".
+            try:
+                parsed = urlparse(page.url)
+                loc = parse_qs(parsed.query).get("location", ["Remote"])[0]
+            except Exception:
+                loc = "Remote"
             job_url = (
                 f"https://www.ziprecruiter.com/jobs-search"
                 f"?search={quote_plus(keyword)}"
-                f"&location=Remote"
+                f"&location={quote_plus(loc)}"
                 f"&lk={token}"
             )
 

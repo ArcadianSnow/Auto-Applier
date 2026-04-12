@@ -1,0 +1,45 @@
+21:01:10 INFO  auto_applier.log_setup                   Run logging enabled. Debug output: C:\Users\jar85\AI Projects\Auto Applier\data\logs\run-20260411-210110.log
+21:01:10 DEBUG asyncio                                  Using proactor: IocpProactor
+21:01:11 DEBUG httpcore.connection                      connect_tcp.started host='localhost' port=11434 local_address=None timeout=120.0 socket_options=None
+21:01:11 DEBUG httpcore.connection                      connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x0000020EF4B447A0>
+21:01:11 DEBUG httpcore.http11                          send_request_headers.started request=<Request [b'GET']>
+21:01:11 DEBUG httpcore.http11                          send_request_headers.complete
+21:01:11 DEBUG httpcore.http11                          send_request_body.started request=<Request [b'GET']>
+21:01:11 DEBUG httpcore.http11                          send_request_body.complete
+21:01:11 DEBUG httpcore.http11                          receive_response_headers.started request=<Request [b'GET']>
+21:01:11 DEBUG httpcore.http11                          receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=utf-8'), (b'Date', b'Sun, 12 Apr 2026 02:01:11 GMT'), (b'Content-Length', b'339')])
+21:01:11 INFO  httpx                                    HTTP Request: GET http://localhost:11434/api/tags "HTTP/1.1 200 OK"
+21:01:11 DEBUG httpcore.http11                          receive_response_body.started request=<Request [b'GET']>
+21:01:11 DEBUG httpcore.http11                          receive_response_body.complete
+21:01:11 DEBUG httpcore.http11                          response_closed.started
+21:01:11 DEBUG httpcore.http11                          response_closed.complete
+21:01:11 INFO  auto_applier.llm.router                  LLM backend ollama       : available
+21:01:11 INFO  auto_applier.llm.router                  LLM backend gemini       : unavailable
+21:01:11 INFO  auto_applier.llm.router                  LLM backend rule-based   : available
+21:01:11 INFO  auto_applier.browser.session             Using patchright (CDP leak patches active)
+21:01:12 INFO  auto_applier.browser.session             Detected real Chrome installation, using channel=chrome
+21:01:12 INFO  auto_applier.browser.session             Browser session started (patchright=True)
+21:01:12 INFO  auto_applier.browser.anti_detect         Anti-detect fast mode: ON
+21:02:00 INFO  auto_applier.browser.platforms.dice      Dice: Not logged in. Navigating to login page for manual login...
+21:02:00 INFO  auto_applier.browser.base_platform       Waiting for manual login on Dice (timeout=300s)...
+21:02:00 INFO  auto_applier.browser.base_platform       Login detected via URL pattern
+21:02:00 INFO  auto_applier.browser.platforms.dice      Dice: Searching page 1 -- data analyst Remote
+21:02:08 DEBUG auto_applier.browser.platforms.dice      Found 20 job cards via '[data-testid='job-search-job-detail-link']'
+21:02:08 INFO  auto_applier.browser.platforms.dice      Dice: 20 cards detected but none parsed, falling back to anchor-based finder
+21:02:09 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/job-detail/'): 57 anchors matched selector, kept 19, rejected 19 empty / 0 length / 5 excluded
+21:02:09 INFO  auto_applier.browser.platforms.dice      Dice: anchor fallback recovered 19 jobs
+21:02:10 INFO  auto_applier.browser.platforms.dice      Dice: Searching page 2 -- data analyst Remote
+21:02:16 DEBUG auto_applier.browser.platforms.dice      Found 20 job cards via '[data-testid='job-search-job-detail-link']'
+21:02:17 INFO  auto_applier.browser.platforms.dice      Dice: 20 cards detected but none parsed, falling back to anchor-based finder
+21:02:17 DEBUG auto_applier.browser.base_platform       find_jobs_by_anchors(pattern='/job-detail/'): 54 anchors matched selector, kept 18, rejected 18 empty / 0 length / 4 excluded
+21:02:17 INFO  auto_applier.browser.platforms.dice      Dice: anchor fallback recovered 18 jobs
+21:02:17 INFO  auto_applier.browser.platforms.dice      Dice: Found 37 jobs for 'data analyst' in 'Remote'
+21:02:18 INFO  auto_applier.orchestrator.pipeline       discover_jobs[dice/data analyst]: raw=25 kept=25 filtered=0 (already_applied=0, canonical_dup=0, batch_dup=0) dry_run=True
+21:02:50 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-6710476762 (3570 chars)
+21:03:22 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-5171102128 (8297 chars)
+21:03:54 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-440654675 (6667 chars)
+21:04:27 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-8415905929 (8281 chars)
+21:04:59 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-4540188683 (8524 chars)
+21:05:31 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-173132245 (3917 chars)
+21:06:03 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-9215917662 (3616 chars)
+21:06:35 DEBUG auto_applier.browser.platforms.dice      Dice: Got description for dice-986890687 (2473 chars)
