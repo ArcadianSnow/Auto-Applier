@@ -10,6 +10,7 @@ data/.backups/
 data/*.csv
 data/*.json
 data/.schema_version.json
+data/logs/
 
 # Resumes (user uploads)
 data/resumes/
