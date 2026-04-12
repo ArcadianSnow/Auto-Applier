@@ -151,6 +151,10 @@ def cli():
 @click.option("--limit", default=0, type=int, help="Max applications this session")
 def run(dry_run, platform, limit):
     """Run the job application pipeline."""
+    from auto_applier.log_setup import start_run_logging
+    log_path = start_run_logging()
+    click.echo(f"Debug log: {log_path}")
+
     config = load_user_config()
     config["dry_run"] = dry_run
 

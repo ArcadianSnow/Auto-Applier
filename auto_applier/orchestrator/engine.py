@@ -4,6 +4,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
+from auto_applier.browser.base_platform import CaptchaDetectedError
 from auto_applier.browser.session import BrowserSession
 from auto_applier.browser.platforms import PLATFORM_REGISTRY
 from auto_applier.config import (
@@ -63,8 +64,16 @@ class ApplicationEngine:
         self.evolution: EvolutionEngine | None = None
         self.browser: BrowserSession | None = None
 
-        # Stats
+        # Stats — must ALL be initialized here, not in request_stop().
+        # The finally block in run() reads skipped_count / failed_count
+        # to emit RUN_FINISHED, so any code path that reaches the
+        # finally without having set these would AttributeError. The
+        # old code assigned them inside request_stop(), which meant a
+        # run that completed normally (no Stop click) crashed on the
+        # final event emit.
         self.applied_count = 0
+        self.skipped_count = 0
+        self.failed_count = 0
         # USER_REVIEW jobs collected during the run for batch review
         # after all platforms finish. Each entry is a dict of
         # {job, score, platform_key, resume_label}.
@@ -80,9 +89,6 @@ class ApplicationEngine:
         """Signal the engine to stop after the current job finishes."""
         self._stop_requested = True
         logger.info("Stop requested — will finish current job and exit.")
-        self.skipped_count = 0
-        self.failed_count = 0
-        self.reviewed_count = 0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -221,6 +227,7 @@ class ApplicationEngine:
 
                 self.events.emit(PLATFORM_STARTED, platform=platform_key)
 
+                captcha_hard_stop = False
                 try:
                     await self._run_platform(
                         platform_cls,
@@ -230,12 +237,25 @@ class ApplicationEngine:
                         personal_info,
                         platform_budget,
                     )
+                except CaptchaDetectedError as e:
+                    # CAPTCHA is a hard stop — continuing on another
+                    # platform in the same browser session just means
+                    # we'll trip the SAME detection again and dig the
+                    # fingerprint hole deeper. Flag the run to stop
+                    # after the finally block fires PLATFORM_FINISHED.
+                    self.events.emit(
+                        CAPTCHA_DETECTED, platform=platform_key, error=str(e)
+                    )
+                    captcha_hard_stop = True
                 except Exception as e:
                     self.events.emit(
                         PLATFORM_ERROR, platform=platform_key, error=str(e)
                     )
                 finally:
                     self.events.emit(PLATFORM_FINISHED, platform=platform_key)
+                if captcha_hard_stop:
+                    self._stop_requested = True
+                    break
 
             # Batch-review step: if any platforms produced jobs in
             # the USER_REVIEW score band, open them now as a single
@@ -243,7 +263,7 @@ class ApplicationEngine:
             # much better UX than blocking each time a borderline
             # score comes up mid-pipeline.
             if self.pending_review:
-                await self._process_review_queue()
+                await self._process_review_queue(personal_info=personal_info)
 
             # Check for evolution triggers after the run
             triggers = self.evolution.check_triggers()
@@ -267,7 +287,7 @@ class ApplicationEngine:
     # Batch review queue
     # ------------------------------------------------------------------
 
-    async def _process_review_queue(self) -> None:
+    async def _process_review_queue(self, personal_info: dict | None = None) -> None:
         """Let the user batch-review all USER_REVIEW jobs at once.
 
         Emits REVIEW_QUEUE_READY with the full queue so the
@@ -302,7 +322,12 @@ class ApplicationEngine:
         if not isinstance(decisions, dict):
             decisions = {}
 
-        personal_info = self.config.get("personal_info", {})
+        # Use the MERGED personal_info passed from run() — it contains
+        # the wizard UI fields stacked on top of user_config.json, so
+        # address/zip/etc. are present. Reading self.config here would
+        # lose the saved fields that the UI doesn't expose.
+        if personal_info is None:
+            personal_info = self.config.get("personal_info", {}) or {}
 
         for item in self.pending_review:
             if self._stop_requested:
@@ -457,6 +482,10 @@ class ApplicationEngine:
                 # this platform.
                 if job.liveness in ("dead", "external"):
                     self.skipped_count += 1
+                    logger.info(
+                        "Skip: %s [%s] — %s",
+                        job.title[:50], job.liveness, job.job_id,
+                    )
                     reason = (
                         "dead listing" if job.liveness == "dead"
                         else "external-only listing (no in-platform apply)"
@@ -519,6 +548,12 @@ class ApplicationEngine:
                 job_score = await self.scorer.score(
                     job.description, cli_mode=self.cli_mode
                 )
+                logger.info(
+                    "Score: %s @ %s → %.1f (%s) [resume=%s]",
+                    job.title[:50], platform_key,
+                    job_score.score, job_score.decision.value,
+                    job_score.resume_label,
+                )
                 self.events.emit(JOB_SCORED, job=job, score=job_score)
 
                 # Decision gate
@@ -556,12 +591,19 @@ class ApplicationEngine:
                         # glacial AND starved later platforms of time.
                         # Users now see a single review queue after
                         # all platforms finish scraping + scoring.
+                        #
+                        # The queued job counts against this platform's
+                        # budget too — otherwise a platform that only
+                        # turns up borderline scores could queue 50
+                        # jobs while the budget is nominally 3,
+                        # and the review queue would explode.
                         self.pending_review.append({
                             "job": job,
                             "score": job_score,
                             "platform_key": platform_key,
                             "resume_label": job_score.resume_label,
                         })
+                        applied_this_platform += 1
                         # Emit event so dashboard can update a counter
                         self.events.emit(
                             USER_REVIEW_NEEDED, job=job, score=job_score,

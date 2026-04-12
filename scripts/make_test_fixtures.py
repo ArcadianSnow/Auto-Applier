@@ -15,13 +15,25 @@ Run: python scripts/make_test_fixtures.py
 
 from __future__ import annotations
 
+import argparse
 import json
+import shutil
+import sys
+from datetime import datetime
 from pathlib import Path
 
 from docx import Document
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
+
+# Files this script writes — anything pre-existing at these paths is
+# real user data that must not be silently clobbered.
+TARGET_FILES = [
+    DATA / "user_config.json",
+    DATA / "answers.json",
+    DATA / "archetypes.json",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +45,12 @@ PERSONA = {
     "first_name": "Jordan",
     "last_name": "Testpilot",
     "email": "jordan.testpilot@example.com",
-    "phone": "+1 555 0100",
+    # Full 10 digits — Seattle area code (206) + reserved fictitious
+    # 555-01XX range. Some forms (Indeed) have a separate country
+    # code dropdown, so we store the plain 10-digit form and rely on
+    # form_filler._normalize_phone_for_field to strip any leading
+    # country code at fill time.
+    "phone": "(206) 555-0100",
     # Location — fake building number on a real Seattle street so
     # nothing resolves to a real person's home. Several separate
     # keys because job forms ask for different slices of this.
@@ -310,7 +327,45 @@ def write_research_sample() -> Path:
 # Main
 # ---------------------------------------------------------------------------
 
+def _backup_existing(force: bool) -> None:
+    """Refuse to overwrite real user data without explicit --force.
+
+    Earlier versions of this script silently replaced user_config.json,
+    answers.json, and archetypes.json with the fake persona's data.
+    Running it once by mistake would wipe a real onboarding. Now:
+    - Warn if any target files exist
+    - Snapshot them to data/_backup_fixtures_<timestamp>/ first
+    - Require --force to actually proceed
+    """
+    existing = [p for p in TARGET_FILES if p.exists()]
+    if not existing:
+        return
+    print("WARNING: the following files already exist and will be overwritten:")
+    for p in existing:
+        print(f"  {p.relative_to(ROOT)}")
+    if not force:
+        print(
+            "\nRe-run with --force to proceed. A backup of the existing "
+            "files will be saved to data/_backup_fixtures_<timestamp>/."
+        )
+        sys.exit(1)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_dir = DATA / f"_backup_fixtures_{stamp}"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    for p in existing:
+        shutil.copy2(p, backup_dir / p.name)
+    print(f"Backed up existing files to {backup_dir.relative_to(ROOT)}")
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Overwrite existing user_config/answers/archetypes after backup.",
+    )
+    args = parser.parse_args()
+    _backup_existing(force=args.force)
+
     print("Generating test fixtures under data/ (gitignored)...")
     resume = write_resume()
     print(f"  wrote {resume}")

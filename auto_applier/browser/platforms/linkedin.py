@@ -441,6 +441,24 @@ class LinkedInPlatform(JobPlatform):
 
         return description
 
+    async def check_is_external(self, job: Job) -> bool:
+        """LinkedIn: no Easy Apply button visible means external-only.
+
+        Runs on the already-loaded job detail panel (same navigation
+        as get_job_description). If none of the Easy Apply button
+        selectors match, the only way to apply is through a third-party
+        ATS, so the orchestrator should skip before running any LLM
+        scoring cycles.
+        """
+        try:
+            page = await self.get_page()
+            btn = await self.safe_query(
+                page, EASY_APPLY_BUTTON_SELECTORS, timeout=1500,
+            )
+            return btn is None
+        except Exception:
+            return False
+
     # ------------------------------------------------------------------
     # Easy Apply
     # ------------------------------------------------------------------

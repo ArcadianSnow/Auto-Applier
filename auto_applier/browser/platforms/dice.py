@@ -54,11 +54,17 @@ LOGGED_IN_SELECTORS = [
 # selectors at the top, historical ones kept as fallbacks so old
 # profiles keep working.
 JOB_CARD_SELECTORS = [
-    # 2024+ layouts
+    # 2024+ layouts — the card container wraps the title link,
+    # company, location, and apply button. Never put a link/title
+    # selector here: _parse_single_card searches INSIDE the card
+    # for the title, so the card must be the container, not the link.
     "div[data-testid='job-search-serp-card']",
     "div[data-cy='card']",
-    "[data-testid='job-search-job-detail-link']",
     "dhi-search-card",
+    # Parent of the title link — if the known containers miss but
+    # the title link still exists, walk up to its nearest <div>
+    # parent to get a card-like scope.
+    "div:has(> a[data-testid='job-search-job-detail-link'])",
     # Historical
     "[data-cy='search-card']",
     ".search-card",
@@ -98,6 +104,10 @@ JOB_COMPANY_SELECTORS = [
 
 # Easy Apply button on job detail page
 EASY_APPLY_BUTTON_SELECTORS = [
+    # Current (2026) — Dice uses <a data-testid="apply-button">
+    "a[data-testid='apply-button']",
+    "[data-testid='apply-button']",
+    # Legacy selectors kept for backwards compatibility
     "[data-cy='apply-button-wc']",
     "apply-button-wc",
     "button.btn-apply",
@@ -132,21 +142,37 @@ FORM_FIELD_SELECTORS = [
 
 # Navigation buttons in the Easy Apply modal
 MODAL_NEXT_SELECTORS = [
+    # Current (2026)
+    "button[data-testid='next-button']",
+    "button[data-testid='submit-next']",
+    # Legacy
     "button[data-cy='next-button']",
     "button.btn-next",
     "button.seds-button-primary",
     "[data-cy='submit-next']",
     "button[type='submit']",
     "button.btn-primary",
+    # Text-based fallbacks
+    "button:has-text('Next')",
+    "button:has-text('Continue')",
 ]
 
 MODAL_SUBMIT_SELECTORS = [
+    # Current (2026)
+    "button[data-testid='submit-application']",
+    "button[data-testid='submit-button']",
+    "button[data-testid='apply-button']",
+    # Legacy
     "button[data-cy='submit-application']",
     "button[data-cy='submit-button']",
     "button.btn-submit",
     "button[aria-label*='Submit']",
     "button[type='submit']",
     "button.seds-button-primary",
+    # Text-based fallbacks
+    "button:has-text('Submit')",
+    "button:has-text('Apply')",
+    "button:has-text('Submit Application')",
 ]
 
 MODAL_CLOSE_SELECTORS = [
@@ -211,30 +237,16 @@ class DicePlatform(JobPlatform):
         "/challenge",
     ]
 
-    async def check_is_external(self, job: Job) -> bool:
-        """On Dice, 'external' means the job has no Easy Apply button
-        — so the only way to apply is via the employer's own ATS.
-        These are the 'Easy Apply button not found -- job may require
-        external application' failures we used to discover AFTER
-        scoring. Check during fetch_description instead so we skip
-        them before any LLM work.
-        """
-        try:
-            page = await self.get_page()
-            for sel in EASY_APPLY_BUTTON_SELECTORS:
-                el = await page.query_selector(sel)
-                if el:
-                    try:
-                        if await el.is_visible():
-                            return False  # Easy Apply is present
-                    except Exception:
-                        return False
-            # No Easy Apply button found anywhere on the page →
-            # this is an external-only listing.
-            return True
-        except Exception as e:
-            logger.debug("Dice check_is_external raised: %s", e)
-            return False
+    # check_is_external intentionally NOT overridden for Dice.
+    #
+    # Dice's apply button is a Web Component (<apply-button-wc>)
+    # that hydrates asynchronously and lives inside shadow DOM.
+    # Every attempt to detect it during fetch_description
+    # (instant query_selector, safe_query with 3s timeout) failed
+    # and falsely marked 100% of jobs as external. The base
+    # platform's default (return False) is correct here —
+    # apply_to_job already handles missing buttons with a 5s
+    # timeout and a descriptive failure_reason.
 
     # ------------------------------------------------------------------
     # Login
@@ -621,12 +633,55 @@ class DicePlatform(JobPlatform):
                 page, EASY_APPLY_BUTTON_SELECTORS, timeout=5000
             )
             if not clicked:
+                # Dump the apply-button region so the log shows
+                # what Dice actually renders. Without this we're
+                # guessing at selectors run after run.
+                try:
+                    snippet = await page.evaluate("""() => {
+                        const wc = document.querySelector('apply-button-wc');
+                        if (wc) return 'apply-button-wc found: ' + wc.outerHTML.substring(0, 500);
+                        const btns = [...document.querySelectorAll('button, a')]
+                            .filter(el => el.textContent.toLowerCase().includes('apply'))
+                            .map(el => el.outerHTML.substring(0, 200));
+                        return 'no apply-button-wc; apply-ish buttons: ' + JSON.stringify(btns.slice(0, 5));
+                    }""")
+                    logger.info("Dice: apply button diagnostic: %s", snippet)
+                except Exception:
+                    pass
                 return ApplyResult(
                     success=False,
                     failure_reason="Easy Apply button not found -- job may require external application",
                 )
 
             await random_delay(1.5, 3.0)
+
+            # Dice's apply click sometimes lands on a login gate
+            # (/dashboard/login or /register) instead of the apply
+            # form. This happens when the browse session's cookie
+            # doesn't carry over to the apply subdomain. Detect it
+            # and wait for the user to log in manually, just like
+            # ensure_logged_in does at the start of the platform run.
+            try:
+                cur = page.url
+            except Exception:
+                cur = ""
+            if "/login" in cur or "/register" in cur:
+                logger.info(
+                    "Dice: apply redirected to login — waiting for "
+                    "manual login (timeout=120s)..."
+                )
+                try:
+                    await page.wait_for_url(
+                        lambda u: "/login" not in u and "/register" not in u,
+                        timeout=120000,
+                    )
+                    logger.info("Dice: login completed, continuing apply flow")
+                    await random_delay(1.0, 2.0)
+                except Exception:
+                    return ApplyResult(
+                        success=False,
+                        failure_reason="apply login gate timed out — please log in to Dice",
+                    )
 
             # Check for external ATS redirect (new tab opened)
             if await self._check_ats_redirect(pages_before):

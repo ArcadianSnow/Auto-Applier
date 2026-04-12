@@ -119,6 +119,63 @@ async def find_form_fields(page: Page) -> list[FormField]:
         except Exception:
             continue
 
+    # Strategy 5: fieldset/legend pairs (Indeed's screener questions).
+    # The question text lives in a <legend>, and the answers live in
+    # inputs nested inside the <fieldset>. Radio/checkbox groups also
+    # commonly use this pattern when there's no single labelled input.
+    fieldsets = await page.query_selector_all("fieldset")
+    for fs in fieldsets:
+        try:
+            legend = await fs.query_selector("legend")
+            if not legend:
+                continue
+            label_text = (await legend.inner_text()).strip()
+            if not label_text or label_text.lower() in seen_labels:
+                continue
+            # Prefer a text/textarea/select if one exists; otherwise
+            # the first radio/checkbox stands in for the whole group.
+            input_el = await fs.query_selector(
+                "input:not([type='hidden']), textarea, select"
+            )
+            if input_el:
+                f = await _classify_element(input_el, label_text, page)
+                if f:
+                    fields.append(f)
+                    seen_labels.add(label_text.lower())
+        except Exception:
+            continue
+
+    # Strategy 6: role='group' / role='radiogroup' with aria-labelledby.
+    # Modern React forms (Indeed's questions-module, LinkedIn Easy
+    # Apply) render custom question widgets this way instead of
+    # semantic <fieldset>. The label text is referenced by
+    # aria-labelledby pointing at a separate element.
+    groups = await page.query_selector_all(
+        "[role='radiogroup'][aria-labelledby], "
+        "[role='group'][aria-labelledby]"
+    )
+    for group in groups:
+        try:
+            label_id = await group.get_attribute("aria-labelledby")
+            if not label_id:
+                continue
+            label_el = await page.query_selector(f"#{label_id}")
+            if not label_el:
+                continue
+            label_text = (await label_el.inner_text()).strip()
+            if not label_text or label_text.lower() in seen_labels:
+                continue
+            input_el = await group.query_selector(
+                "input:not([type='hidden']), textarea, select"
+            )
+            if input_el:
+                f = await _classify_element(input_el, label_text, page)
+                if f:
+                    fields.append(f)
+                    seen_labels.add(label_text.lower())
+        except Exception:
+            continue
+
     logger.debug("Detected %d form fields on page", len(fields))
     # Dump every detected field's label + type so the run log has
     # a full inventory per page navigation. This is the breadcrumb

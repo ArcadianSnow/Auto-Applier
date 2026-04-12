@@ -74,6 +74,32 @@ PERSONAL_INFO_KEYS: dict[str, str] = {
     "personal site": "portfolio_url",
 }
 
+def _normalize_phone_for_field(raw: str) -> str:
+    """Strip leading country code from a phone value.
+
+    Most job sites (Indeed, LinkedIn, Dice) render phone fields with
+    a separate country-code dropdown pre-selected to +1. Typing a
+    value that starts with "+1" results in "+1+1 555 0100" which
+    fails validation and silently disables the Continue button. We
+    keep digits only, drop a leading US country code ("1") if the
+    result is 11 digits, and preserve standard US formatting so the
+    field still displays a human-readable number.
+    """
+    if not raw:
+        return raw
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    # Return raw digits, not formatted. Indeed's phone input mask
+    # silently drops any non-digit characters you type — including
+    # the parentheses and dashes from "(206) 555-0100" — which can
+    # leave the field in an intermediate state that fails validation
+    # and disables the Continue button. Raw digits work on every
+    # mask we've seen (Indeed, LinkedIn, Dice) because they either
+    # accept them directly or auto-format on blur.
+    return digits or raw
+
+
 COVER_LETTER_KEYWORDS = [
     "cover letter",
     "letter of interest",
@@ -200,6 +226,31 @@ class FormFiller:
     # Public API
     # ------------------------------------------------------------------
 
+    async def _field_already_has_value(self, field: FormField) -> bool:
+        """True if the input already has a non-empty value.
+
+        Job sites that know the user (LinkedIn, Indeed with an account)
+        pre-fill many fields from the stored profile. Re-typing those
+        values risks:
+        - Overwriting a known-good value with a normalized variant
+          that fails the site's validation (phone masks, zip formats)
+        - Turning a pre-filled field into a dirty/edited state that
+          re-triggers async validation
+        - Wasting time on fields that already pass
+
+        Skip anything that already reads non-empty. Only non-text
+        inputs (radio, checkbox, select) bypass this check — their
+        "value" semantics are different and their pre-fill detection
+        lives inside each handler.
+        """
+        if field.field_type not in ("text", "textarea"):
+            return False
+        try:
+            value = await field.element.input_value()
+            return bool(value and value.strip())
+        except Exception:
+            return False
+
     async def fill_field(
         self, page: Page, field: FormField, job_id: str = ""
     ) -> bool:
@@ -238,6 +289,14 @@ class FormFiller:
         if not is_visible:
             logger.debug("  → hidden field, skipping (likely honeypot)")
             return False
+
+        # Pre-fill check — if the site already populated this field
+        # from the signed-in user's profile, leave it alone. Re-typing
+        # a value that's already there is how we broke Indeed's phone
+        # input and zip validation in the last three runs.
+        if await self._field_already_has_value(field):
+            logger.debug("  → already pre-filled, skipping")
+            return True
 
         # File upload fields are handled by the platform adapter
         if field.field_type == "file" and any(
@@ -299,6 +358,8 @@ class FormFiller:
         for keyword, config_key in PERSONAL_INFO_KEYS.items():
             if keyword in label_lower:
                 value = self.personal_info.get(config_key, "")
+                if value and config_key == "phone":
+                    value = _normalize_phone_for_field(value)
                 if value:
                     logger.debug(
                         "Personal info match: '%s' -> %s", keyword, config_key

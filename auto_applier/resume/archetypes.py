@@ -66,6 +66,8 @@ def load_archetypes() -> list[Archetype]:
         return []
 
     items = raw.get("archetypes", []) if isinstance(raw, dict) else raw
+    if not isinstance(items, list):
+        return []
     out: list[Archetype] = []
     for it in items:
         if not isinstance(it, dict):
@@ -73,10 +75,20 @@ def load_archetypes() -> list[Archetype]:
         name = str(it.get("name", "")).strip()
         if not name:
             continue
+        # keywords must be a list of strings. Defend against numbers,
+        # strings, nulls, or nested junk written by the user or a
+        # broken export — the old code crashed on `keywords: 5`.
+        raw_kw = it.get("keywords") or []
+        if isinstance(raw_kw, str):
+            keywords = [raw_kw]
+        elif isinstance(raw_kw, list):
+            keywords = [str(k) for k in raw_kw if k is not None]
+        else:
+            keywords = []
         out.append(Archetype(
             name=name,
             description=str(it.get("description", "")),
-            keywords=list(it.get("keywords", []) or []),
+            keywords=keywords,
         ))
     return out
 

@@ -128,18 +128,43 @@ JOB_DESCRIPTION_SELECTORS = [
     "#jobDescription",
 ]
 
-# Indeed application form -- continue / next / submit buttons
+# Indeed application form -- continue / next / submit buttons.
+#
+# Indeed's smartapply flow migrated to a React-based app hosted at
+# smartapply.indeed.com/beta/indeedapply/form/* and the old CSS class
+# names (.ia-continueButton, .ia-BasePage-continue) no longer match.
+# The text-based selectors at the end of each list are stable across
+# UI rewrites because they match rendered button content, not DOM
+# structure.
 FORM_CONTINUE_SELECTORS = [
+    # Modern smartapply (React)
+    "button[data-testid='continue-button']",
+    "button[data-testid='IndeedApplyButton-continue']",
+    "button[data-cy='continue-button']",
+    "button.css-[class*='continue']",
+    # Legacy smartapply
     ".ia-continueButton",
     "button.ia-continueButton",
     "button[id*='ia-continueButton']",
     "button[data-testid='ia-continueButton']",
     "button.ia-BasePage-continue",
-    "button[type='submit']",
     ".ia-Navigation-continue button",
+    # Text-based fallbacks — survive any class rename as long as the
+    # visible button copy stays in English.
+    "button:has-text('Continue')",
+    "button:has-text('Next')",
+    "button:has-text('Save and continue')",
+    # Generic last resort
+    "button[type='submit']",
 ]
 
 FORM_SUBMIT_SELECTORS = [
+    # Modern smartapply
+    "button[data-testid='submit-application']",
+    "button[data-testid='submit-button']",
+    "button[data-testid='IndeedApplyButton-submit']",
+    "button[data-cy='submit-application']",
+    # Legacy
     "button[id*='apply']",
     "button.ia-continueButton[type='submit']",
     "button[aria-label*='Submit']",
@@ -147,6 +172,10 @@ FORM_SUBMIT_SELECTORS = [
     "button.ia-Review-submit",
     "[data-testid='submit-button']",
     "button.ia-BasePage-submit",
+    # Text-based fallbacks
+    "button:has-text('Submit your application')",
+    "button:has-text('Submit application')",
+    "button:has-text('Submit')",
 ]
 
 # Resume upload input
@@ -781,6 +810,284 @@ class IndeedPlatform(JobPlatform):
 
         return False
 
+    async def _click_nav_button_by_text(
+        self, page: Page, patterns: tuple[str, ...],
+    ) -> bool:
+        """Last-ditch Continue/Submit click by scanning every visible button.
+
+        When the CSS selector list doesn't match (new smartapply
+        flows, renamed classes, button outside the form element),
+        iterate every ``<button>`` on the page and click the first
+        one whose accessible text contains any of ``patterns``
+        (case-insensitive). This trades precision for resilience —
+        once we've decided the form is ready and all fields are
+        filled, any button that reads "Continue" or "Save and
+        continue" is almost certainly the navigation button.
+
+        Returns True on a successful click.
+        """
+        # Scope matters — Indeed's smartapply has a left-rail progress
+        # stepper where each step label contains the word "Continue",
+        # plus header "Continue as guest" / "Continue with Google"
+        # buttons that aren't form navigation at all. Prefer buttons
+        # inside a ``<form>`` element first; only fall through to the
+        # whole page if none of those match.
+        scoped: list = []
+        try:
+            scoped = await page.query_selector_all(
+                "form button, form [role='button']"
+            )
+        except Exception:
+            scoped = []
+        try:
+            fallback = await page.query_selector_all(
+                "button, [role='button']"
+            )
+        except Exception:
+            fallback = []
+        buttons = list(scoped) + [b for b in fallback if b not in scoped]
+        lowered = tuple(p.lower() for p in patterns)
+        for btn in buttons:
+            try:
+                if not await btn.is_visible():
+                    continue
+                if not await btn.is_enabled():
+                    continue
+                text = (await btn.inner_text() or "").strip().lower()
+                if not text:
+                    # Accessible name fallback
+                    text = (await btn.get_attribute("aria-label") or "").lower()
+                if not text:
+                    continue
+                if any(p in text for p in lowered):
+                    logger.info(
+                        "Indeed: Text-scan click on button '%s'",
+                        text[:40],
+                    )
+                    await btn.click()
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _wait_for_form_ready(self, page: Page, timeout: int = 5000) -> bool:
+        """Wait for the smartapply form shell to actually render.
+
+        The React app on smartapply.indeed.com lazily renders its form
+        elements after the URL has already settled, which means a
+        naive scan can see an empty DOM. We wait for ANY of these
+        signals:
+
+        - A labelled input (``label[for]``)
+        - A ``<form>`` element with at least one descendant input
+        - A navigation button (Continue / Submit) in any form
+        - A resume upload input
+
+        Returns True on success, False on timeout. Caller should
+        proceed regardless — a stubborn page still deserves a scan
+        attempt with whatever HTML is present.
+        """
+        # Combined CSS selector list — wait_for_selector returns as
+        # soon as ANY one of these matches, so the total wall-clock
+        # cost is at most `timeout` once, not per selector.
+        combined = (
+            "label[for], form input, form button, "
+            "button[type='submit'], input[type='file']"
+        )
+        try:
+            await page.wait_for_selector(
+                combined, timeout=timeout, state="attached",
+            )
+            return True
+        except Exception:
+            return False
+
+    # ------------------------------------------------------------------
+    # Module-aware dispatch
+    # ------------------------------------------------------------------
+    #
+    # Indeed smartapply URLs follow a fixed vocabulary:
+    #   /form/contact-info-module
+    #   /form/profile-location
+    #   /form/resume-selection-module/resume-selection
+    #   /form/work-experience
+    #   /form/education
+    #   /form/questions
+    #   /form/review-module
+    #
+    # Each page has its own quirks (radio decoys, pre-filled fields,
+    # auto-advance on radio click, etc.) that made a single generic
+    # walker brittle — every fix revealed the next module's surprise.
+    # The dispatcher below routes by URL substring to a handler that
+    # owns its page's specifics. Unknown URLs fall through to the
+    # generic field-detect + form_filler path, which is what we used
+    # to run unconditionally.
+
+    async def _handle_contact_info(self, page: Page, job: Job) -> list:
+        """contact-info-module: phone number (name/email pre-filled)."""
+        fields = await find_form_fields(page)
+        if self.form_filler:
+            for field in fields:
+                await self.form_filler.fill_field(
+                    page, field, job_id=job.job_id,
+                )
+                await random_delay(0.3, 0.8)
+        return fields
+
+    async def _handle_resume_selection(
+        self, page: Page, resume_path: str,
+    ) -> list:
+        """resume-selection-module: pick uploaded file, not the decoy.
+
+        Two variants of this page exist:
+
+        1. Radio picker — "your resume" vs "Build an Indeed Resume"
+           decoy. Pre-dispatcher handler. Safe to call on the newer
+           variant too (no-op if no radios).
+        2. PDF preview — Indeed has already converted the upload to
+           a PDF and shows a "Review it before you apply" notice.
+           There's no radio; the user just clicks a "Use this" /
+           "Continue" button. The walker's generic Continue click
+           handles this, but we nudge the scroll position so the
+           button is reachable inside the fixed viewport first.
+        """
+        await self._handle_resume_upload(page, resume_path)
+        await self._select_uploaded_resume(page, resume_path)
+        # Scroll to the bottom so any "continue-ish" CTA below a
+        # PDF preview iframe is in view before safe_click / text-scan
+        # run. Cheap, no-op if already at bottom.
+        try:
+            await page.evaluate(
+                "window.scrollTo(0, document.body.scrollHeight)"
+            )
+        except Exception:
+            pass
+        return []
+
+    async def _handle_review(self, page: Page, job: Job) -> list:
+        """review-module: nothing to fill, let submit logic fire."""
+        return []
+
+    async def _handle_generic(self, page: Page, job: Job) -> list:
+        """Default path for unknown modules (profile-location, screeners)."""
+        fields = await find_form_fields(page)
+        if self.form_filler:
+            for field in fields:
+                await self.form_filler.fill_field(
+                    page, field, job_id=job.job_id,
+                )
+                await random_delay(0.5, 1.5)
+        return fields
+
+    async def _dispatch_module(
+        self, page: Page, job: Job, resume_path: str, url: str,
+    ) -> tuple[str, list]:
+        """Route the current page to the right module handler.
+
+        Returns a ``(module_name, fields_filled)`` tuple. The module
+        name goes into the stuck-loop signature and the log output
+        so progress across modules is observable at a glance.
+        """
+        if "contact-info-module" in url:
+            return "contact-info", await self._handle_contact_info(page, job)
+        if "resume-selection" in url:
+            return "resume-selection", await self._handle_resume_selection(
+                page, resume_path,
+            )
+        if "review-module" in url or "review" in url:
+            return "review", await self._handle_review(page, job)
+        return "generic", await self._handle_generic(page, job)
+
+    async def _click_continue_and_wait(
+        self, page: Page, start_url: str, timeout: int = 4000,
+    ) -> tuple[bool, str]:
+        """Click Continue and wait for the page to actually advance.
+
+        Returns ``(advanced, reason)`` where ``advanced`` is True if
+        the URL or the visible step content changed, and ``reason``
+        carries a human-readable description of the validation error
+        if we can find one. Much better signal than "click returned
+        True but form didn't move".
+
+        Three advance signals:
+        1. ``page.url`` changes
+        2. ``[aria-current='step']`` stepper index increments
+        3. A new form field appears that wasn't in our last scan
+
+        On no-advance, scans ``[role='alert']``, ``.css-error``,
+        ``[aria-invalid='true']`` for visible validation error text
+        and returns it as the reason.
+        """
+        clicked = await self.safe_click(
+            page, FORM_CONTINUE_SELECTORS, timeout=500,
+        )
+        if not clicked:
+            clicked = await self._click_nav_button_by_text(
+                page,
+                (
+                    "continue",
+                    "next",
+                    "save and continue",
+                    "use this resume",
+                    "use this",
+                    "looks good",
+                    "review and submit",
+                ),
+            )
+        if not clicked:
+            return False, "no continue button clickable"
+
+        # Wait for the URL to differ. If that fires, we advanced.
+        try:
+            await page.wait_for_url(
+                lambda u: u != start_url, timeout=timeout,
+            )
+            return True, ""
+        except Exception:
+            pass
+
+        # URL didn't change — scan for validation errors we can
+        # actually read back to the user / log.
+        #
+        # Some Indeed pages stash informational notices inside
+        # role='alert' elements (e.g., "We created a PDF of your
+        # resume... review it before you apply"). Those are NOT
+        # real errors — the page is fine, we just haven't clicked
+        # the right button yet. Filter them out so the log shows
+        # the actual problem ("no continue button matched") instead
+        # of misleading the user into thinking validation failed.
+        notice_phrases = (
+            "we created a pdf",
+            "review it before",
+            "share with employers",
+        )
+        error_selectors = [
+            "[aria-invalid='true']",
+            ".css-error",
+            "[class*='error']:not([class*='container'])",
+            "[role='alert']",
+            "[aria-live='assertive']",
+        ]
+        for sel in error_selectors:
+            try:
+                els = await page.query_selector_all(sel)
+            except Exception:
+                continue
+            for el in els:
+                try:
+                    if not await el.is_visible():
+                        continue
+                    text = (await el.inner_text() or "").strip()
+                    if not text or len(text) >= 300:
+                        continue
+                    lowered = text.lower()
+                    if any(p in lowered for p in notice_phrases):
+                        continue  # informational, not an error
+                    return False, f"validation: {text}"
+                except Exception:
+                    continue
+        return False, "no URL change, no visible error"
+
     async def _walk_application_form(
         self, page: Page, job: Job, resume_path: str, dry_run: bool
     ) -> ApplyResult:
@@ -790,131 +1097,118 @@ class IndeedPlatform(JobPlatform):
         a single page with resume upload and a few screener questions.
         Some jobs have multi-step forms with continue buttons.
         """
-        steps_with_no_fields = 0
+        # Module-aware walker. Each iteration:
+        # 1. capture the start-of-step URL (before anything can change it)
+        # 2. wait for the form shell to render
+        # 3. dispatch by URL to the right handler
+        # 4. click continue (or submit if this is a review page) and
+        #    wait for the URL to actually change
+        # 5. log validation errors on no-advance
+        last_module: str = ""
         for step in range(MAX_FORM_STEPS):
-            logger.info(
-                "Indeed: Application form step %d for %s", step + 1, job.job_id
-            )
-
             await self.check_and_abort_on_captcha(page)
 
-            # Handle resume upload on this step
-            await self._handle_resume_upload(page, resume_path)
+            try:
+                step_start_url = page.url
+            except Exception:
+                step_start_url = ""
 
-            # Detect and fill form fields
-            fields_on_step: list = []
-            if self.form_filler:
-                fields_on_step = await find_form_fields(page)
-                for field in fields_on_step:
-                    await self.form_filler.fill_field(
-                        page, field, job_id=job.job_id
-                    )
-                    await random_delay(0.5, 1.5)
+            await self._wait_for_form_ready(page)
 
-            # Guard against silently 'applying' to external / broken
-            # jobs: if we see two consecutive steps with zero fields
-            # detected AND no success marker, bail out rather than
-            # claiming success. This catches the case where the
-            # 'Apply' click actually landed on an external site (or
-            # an Indeed loading screen that never renders a form).
-            if not fields_on_step:
-                steps_with_no_fields += 1
-                if steps_with_no_fields >= 2 and not await self._check_success(page):
-                    logger.warning(
-                        "Indeed: 2 consecutive form steps with no fields "
-                        "detected for %s — treating as external/broken",
-                        job.job_id,
-                    )
-                    return self._build_result(
-                        success=False,
-                        failure_reason=(
-                            "No form fields detected — likely external "
-                            "apply or broken form"
-                        ),
-                    )
-            else:
-                steps_with_no_fields = 0
+            module, fields_on_step = await self._dispatch_module(
+                page, job, resume_path, step_start_url,
+            )
+            logger.info(
+                "Indeed: step %d module=%s fields=%d url=%s",
+                step + 1, module, len(fields_on_step),
+                step_start_url.rsplit("/", 1)[-1],
+            )
 
             await simulate_organic_behavior(page)
 
-            # Check for success indicators (already applied)
             if await self._check_success(page):
                 logger.info(
-                    "Indeed: Application success detected for %s", job.job_id
+                    "Indeed: Application success detected for %s", job.job_id,
                 )
                 return self._build_result(success=True, dry_run=False)
 
-            # Check if this is the submit step
-            is_submit = await self._is_submit_step(page)
-
-            if is_submit:
+            # Review module → submit.
+            if module == "review" or await self._is_submit_step(page):
                 if dry_run:
                     logger.info(
                         "Indeed: DRY RUN -- would submit application for %s",
                         job.job_id,
                     )
                     return self._build_result(success=True, dry_run=True)
-
-                # Submit the application
                 clicked = await self.safe_click(
-                    page, FORM_SUBMIT_SELECTORS, timeout=3000
-                )
-                if clicked:
-                    await random_delay(2.0, 4.0)
-
-                    # Verify submission success
-                    if await self._check_success(page):
-                        logger.info(
-                            "Indeed: Submitted application for %s", job.job_id
-                        )
-                        return self._build_result(success=True, dry_run=False)
-
-                    # Even without explicit success indicator, if we
-                    # clicked submit and no error appeared, consider it done
-                    logger.info(
-                        "Indeed: Submit clicked for %s (no explicit success indicator)",
-                        job.job_id,
-                    )
-                    return self._build_result(success=True, dry_run=False)
-                else:
-                    return self._build_result(
-                        success=False,
-                        failure_reason="Submit button not found on submit step",
-                    )
-
-            else:
-                # Click Continue to advance to the next step
-                clicked = await self.safe_click(
-                    page, FORM_CONTINUE_SELECTORS, timeout=3000
+                    page, FORM_SUBMIT_SELECTORS, timeout=500,
                 )
                 if not clicked:
-                    # Maybe we're on a single-page form -- try submit directly
-                    clicked = await self.safe_click(
-                        page, FORM_SUBMIT_SELECTORS, timeout=3000
+                    clicked = await self._click_nav_button_by_text(
+                        page, ("submit application", "submit your application", "submit"),
                     )
-                    if clicked:
-                        if dry_run:
-                            logger.info(
-                                "Indeed: DRY RUN -- would submit for %s",
-                                job.job_id,
-                            )
-                            return self._build_result(success=True, dry_run=True)
-                        await random_delay(2.0, 4.0)
-                        logger.info(
-                            "Indeed: Submit clicked (single-page) for %s",
-                            job.job_id,
-                        )
-                        return self._build_result(success=True, dry_run=False)
-
-                    logger.warning(
-                        "Indeed: No Continue/Submit button found at step %d",
-                        step + 1,
-                    )
+                if not clicked:
                     return self._build_result(
                         success=False,
-                        failure_reason=f"No navigation button found at step {step + 1}",
+                        failure_reason="submit button not found on review page",
                     )
-                await random_delay(1.5, 3.0)
+                await random_delay(2.0, 4.0)
+                if await self._check_success(page):
+                    logger.info(
+                        "Indeed: Submitted application for %s", job.job_id,
+                    )
+                    return self._build_result(success=True, dry_run=False)
+                logger.warning(
+                    "Indeed: Submit clicked for %s but no success "
+                    "indicator appeared — treating as failed",
+                    job.job_id,
+                )
+                return self._build_result(
+                    success=False,
+                    failure_reason="submit clicked but no success confirmation",
+                )
+
+            # Regular step — click Continue and wait for the URL to
+            # actually change. If it doesn't, surface any visible
+            # validation error so we know WHY.
+            advanced, reason = await self._click_continue_and_wait(
+                page, step_start_url,
+            )
+            if advanced:
+                last_module = module
+                continue
+
+            # No advance — single-page forms sometimes have only a
+            # Submit button, no Continue. Try that before bailing.
+            clicked = await self.safe_click(
+                page, FORM_SUBMIT_SELECTORS, timeout=500,
+            )
+            if clicked:
+                if dry_run:
+                    logger.info(
+                        "Indeed: DRY RUN -- would submit (single-page) for %s",
+                        job.job_id,
+                    )
+                    return self._build_result(success=True, dry_run=True)
+                await random_delay(2.0, 4.0)
+                if await self._check_success(page):
+                    return self._build_result(success=True, dry_run=False)
+                return self._build_result(
+                    success=False,
+                    failure_reason="single-page submit, no success confirmation",
+                )
+
+            logger.warning(
+                "Indeed: form not advancing at %s (module=%s) — %s",
+                step_start_url, module, reason,
+            )
+            return self._build_result(
+                success=False,
+                failure_reason=(
+                    f"form stuck on {step_start_url.rsplit('/', 1)[-1]} "
+                    f"({module}): {reason}"
+                ),
+            )
 
         # Exceeded max steps
         logger.warning(
@@ -1024,6 +1318,75 @@ class IndeedPlatform(JobPlatform):
                     return
             except Exception:
                 continue
+
+    async def _select_uploaded_resume(self, page: Page, resume_path: str) -> bool:
+        """Pick the uploaded-resume option on resume-selection-module.
+
+        Indeed's new smartapply shows a radio picker here with at
+        least two options: the file you just uploaded AND "Build an
+        Indeed Resume" (create from scratch). Our generic form_filler
+        sees only the latter as a labelled radio and picks it, which
+        is the wrong choice — the form then sits stuck because the
+        real selection state is empty.
+
+        This method searches for the uploaded-file option specifically
+        and clicks it. Heuristics, in order of preference:
+
+        1. A radio/card whose label contains the resume filename stem
+        2. A radio/card whose label contains "upload" or "use this"
+        3. The first radio/card that is NOT the "Build an Indeed Resume"
+           decoy
+
+        Returns True if something was clicked, False otherwise.
+        """
+        import os
+        stem = os.path.splitext(os.path.basename(resume_path))[0].lower()
+
+        try:
+            # Indeed renders resume choices as label-wrapped radios OR
+            # clickable cards with role=radio/button. Cast a wide net.
+            candidates = await page.query_selector_all(
+                "label, [role='radio'], [role='button'], "
+                "div[data-testid*='resume'], li[data-testid*='resume']"
+            )
+        except Exception:
+            candidates = []
+
+        best = None
+        fallback = None
+        for el in candidates:
+            try:
+                if not await el.is_visible():
+                    continue
+                text = (await el.inner_text() or "").strip().lower()
+                if not text:
+                    continue
+                if "build an indeed resume" in text or "create" in text:
+                    continue  # skip the decoy
+                if stem and stem in text:
+                    best = el
+                    break
+                if "upload" in text or "use this" in text or ".docx" in text or ".pdf" in text:
+                    if best is None:
+                        best = el
+                if fallback is None:
+                    fallback = el
+            except Exception:
+                continue
+
+        target = best or fallback
+        if target is None:
+            return False
+        try:
+            await target.click()
+            logger.info(
+                "Indeed: Selected uploaded-resume option (%s)",
+                "match" if best else "fallback",
+            )
+            await random_delay(0.5, 1.5)
+            return True
+        except Exception:
+            return False
 
     def _build_result(
         self,

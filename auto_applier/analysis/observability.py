@@ -60,10 +60,23 @@ def export_all() -> dict:
 
 
 def write_export(out_path: Path) -> Path:
-    """Write a full export to ``out_path`` as pretty-printed JSON."""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(
-        json.dumps(export_all(), indent=2, default=str),
-        encoding="utf-8",
-    )
+    """Write a full export to ``out_path`` as pretty-printed JSON.
+
+    Raises a descriptive ``RuntimeError`` on filesystem problems so
+    the CLI can surface them cleanly instead of leaking the raw
+    PermissionError/FileNotFoundError traceback at the user. This
+    matters when the user points ``--output`` at a protected path
+    (Program Files on Windows, /etc on Linux) or a directory they
+    can't create.
+    """
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            json.dumps(export_all(), indent=2, default=str),
+            encoding="utf-8",
+        )
+    except (PermissionError, FileNotFoundError, OSError) as e:
+        raise RuntimeError(
+            f"Could not write export to {out_path}: {e}"
+        ) from e
     return out_path

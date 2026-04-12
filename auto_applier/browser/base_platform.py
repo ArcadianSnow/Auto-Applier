@@ -318,8 +318,9 @@ class JobPlatform(ABC):
         exclude_texts: tuple[str, ...] = (
             "jobs", "my jobs", "home", "search", "profile",
             "sign in", "sign up", "log in", "log out",
-            "new", "apply", "quick apply", "easy apply",
+            "new", "apply", "apply now", "quick apply", "easy apply",
             "next", "previous", "more", "back",
+            "save", "save job", "hide", "not interested",
         ),
     ) -> list[tuple[str, str]]:
         """Find job-looking anchor elements as a selector-free fallback.
@@ -362,7 +363,8 @@ class JobPlatform(ABC):
             if not (min_title_length <= len(text) <= max_title_length):
                 rejected_length += 1
                 continue
-            if text.lower() in exclude_texts:
+            text_lower = text.lower().strip()
+            if text_lower in exclude_texts:
                 rejected_excluded += 1
                 continue
             # Normalize href to absolute so dedup is consistent

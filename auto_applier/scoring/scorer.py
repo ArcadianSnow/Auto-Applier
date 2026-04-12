@@ -43,15 +43,21 @@ class JobScorer:
         # to matching resumes if confidence is high enough. No-op when
         # data/archetypes.json is absent or empty — feature is opt-in.
         archetype_filter = ""
-        archs = load_archetypes()
-        if archs:
-            result = await self._classifier.classify(job_description, archs)
-            if result.confidence >= CONFIDENCE_THRESHOLD and result.archetype:
-                archetype_filter = result.archetype
-                logger.debug(
-                    "Archetype '%s' (conf=%.2f) — filtering resumes",
-                    result.archetype, result.confidence,
-                )
+        # Archetype classification is only useful when there's more
+        # than one resume to route between. With zero or one resume
+        # the classification result can't change which resume gets
+        # used — so spending 5-15s of LLM time on it is pure waste.
+        num_resumes = len(self.resume_manager.list_resumes())
+        if num_resumes > 1:
+            archs = load_archetypes()
+            if archs:
+                result = await self._classifier.classify(job_description, archs)
+                if result.confidence >= CONFIDENCE_THRESHOLD and result.archetype:
+                    archetype_filter = result.archetype
+                    logger.debug(
+                        "Archetype '%s' (conf=%.2f) — filtering resumes",
+                        result.archetype, result.confidence,
+                    )
 
         resume_scores = await self.resume_manager.score_all(
             job_description, archetype_filter=archetype_filter,

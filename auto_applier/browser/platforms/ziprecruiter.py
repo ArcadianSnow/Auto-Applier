@@ -448,6 +448,30 @@ class ZipRecruiterPlatform(JobPlatform):
                 )
             return jobs
 
+        # One-time diagnostic: dump the first card's full structure so
+        # we can see all data attributes, anchors, and clickable
+        # elements. Remove once ZR selectors are stable.
+        try:
+            diag = await cards[0].evaluate("""el => {
+                const attrs = [...el.attributes].map(a => a.name + '=' + a.value).join(', ');
+                const anchors = [...el.querySelectorAll('a')].map(a =>
+                    '{text: ' + JSON.stringify(a.innerText.trim().substring(0,50)) +
+                    ', href: ' + JSON.stringify((a.getAttribute('href')||'').substring(0,100)) +
+                    ', data: ' + JSON.stringify(Object.keys(a.dataset).join(',')) + '}'
+                ).join('\\n  ');
+                const buttons = [...el.querySelectorAll('button, [role=button]')].map(b =>
+                    '{text: ' + JSON.stringify(b.innerText.trim().substring(0,50)) +
+                    ', data: ' + JSON.stringify(Object.keys(b.dataset).join(',')) + '}'
+                ).join('\\n  ');
+                return 'CARD attrs: ' + attrs +
+                       '\\nANCHORS:\\n  ' + (anchors || 'none') +
+                       '\\nBUTTONS:\\n  ' + (buttons || 'none') +
+                       '\\nHTML (500 chars): ' + el.outerHTML.substring(0, 500);
+            }""")
+            logger.info("ZipRecruiter: CARD DIAGNOSTIC:\\n%s", diag)
+        except Exception as e:
+            logger.debug("ZipRecruiter: card diagnostic failed: %s", e)
+
         for card in cards:
             try:
                 job = await self._parse_single_card(card, page, keyword)
@@ -459,9 +483,18 @@ class ZipRecruiterPlatform(JobPlatform):
 
         # Cards detected but parser returned nothing — ZR ships new
         # class names faster than the per-card parser can track.
-        # Fall back to anchor-based finder which only depends on
-        # the structural guarantee that every listing has a link.
+        # Dump the first card's HTML so the next log review shows
+        # exactly what ZR changed, instead of guessing at selectors.
         if not jobs and cards:
+            try:
+                sample = await cards[0].evaluate(
+                    "el => el.outerHTML.substring(0, 1500)"
+                )
+                logger.debug(
+                    "ZipRecruiter: sample unparsed card HTML:\n%s", sample,
+                )
+            except Exception:
+                pass
             logger.info(
                 "ZipRecruiter: %d cards detected but none parsed, "
                 "falling back to anchor-based finder", len(cards),
@@ -506,6 +539,18 @@ class ZipRecruiterPlatform(JobPlatform):
                     break
             except Exception:
                 continue
+
+        # Broad fallback: if none of the specific title selectors
+        # match, pull the title from the first <h2> directly (ZR has
+        # historically wrapped titles in <a> inside <h2>, but recent
+        # layouts sometimes put the text in <h2> with no inner link).
+        if not title:
+            try:
+                h2_el = await card.query_selector("h2")
+                if h2_el:
+                    title = (await h2_el.inner_text()).strip()
+            except Exception:
+                pass
 
         if not title:
             return None
@@ -555,6 +600,20 @@ class ZipRecruiterPlatform(JobPlatform):
             except Exception:
                 continue
 
+        # ZR's current layout has ZERO anchors or buttons inside
+        # cards — the entire <article> is clickable via JS. The job
+        # token lives in the card's id attribute:
+        #   id="job-card-F_aJIgQr8c5c8qYgC5i5ow"
+        # We store this token and use it to click into the job later.
+        if not job_id:
+            try:
+                card_id = await card.get_attribute("id") or ""
+                if card_id.startswith("job-card-"):
+                    token = card_id.removeprefix("job-card-")
+                    job_id = f"zr-{token}"
+            except Exception:
+                pass
+
         # Fallback: try other data attributes
         if not job_id:
             try:
@@ -567,6 +626,20 @@ class ZipRecruiterPlatform(JobPlatform):
         if not job_id:
             # Generate a fallback ID from title + company
             job_id = f"zr-{hash(title + company) % 10**8}"
+
+        # Construct a direct URL using the search page + lk= token.
+        # ZR's cards have zero <a> links — the only way to view a
+        # job is to load the search page with the lk= parameter,
+        # which opens the detail side panel for that specific listing.
+        if not job_url and job_id.startswith("zr-"):
+            token = job_id.removeprefix("zr-")
+            from urllib.parse import quote_plus
+            job_url = (
+                f"https://www.ziprecruiter.com/jobs-search"
+                f"?search={quote_plus(keyword)}"
+                f"&location=Remote"
+                f"&lk={token}"
+            )
 
         return Job(
             job_id=job_id,
@@ -582,25 +655,88 @@ class ZipRecruiterPlatform(JobPlatform):
     # ------------------------------------------------------------------
 
     async def get_job_description(self, job: Job) -> str:
-        """Navigate to or click into the job listing and extract description."""
+        """Click into the job listing and extract description.
+
+        ZR's 2026 card layout uses pure JS click handlers — cards
+        have zero ``<a>`` or ``<button>`` elements. The ``<article>``
+        is clickable and the job token lives in
+        ``id="job-card-{token}"``. Clicking the card either:
+
+        a) Opens a side-panel / detail drawer on the search page
+        b) Navigates to a new page
+
+        Either way, we wait for a description-sized text block to
+        appear in the DOM after clicking.
+        """
         page = await self.get_page()
 
-        if job.url:
-            await page.goto(job.url, wait_until="domcontentloaded")
-        else:
+        if not job.url:
             logger.warning(
-                "ZipRecruiter: No URL for job %s, cannot fetch description",
-                job.job_id,
+                "ZipRecruiter: No URL for job %s", job.job_id,
             )
             return ""
+
+        # Navigate to the job's search URL with lk= parameter. ZR
+        # opens a side-panel / detail view for the specific listing.
+        # Wait for the DOM to settle after the SPA renders.
+        await page.goto(job.url, wait_until="domcontentloaded")
+        await asyncio.sleep(2.0)
 
         await reading_pause(page)
         await self.check_and_abort_on_captcha(page)
 
-        # Extract description text
+        # Extract description — try known selectors first, then
+        # scan for the largest visible text block on the page as a
+        # fallback. ZR's description container class changes often.
         description = await self.safe_get_text(
             page, JOB_DESCRIPTION_SELECTORS, timeout=5000
         )
+        if not description:
+            # ZR's side-panel / detail view doesn't use stable CSS
+            # classes. Instead of grabbing the largest div (which
+            # includes the entire search page), look for the
+            # description content specifically:
+            #
+            # 1. First try: element whose text starts with typical JD
+            #    headings (About, Overview, Responsibilities, etc.)
+            # 2. Second try: the detail panel that appeared AFTER the
+            #    search results — usually a sibling of the job list
+            # 3. Last resort: largest block that does NOT contain the
+            #    search header ("X jobs in Y")
+            try:
+                description = await page.evaluate("""() => {
+                    // Strategy 1: find element with JD-like headings
+                    const jdHeadings = /^(about|overview|description|responsibilities|qualifications|requirements|who we|what you|the role|position|summary|job purpose)/i;
+                    const allEls = document.querySelectorAll('div, section, article');
+                    for (const el of allEls) {
+                        const text = (el.innerText || '').trim();
+                        if (text.length > 200 && text.length < 15000 && jdHeadings.test(text)) {
+                            return text.substring(0, 8000);
+                        }
+                    }
+
+                    // Strategy 2: side panel — look for elements that
+                    // DON'T contain the search results list
+                    const candidates = [...allEls].filter(el => {
+                        const text = (el.innerText || '').trim();
+                        if (text.length < 200 || text.length > 15000) return false;
+                        // Skip elements that contain search results chrome
+                        if (/\\d+ .*(jobs|results)/i.test(text.substring(0, 100))) return false;
+                        // Skip elements that contain many job titles (search list)
+                        const h2Count = el.querySelectorAll('h2').length;
+                        if (h2Count > 3) return false;
+                        return true;
+                    }).sort((a, b) => b.innerText.length - a.innerText.length);
+
+                    return candidates.length > 0 ? candidates[0].innerText.substring(0, 8000) : '';
+                }""")
+                if description:
+                    logger.debug(
+                        "ZipRecruiter: extracted description via text-block "
+                        "fallback (%d chars)", len(description),
+                    )
+            except Exception:
+                pass
 
         if description:
             logger.debug(
@@ -609,6 +745,31 @@ class ZipRecruiterPlatform(JobPlatform):
                 len(description),
             )
         else:
+            # Dump the visible text around the job detail area so the
+            # log shows what ZR actually renders, instead of guessing
+            # at selectors. The side panel DOM structure changes
+            # frequently — this diagnostic shortens the debug cycle.
+            try:
+                snippet = await page.evaluate("""() => {
+                    // Look for any large text block that looks like a JD
+                    const candidates = [...document.querySelectorAll(
+                        'section, article, [class*=description], [class*=detail], [role=main], main'
+                    )].filter(el => el.innerText.length > 200)
+                     .sort((a,b) => b.innerText.length - a.innerText.length);
+                    if (candidates.length > 0) {
+                        const el = candidates[0];
+                        return 'largest text block (' + el.tagName + '.' +
+                               el.className.substring(0,80) + '): ' +
+                               el.innerText.substring(0, 300);
+                    }
+                    return 'no large text blocks found on page';
+                }""")
+                logger.info(
+                    "ZipRecruiter: description diagnostic for %s: %s",
+                    job.job_id, snippet,
+                )
+            except Exception:
+                pass
             logger.warning(
                 "ZipRecruiter: Could not extract description for %s",
                 job.job_id,

@@ -55,3 +55,27 @@ class TestStopFlag:
         a.request_stop()
         assert a._stop_requested is True
         assert b._stop_requested is False
+
+    def test_counters_initialized_in_ctor(self):
+        """skipped/failed/applied must exist before any run starts.
+
+        The old code assigned skipped_count and failed_count INSIDE
+        request_stop(), so a run that completed normally (no stop)
+        crashed on the final RUN_FINISHED event emit which reads
+        these attrs.
+        """
+        engine = _make_engine()
+        assert engine.applied_count == 0
+        assert engine.skipped_count == 0
+        assert engine.failed_count == 0
+
+    def test_request_stop_does_not_reset_counters(self):
+        """request_stop must not wipe in-flight counts."""
+        engine = _make_engine()
+        engine.applied_count = 5
+        engine.skipped_count = 3
+        engine.failed_count = 2
+        engine.request_stop()
+        assert engine.applied_count == 5
+        assert engine.skipped_count == 3
+        assert engine.failed_count == 2
