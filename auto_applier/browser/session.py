@@ -87,9 +87,33 @@ class BrowserSession:
         if chrome_channel:
             launch_args["channel"] = chrome_channel
 
-        self._context = await self._playwright.chromium.launch_persistent_context(
-            **launch_args
-        )
+        try:
+            self._context = await self._playwright.chromium.launch_persistent_context(
+                **launch_args
+            )
+        except Exception as exc:
+            exc_str = str(exc).lower()
+            if chrome_channel and (
+                "existing browser session" in exc_str
+                or "target" in exc_str
+                or "closed" in exc_str
+            ):
+                # Chrome is already running (user's personal browser).
+                # Retry with bundled Chromium and a separate profile dir
+                # so we don't collide with Chrome's profile lock.
+                logger.warning(
+                    "Chrome is already running — falling back to bundled "
+                    "Chromium. Close personal Chrome for a better fingerprint."
+                )
+                launch_args.pop("channel", None)
+                fallback_dir = BROWSER_PROFILE_DIR.parent / "browser_profile_chromium"
+                fallback_dir.mkdir(parents=True, exist_ok=True)
+                launch_args["user_data_dir"] = str(fallback_dir)
+                self._context = await self._playwright.chromium.launch_persistent_context(
+                    **launch_args
+                )
+            else:
+                raise
         logger.info("Browser session started (patchright=%s)", self._using_patchright)
 
         # Apply stealth patches on existing pages if using standard Playwright

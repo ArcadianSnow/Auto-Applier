@@ -1028,7 +1028,7 @@ class IndeedPlatform(JobPlatform):
                         const headerPhrases = [
                             'answer these questions',
                             'key qualifications',
-                            'we\'ll save your answers',
+                            'we\\x27ll save your answers',
                             'required fields are marked',
                         ];
                         if (headerPhrases.some(p => text.toLowerCase().includes(p))) continue;
@@ -1158,6 +1158,16 @@ class IndeedPlatform(JobPlatform):
         ``[aria-invalid='true']`` for visible validation error text
         and returns it as the reason.
         """
+        # Scroll to bottom before clicking — Indeed's PDF preview
+        # pages and some questions pages push Continue below the
+        # viewport, and safe_click waits for state="visible" which
+        # requires the element to be in the visible viewport region.
+        try:
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(0.3)
+        except Exception:
+            pass
+
         clicked = await self.safe_click(
             page, FORM_CONTINUE_SELECTORS, timeout=500,
         )
@@ -1172,6 +1182,7 @@ class IndeedPlatform(JobPlatform):
                     "use this",
                     "looks good",
                     "review and submit",
+                    "review your application",
                     "apply anyway",
                 ),
             )

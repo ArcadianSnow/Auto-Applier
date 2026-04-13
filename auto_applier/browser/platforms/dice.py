@@ -278,10 +278,11 @@ class DicePlatform(JobPlatform):
             "https://www.dice.com/dashboard/login", wait_until="domcontentloaded"
         )
 
-        # Wait for user to log in manually (5 minute timeout)
+        # Wait for user to log in manually (5 minute timeout).
+        # Use ONLY the logged-in selector — the URL pattern "dice.com"
+        # matches the login page itself, causing false positives.
         return await self.wait_for_manual_login(
             page,
-            check_url_pattern="dice.com",
             check_selector=LOGGED_IN_SELECTORS[0],
             timeout=300,
         )
@@ -500,7 +501,9 @@ class DicePlatform(JobPlatform):
         if not title:
             return None
 
-        # Get company
+        # Get company — try inside the card first, then walk up to
+        # the parent container if the card selector is too narrow
+        # (happens when div:has(> a[...]) matched a minimal wrapper).
         company = ""
         for sel in JOB_COMPANY_SELECTORS:
             try:
@@ -510,6 +513,23 @@ class DicePlatform(JobPlatform):
                     break
             except Exception:
                 continue
+        if not company:
+            # Try the card's parent — the narrow wrapper matched by
+            # 'div:has(> a[data-testid=...])' often sits inside a
+            # larger card container that has the company element.
+            try:
+                parent = await card.evaluate_handle("el => el.parentElement")
+                if parent:
+                    for sel in JOB_COMPANY_SELECTORS:
+                        try:
+                            company_el = await parent.query_selector(sel)
+                            if company_el:
+                                company = (await company_el.inner_text()).strip()
+                                break
+                        except Exception:
+                            continue
+            except Exception:
+                pass
 
         # Get job URL / ID
         job_url = ""
@@ -726,19 +746,36 @@ class DicePlatform(JobPlatform):
             if "/login" in cur or "/register" in cur:
                 logger.info(
                     "Dice: apply redirected to login — waiting for "
-                    "manual login (timeout=120s)..."
+                    "manual login (timeout=180s)..."
                 )
-                try:
-                    await page.wait_for_url(
-                        lambda u: "/login" not in u and "/register" not in u,
-                        timeout=120000,
-                    )
-                    logger.info("Dice: login completed, continuing apply flow")
-                    await random_delay(1.0, 2.0)
-                except Exception:
+                logged_back = await self.wait_for_manual_login(
+                    page,
+                    check_selector=LOGGED_IN_SELECTORS[0],
+                    timeout=180,
+                )
+                if not logged_back:
                     return ApplyResult(
                         success=False,
                         failure_reason="apply login gate timed out — please log in to Dice",
+                    )
+                logger.info("Dice: login completed, retrying apply")
+                # Re-navigate to the job and retry the apply click
+                try:
+                    await page.goto(job.url, wait_until="domcontentloaded")
+                    await reading_pause(page)
+                    clicked = await self.safe_click(
+                        page, EASY_APPLY_BUTTON_SELECTORS, timeout=5000
+                    )
+                    if not clicked:
+                        return ApplyResult(
+                            success=False,
+                            failure_reason="Apply button not found after re-login",
+                        )
+                    await random_delay(1.5, 3.0)
+                except Exception as exc:
+                    return ApplyResult(
+                        success=False,
+                        failure_reason=f"Re-apply after login failed: {exc}",
                     )
 
             # Check for external ATS redirect (new tab opened)
