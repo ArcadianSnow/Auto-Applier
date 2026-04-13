@@ -589,6 +589,43 @@ class DicePlatform(JobPlatform):
             page, JOB_DESCRIPTION_SELECTORS, timeout=5000
         )
 
+        if not description:
+            # CSS selectors missed — Dice changes description container
+            # classes frequently. Use a JS-based fallback that searches
+            # for elements with JD-like headings or the largest text
+            # block that doesn't look like navigation chrome.
+            try:
+                description = await page.evaluate("""() => {
+                    // Strategy 1: find element with JD-like headings
+                    const jdHeadings = /^(about|overview|description|responsibilities|qualifications|requirements|who we|what you|the role|position|summary|job purpose)/i;
+                    const allEls = document.querySelectorAll('div, section, article');
+                    for (const el of allEls) {
+                        const text = (el.innerText || '').trim();
+                        if (text.length > 200 && text.length < 15000 && jdHeadings.test(text)) {
+                            return text.substring(0, 8000);
+                        }
+                    }
+
+                    // Strategy 2: largest text block that isn't nav chrome
+                    const candidates = [...allEls].filter(el => {
+                        const text = (el.innerText || '').trim();
+                        if (text.length < 200 || text.length > 15000) return false;
+                        if (/\\d+ .*(jobs|results)/i.test(text.substring(0, 100))) return false;
+                        const h2Count = el.querySelectorAll('h2').length;
+                        if (h2Count > 3) return false;
+                        return true;
+                    }).sort((a, b) => b.innerText.length - a.innerText.length);
+
+                    return candidates.length > 0 ? candidates[0].innerText.substring(0, 8000) : '';
+                }""")
+                if description:
+                    logger.debug(
+                        "Dice: extracted description via JS fallback (%d chars)",
+                        len(description),
+                    )
+            except Exception:
+                pass
+
         if description:
             logger.debug(
                 "Dice: Got description for %s (%d chars)",
@@ -596,6 +633,27 @@ class DicePlatform(JobPlatform):
                 len(description),
             )
         else:
+            # Diagnostic: what IS on the page?
+            try:
+                snippet = await page.evaluate("""() => {
+                    const candidates = [...document.querySelectorAll(
+                        'section, article, [class*=description], [class*=detail], [role=main], main'
+                    )].filter(el => el.innerText.length > 200)
+                     .sort((a,b) => b.innerText.length - a.innerText.length);
+                    if (candidates.length > 0) {
+                        const el = candidates[0];
+                        return 'largest text block (' + el.tagName + '.' +
+                               el.className.substring(0,80) + '): ' +
+                               el.innerText.substring(0, 300);
+                    }
+                    return 'no large text blocks found on page';
+                }""")
+                logger.info(
+                    "Dice: description diagnostic for %s: %s",
+                    job.job_id, snippet,
+                )
+            except Exception:
+                pass
             logger.warning(
                 "Dice: Could not extract description for %s", job.job_id
             )
@@ -812,13 +870,15 @@ class DicePlatform(JobPlatform):
                     page, MODAL_NEXT_SELECTORS, timeout=3000
                 )
                 if not clicked:
-                    logger.warning(
-                        "Dice: No Next/Submit button found at step %d",
-                        step + 1,
-                    )
+                    # Check for visible validation errors before giving up
+                    validation_msg = await self._scan_validation_errors(page)
+                    reason = f"No navigation button found at step {step + 1}"
+                    if validation_msg:
+                        reason += f" (validation: {validation_msg})"
+                    logger.warning("Dice: %s", reason)
                     return self._build_result(
                         success=False,
-                        failure_reason=f"No navigation button found at step {step + 1}",
+                        failure_reason=reason,
                     )
                 await random_delay(1.5, 3.0)
 
@@ -918,6 +978,39 @@ class DicePlatform(JobPlatform):
         except Exception:
             pass
 
+    async def _scan_validation_errors(self, page: Page) -> str:
+        """Scan for visible validation error messages on the current page.
+
+        Returns a short string describing the error, or empty string
+        if no errors found. This helps diagnose why a form won't
+        advance to the next step.
+        """
+        error_selectors = [
+            ".error-message",
+            "[class*='error']",
+            "[class*='invalid']",
+            "[role='alert']",
+            ".form-error",
+            ".field-error",
+            ".validation-error",
+        ]
+        for sel in error_selectors:
+            try:
+                els = await page.query_selector_all(sel)
+                for el in els:
+                    try:
+                        visible = await el.is_visible()
+                    except Exception:
+                        visible = False
+                    if not visible:
+                        continue
+                    text = (await el.inner_text()).strip()
+                    if text and len(text) < 200:
+                        return text
+            except Exception:
+                continue
+        return ""
+
     def _build_result(
         self,
         success: bool,
@@ -926,7 +1019,7 @@ class DicePlatform(JobPlatform):
     ) -> ApplyResult:
         """Build an ApplyResult from the current form_filler state."""
         if self.form_filler:
-            return ApplyResult(
+            result = ApplyResult(
                 success=success,
                 gaps=list(self.form_filler.gaps),
                 resume_used=self.form_filler.resume_label,
@@ -936,7 +1029,19 @@ class DicePlatform(JobPlatform):
                 fields_total=self.form_filler.fields_total,
                 used_llm=self.form_filler.used_llm,
             )
-        return ApplyResult(
-            success=success,
-            failure_reason=failure_reason,
-        )
+        else:
+            result = ApplyResult(
+                success=success,
+                failure_reason=failure_reason,
+            )
+        # Log a summary line so dry-run testing shows field fill rates
+        if result.success:
+            logger.info(
+                "Dice: Apply result: success [%d/%d fields, llm=%s]",
+                result.fields_filled, result.fields_total, result.used_llm,
+            )
+        else:
+            logger.info(
+                "Dice: Apply result: failed: %s", result.failure_reason,
+            )
+        return result

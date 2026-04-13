@@ -21,16 +21,33 @@ playwright install chromium
 python run.py
 python -m auto_applier
 
-# CLI mode
+# CLI mode — core
 python -m auto_applier --cli run
 python -m auto_applier --cli run --dry-run
 python -m auto_applier --cli run --platform linkedin
 python -m auto_applier --cli run --limit 5
-python -m auto_applier --cli doctor     # preflight — validates Ollama, Playwright, data, resumes, etc.
+python -m auto_applier --cli doctor     # preflight checks
 python -m auto_applier --cli status
 python -m auto_applier --cli gaps
 python -m auto_applier --cli resumes
 python -m auto_applier --cli migrations # CSV schema migration history
+
+# CLI mode — data tools
+python -m auto_applier --cli show <job_id>       # full job detail view
+python -m auto_applier --cli export -o jobs.csv   # export data
+python -m auto_applier --cli fsck                 # data integrity check
+python -m auto_applier --cli normalize            # fix data issues
+python -m auto_applier --cli patterns             # conversion analytics
+python -m auto_applier --cli reset-history --yes  # clear application history
+
+# CLI mode — interview prep
+python -m auto_applier --cli research <company>   # company briefing
+python -m auto_applier --cli tailor <job_id> --resume <label>  # tailored resume PDF
+python -m auto_applier --cli outreach <job_id> --resume <label>  # LinkedIn message
+python -m auto_applier --cli story list           # STAR interview stories
+python -m auto_applier --cli followup list --due  # pending follow-ups
+python -m auto_applier --cli followup draft <job_id>  # draft follow-up email
+python -m auto_applier --cli archetype list       # archetype routing config
 
 # Tests (asyncio_mode = "auto" in pyproject.toml)
 pip install -e ".[dev]"
@@ -42,7 +59,7 @@ pytest -k test_name
 python build.py
 ```
 
-Test suite currently covers `llm/`, `scoring/`, `storage/` models, and the repository layer. Browser, GUI, and orchestrator layers are not unit-tested — validate those manually with `--dry-run`.
+Test suite covers `llm/` (cache, prompts, router), `scoring/` (models, scorer thresholds), `storage/` (models, repository, migrations, integrity), `resume/` (manager, skills, evolution, cover letter, parser, tailor, outreach, story bank), `browser/` (anti-detect, captcha detection, form filler, budget counting), and `orchestrator/` (events, stop flag, ghost check, discover). Browser interactions and GUI require manual testing with `--dry-run`.
 
 ## Architecture
 
@@ -94,6 +111,39 @@ Pipeline: discover -> fetch description -> score (all resumes) -> decide -> fill
 **Event names** (defined in `orchestrator/events.py`): `run_started`, `resume_parsed`, `platform_started`, `platform_login_needed`, `platform_login_failed`, `search_started`, `jobs_found`, `job_scored`, `user_review_needed`, `application_started`, `application_complete`, `platform_error`, `platform_finished`, `evolution_triggers`, `run_finished`, `captcha_detected`. Most are fire-and-forget via `emit()`. User-blocking events (e.g. `user_review_needed`) use `emit_and_wait()` — the GUI handler must call `resolve_event(name, result)` to unblock the pipeline (5-minute default timeout).
 
 **Registered platforms** (`browser/platforms/__init__.py`): `linkedin`, `indeed`, `dice`, `ziprecruiter`.
+
+### Cross-Source Deduplication (`storage/dedup.py`)
+
+Canonical hashing: `normalize_title(title) + normalize_company(company)` -> SHA-256. Before scoring, the engine checks `job_seen_canonically(hash)` to skip cross-posted duplicates (same job on LinkedIn and Indeed). Per-source dedup via `job_already_applied(job_id, source)` catches re-runs.
+
+### Ghost Job Detection (`browser/ghost_check.py`)
+
+LLM-powered analysis of job descriptions to detect likely ghost/stale postings. Jobs scoring >= `GHOST_SKIP_THRESHOLD` (default 8, configurable via env var) are skipped before the apply step to avoid wasting time. Uses the `GHOST_JOB_CHECK` prompt template. Dry runs skip this check.
+
+### Follow-Up Cadence (`storage/repository.py`, `main.py followup group`)
+
+After each successful application, `schedule_followups()` creates pending follow-up records at configurable intervals (default 7/14/21 days). `cli followup list --due` shows actionable items. `cli followup draft` generates personalized follow-up emails via the `FOLLOWUP_EMAIL` prompt, with tone progression across attempts.
+
+### Multi-Dimensional Scoring (`scoring/models.py`)
+
+Seven weighted axes: skills (0.35), experience (0.20), seniority (0.15), location (0.10), culture (0.08), growth (0.07), compensation (0.05). LLM scores each axis 0-10 via `SCORE_DIMENSIONS` prompt. Python computes the weighted total — users can re-tune weights in `user_config.json:scoring_weights` without re-running the LLM. Falls back to legacy single-score prompt on parse failure.
+
+### Archetype Classification (`resume/archetypes.py`)
+
+Opt-in feature. When `data/archetypes.json` exists and multiple resumes are loaded, classifies each JD into an archetype (e.g., "data_analyst", "data_engineer") and routes scoring to matching resumes only. Falls back to scoring all resumes if no archetype matches confidently.
+
+### Interview Prep Extensions
+
+- **Story Bank** (`resume/story_bank.py`, `cli story`) — STAR+Reflection interview stories generated from resume + JD via `STAR_STORIES` prompt. Persisted in `data/stories/`. Subcommands: `list`, `show`, `export`, `prune`.
+- **Outreach** (`main.py`, `cli outreach`) — LinkedIn connection-request messages (<280 chars) via `OUTREACH_MESSAGE` prompt.
+- **Tailor** (`resume/tailor.py`, `cli tailor`) — Per-JD resume rewrite via `TAILOR_RESUME` prompt, rendered to PDF via Playwright.
+- **Research** (`main.py`, `cli research`) — Company briefing via `COMPANY_RESEARCH` prompt. Cached in `data/research/`.
+
+### Data Integrity (`storage/integrity.py`)
+
+- `cli fsck` — Validates referential integrity (orphan applications, missing jobs, score range), reports issues.
+- `cli normalize` — Fixes common data issues (empty fields, duplicate rows, date format normalization).
+- `cli patterns` — Conversion analytics: success rates by platform, score distribution, resume performance.
 
 ### Resume Evolution (`resume/evolution.py`)
 

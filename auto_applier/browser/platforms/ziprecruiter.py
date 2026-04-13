@@ -825,12 +825,55 @@ class ZipRecruiterPlatform(JobPlatform):
                 page, APPLY_BUTTON_SELECTORS, timeout=5000
             )
             if not clicked:
+                # Dump the apply button region so the log shows what
+                # ZR actually renders, helping us update selectors.
+                try:
+                    snippet = await page.evaluate("""() => {
+                        const btns = [...document.querySelectorAll('button, a')]
+                            .filter(el => el.textContent.toLowerCase().includes('apply'))
+                            .map(el => el.outerHTML.substring(0, 200));
+                        return 'apply-ish buttons: ' + JSON.stringify(btns.slice(0, 5));
+                    }""")
+                    logger.info(
+                        "ZipRecruiter: apply button diagnostic: %s", snippet,
+                    )
+                except Exception:
+                    pass
                 return ApplyResult(
                     success=False,
                     failure_reason="Apply button not found",
                 )
 
             await random_delay(1.5, 3.0)
+
+            # Login gate detection: ZR's apply click sometimes
+            # redirects to a login/signup page instead of the form.
+            # Wait for the user to log in manually if this happens.
+            try:
+                cur = page.url.lower()
+            except Exception:
+                cur = ""
+            if "/login" in cur or "/signup" in cur or "/register" in cur:
+                logger.info(
+                    "ZipRecruiter: apply redirected to login — waiting "
+                    "for manual login (timeout=120s)..."
+                )
+                try:
+                    await page.wait_for_url(
+                        lambda u: "/login" not in u
+                        and "/signup" not in u
+                        and "/register" not in u,
+                        timeout=120000,
+                    )
+                    logger.info(
+                        "ZipRecruiter: login completed, continuing apply flow"
+                    )
+                    await random_delay(1.0, 2.0)
+                except Exception:
+                    return ApplyResult(
+                        success=False,
+                        failure_reason="apply login gate timed out — please log in to ZipRecruiter",
+                    )
 
             # Check if we got redirected externally after clicking
             if await self._check_external_redirect(page):
@@ -1008,13 +1051,15 @@ class ZipRecruiterPlatform(JobPlatform):
                         )
                         return self._build_result(success=True, dry_run=False)
 
-                    logger.warning(
-                        "ZipRecruiter: No Continue/Submit button found at step %d",
-                        step + 1,
-                    )
+                    # Check for visible validation errors
+                    validation_msg = await self._scan_validation_errors(page)
+                    reason = f"No navigation button found at step {step + 1}"
+                    if validation_msg:
+                        reason += f" (validation: {validation_msg})"
+                    logger.warning("ZipRecruiter: %s", reason)
                     return self._build_result(
                         success=False,
-                        failure_reason=f"No navigation button found at step {step + 1}",
+                        failure_reason=reason,
                     )
                 await random_delay(1.5, 3.0)
 
@@ -1105,6 +1150,37 @@ class ZipRecruiterPlatform(JobPlatform):
             except Exception:
                 continue
 
+    async def _scan_validation_errors(self, page: Page) -> str:
+        """Scan for visible validation error messages on the current page.
+
+        Returns a short description of the error, or empty string.
+        """
+        error_selectors = [
+            ".error-message",
+            "[class*='error']",
+            "[class*='invalid']",
+            "[role='alert']",
+            ".form-error",
+            ".field-error",
+            ".validation-error",
+        ]
+        for sel in error_selectors:
+            try:
+                els = await page.query_selector_all(sel)
+                for el in els:
+                    try:
+                        visible = await el.is_visible()
+                    except Exception:
+                        visible = False
+                    if not visible:
+                        continue
+                    text = (await el.inner_text()).strip()
+                    if text and len(text) < 200:
+                        return text
+            except Exception:
+                continue
+        return ""
+
     def _build_result(
         self,
         success: bool,
@@ -1113,7 +1189,7 @@ class ZipRecruiterPlatform(JobPlatform):
     ) -> ApplyResult:
         """Build an ApplyResult from the current form_filler state."""
         if self.form_filler:
-            return ApplyResult(
+            result = ApplyResult(
                 success=success,
                 gaps=list(self.form_filler.gaps),
                 resume_used=self.form_filler.resume_label,
@@ -1123,7 +1199,19 @@ class ZipRecruiterPlatform(JobPlatform):
                 fields_total=self.form_filler.fields_total,
                 used_llm=self.form_filler.used_llm,
             )
-        return ApplyResult(
-            success=success,
-            failure_reason=failure_reason,
-        )
+        else:
+            result = ApplyResult(
+                success=success,
+                failure_reason=failure_reason,
+            )
+        # Log a summary line so dry-run testing shows field fill rates
+        if result.success:
+            logger.info(
+                "ZipRecruiter: Apply result: success [%d/%d fields, llm=%s]",
+                result.fields_filled, result.fields_total, result.used_llm,
+            )
+        else:
+            logger.info(
+                "ZipRecruiter: Apply result: failed: %s", result.failure_reason,
+            )
+        return result
