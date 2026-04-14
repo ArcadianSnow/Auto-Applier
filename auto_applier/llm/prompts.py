@@ -423,3 +423,42 @@ COVER_LETTER = PromptTemplate(
         "Job Title: {job_title}"
     ),
 )
+
+
+# ------------------------------------------------------------------
+# Job title expansion — seed to adjacent titles
+# ------------------------------------------------------------------
+
+TITLE_EXPANSION = PromptTemplate(
+    system=(
+        "You suggest adjacent job titles the candidate would be "
+        "qualified for based on a seed title they're already "
+        "searching. The goal is to help the candidate discover "
+        "similar roles they'd otherwise miss because they didn't "
+        "know the industry's naming conventions.\n\n"
+        "Rules:\n"
+        "- Adjacent = very similar required skillset, SAME seniority "
+        "level. A 'Data Analyst' searcher should get 'Business "
+        "Intelligence Analyst', NOT 'Senior Data Analyst'.\n"
+        "- DO NOT inflate seniority. Never suggest 'Senior X', "
+        "'Lead X', 'Principal X', 'Staff X', 'Director of X', or "
+        "any higher-level variant of the seed.\n"
+        "- DO NOT reach across career tracks. An 'Analyst' searcher "
+        "should NOT get 'Engineer' unless the candidate's resume "
+        "clearly shows engineering experience.\n"
+        "- Use common canonical titles that real job boards use — "
+        "avoid invented buzzword hybrids.\n"
+        "- Return 3-5 titles, most similar first. Fewer is better "
+        "than padding with weak matches.\n"
+        "- If the resume is provided, use it to tailor suggestions "
+        "to the candidate's actual skills. If it isn't provided, "
+        "return generic industry-standard siblings.\n\n"
+        "Return ONLY this JSON (no preamble, no code fences):\n"
+        '{"adjacents": [str] (3-5 lowercase job titles), '
+        '"reasoning": str (one sentence explaining why these fit)}'
+    ),
+    template=(
+        "Seed title: {seed_title}\n\n"
+        "Candidate resume (optional context):\n{resume_text}"
+    ),
+)

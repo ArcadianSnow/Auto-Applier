@@ -415,6 +415,54 @@ class ApplicationEngine:
         self.pending_review.clear()
 
     # ------------------------------------------------------------------
+    # Title expansion helper (used by _run_platform auto-broaden path)
+    # ------------------------------------------------------------------
+
+    async def _expand_keyword_for_search(self, keyword: str) -> list[str]:
+        """Get adjacent titles for a keyword that yielded few results.
+
+        Returns a list of title strings. Empty list means expansion
+        failed or produced nothing useful (e.g. seed not in static dict
+        AND LLM unavailable). Results are cached by seed for the
+        lifetime of this engine instance so re-visiting the same
+        keyword from a second platform doesn't re-invoke the LLM.
+        """
+        from auto_applier.analysis.title_expansion import expand_title
+
+        cache = getattr(self, "_expansion_cache", None)
+        if cache is None:
+            cache = {}
+            self._expansion_cache = cache
+
+        key = keyword.lower().strip()
+        if key in cache:
+            return cache[key]
+
+        # Pull resume context from the first loaded resume, if any.
+        # Makes LLM suggestions resume-aware without requiring the
+        # user to have already scored against this specific JD.
+        resume_text = ""
+        try:
+            if self.resume_manager is not None:
+                resumes = self.resume_manager.list_resumes()
+                if resumes:
+                    resume_text = self.resume_manager.get_resume_text(
+                        resumes[0].label,
+                    )
+        except Exception:
+            pass
+
+        result = await expand_title(
+            seed=keyword,
+            router=self.router,
+            resume_text=resume_text,
+            prefer_llm=True,
+        )
+        adjacents = result.adjacents if result.has_suggestions else []
+        cache[key] = adjacents
+        return adjacents
+
+    # ------------------------------------------------------------------
     # Per-platform pipeline
     # ------------------------------------------------------------------
 
@@ -436,7 +484,20 @@ class ApplicationEngine:
 
         applied_this_platform = 0
 
-        for keyword in keywords:
+        # Build effective keyword list. When auto_expand_titles is on
+        # and a keyword yields few jobs, we'll broaden on the fly.
+        effective_keywords = list(keywords)
+        already_expanded: set[str] = set()
+        auto_expand = self.config.get("auto_expand_titles", False)
+        expand_threshold = int(
+            self.config.get("title_expansion_threshold", 10)
+        )
+
+        kw_index = 0
+        while kw_index < len(effective_keywords):
+            keyword = effective_keywords[kw_index]
+            kw_index += 1
+
             if applied_this_platform >= budget:
                 break
             if self._stop_requested:
@@ -457,6 +518,37 @@ class ApplicationEngine:
             self.events.emit(
                 JOBS_FOUND, platform=platform_key, keyword=keyword, count=len(jobs)
             )
+
+            # Auto-broaden: if this keyword returned fewer jobs than
+            # threshold AND the user opted in via config, queue up
+            # expanded titles for search too. Each keyword only gets
+            # expanded once per run to avoid runaway searches.
+            if (
+                auto_expand
+                and len(jobs) < expand_threshold
+                and keyword.lower() not in already_expanded
+            ):
+                already_expanded.add(keyword.lower())
+                try:
+                    expanded = await self._expand_keyword_for_search(keyword)
+                except Exception as exc:
+                    logger.debug(
+                        "Title expansion failed for '%s': %s", keyword, exc,
+                    )
+                    expanded = []
+                if expanded:
+                    logger.info(
+                        "Low results for '%s' (%d jobs) — auto-expanding "
+                        "to %d related titles: %s",
+                        keyword, len(jobs), len(expanded),
+                        ", ".join(expanded),
+                    )
+                    # Append so we walk them later in this while loop
+                    for exp_title in expanded:
+                        if exp_title.lower() not in {
+                            k.lower() for k in effective_keywords
+                        }:
+                            effective_keywords.append(exp_title)
 
             for job in jobs:
                 if applied_this_platform >= budget:

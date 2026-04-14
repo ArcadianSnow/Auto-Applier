@@ -585,6 +585,117 @@ def respond(job_id, outcome, source, note):
         click.echo(f"\n{messages[outcome]}")
 
 
+@cli.command()
+@click.argument("title")
+@click.option("--add", is_flag=True,
+              help="Add approved titles to user_config.json search_keywords")
+@click.option("--no-llm", is_flag=True,
+              help="Skip the LLM and use only the static fallback dictionary")
+def expand(title, add, no_llm):
+    """Suggest adjacent job titles you can also search for.
+
+    A novice user who types "Data Analyst" might not know to also
+    search "Business Intelligence Analyst" or "Analytics Engineer".
+    This command generates those adjacents — tailored to your resume
+    when available — so you can broaden your search without missing
+    jobs you're qualified for.
+
+    Examples:
+        python -m auto_applier --cli expand "Data Analyst"
+        python -m auto_applier --cli expand "Data Analyst" --add
+        python -m auto_applier --cli expand "Project Manager" --no-llm
+
+    Use --add to append the approved titles directly to your config.
+    """
+    from auto_applier.analysis.title_expansion import expand_title
+    from auto_applier.llm.router import LLMRouter
+    from auto_applier.resume.manager import ResumeManager
+
+    async def do_expand():
+        router = LLMRouter() if not no_llm else None
+        if router is not None:
+            await router.initialize()
+
+        # Load resume text for context, if any resume is loaded
+        resume_text = ""
+        if router is not None:
+            try:
+                mgr = ResumeManager(router)
+                resumes = mgr.list_resumes()
+                if resumes:
+                    # Use the first resume's text for context — fine
+                    # because this is advisory, not an applying decision
+                    resume_text = mgr.get_resume_text(resumes[0].label)
+            except Exception:
+                pass  # resume context is optional
+
+        return await expand_title(
+            seed=title,
+            router=router,
+            resume_text=resume_text,
+            prefer_llm=not no_llm,
+        )
+
+    result = asyncio.run(do_expand())
+
+    if not result.has_suggestions:
+        click.echo(
+            f"\nNo adjacent titles found for '{title}'.\n"
+            "Try a more specific or common title "
+            "(e.g., 'Data Analyst' instead of 'DA Guy')."
+        )
+        return
+
+    click.echo(f"\nAdjacent titles for '{title}':")
+    if result.source == "llm":
+        click.echo(f"(suggested by AI based on your resume context)\n")
+    else:
+        click.echo(f"(from the built-in title dictionary)\n")
+
+    for i, adjacent in enumerate(result.adjacents, 1):
+        click.echo(f"  {i}. {adjacent}")
+
+    if result.reasoning:
+        click.echo(f"\nReasoning: {result.reasoning}")
+
+    if not add:
+        click.echo(
+            "\nTIP: Use --add to save these to your search_keywords in "
+            "user_config.json"
+        )
+        return
+
+    # Ask which ones to add
+    click.echo("")
+    approved = []
+    for adjacent in result.adjacents:
+        if click.confirm(f"  Add '{adjacent}'?", default=True):
+            approved.append(adjacent)
+
+    if not approved:
+        click.echo("\nNothing added.")
+        return
+
+    # Update user_config.json
+    config = load_user_config()
+    keywords = config.get("search_keywords", [])
+    existing_lower = {k.lower().strip() for k in keywords}
+    added = []
+    for t in approved:
+        if t.lower().strip() not in existing_lower:
+            keywords.append(t)
+            added.append(t)
+    config["search_keywords"] = keywords
+    save_user_config(config)
+
+    if added:
+        click.echo(f"\n[OK] Added {len(added)} title(s) to search_keywords:")
+        for t in added:
+            click.echo(f"  + {t}")
+    else:
+        click.echo("\nAll approved titles were already in your search list.")
+
+
 @cli.command("auto-ghost")
 @click.option("--days", default=30, type=int,
               help="Days without response to mark as ghosted (default 30)")
