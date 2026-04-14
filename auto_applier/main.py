@@ -696,6 +696,319 @@ def expand(title, add, no_llm):
         click.echo("\nAll approved titles were already in your search list.")
 
 
+@cli.command()
+@click.option("--max-skills", default=5, type=int,
+              help="Max skills to review this session (default 5)")
+def refine(max_skills):
+    """Walk through missing skills and improve your resume.
+
+    For each recurring skill gap, you can:
+      (a) Describe your experience -> LLM drafts resume bullets
+      (b) Mark as currently learning (goes into learning goals)
+      (c) Dismiss (never suggest again)
+      (d) Skip for now
+
+    Approved bullets are added to your resume profile's confirmed
+    skills — the scoring pipeline will treat them as "on the resume"
+    from the next run onward.
+
+    Important: the LLM is told to use ONLY facts you provide.
+    It will NOT invent team sizes, employers, or numbers. If your
+    description is vague, you'll get no bullets (and a prompt to
+    try again with more detail).
+    """
+    from auto_applier.analysis import learning_goals
+    from auto_applier.llm.router import LLMRouter
+    from auto_applier.resume.evolution import EvolutionEngine
+    from auto_applier.resume.manager import ResumeManager
+    from auto_applier.resume.refine import (
+        check_resume_suggestion,
+        collect_refine_candidates,
+        generate_bullets,
+        save_confirmed_skill,
+    )
+
+    asyncio.run(_run_refine_session(max_skills))
+
+
+async def _run_refine_session(max_skills: int) -> None:
+    from auto_applier.analysis import learning_goals
+    from auto_applier.llm.router import LLMRouter
+    from auto_applier.resume.evolution import EvolutionEngine
+    from auto_applier.resume.manager import ResumeManager
+    from auto_applier.resume.refine import (
+        check_resume_suggestion,
+        collect_refine_candidates,
+        generate_bullets,
+        save_confirmed_skill,
+    )
+
+    router = LLMRouter()
+    await router.initialize()
+    resume_manager = ResumeManager(router)
+
+    # Resume suggestion check first — if the user has a structural
+    # mismatch we should surface that BEFORE walking individual gaps,
+    # since building a new resume changes what gaps matter.
+    suggestions = check_resume_suggestion()
+    for sug in suggestions:
+        click.echo(f"\n{'=' * 60}")
+        click.echo("Resume suggestion:")
+        click.echo(f"{'=' * 60}")
+        click.echo(
+            f"You've applied to {sug.evidence_count} {sug.target_archetype}-type "
+            f"jobs using your '{sug.existing_resume}' resume.\n"
+            f"Average match score was {sug.avg_score:.1f}/10 "
+            "(below what a tailored resume could get)."
+        )
+        if sug.example_titles:
+            click.echo("\nExample jobs:")
+            for t in sug.example_titles:
+                click.echo(f"  - {t}")
+        click.echo(
+            f"\nA resume focused on {sug.target_archetype} roles would "
+            "likely score higher and unlock more matches."
+        )
+        click.echo(
+            "\n(Title-focused resume generation is a future feature. "
+            "For now, create a new resume file and add it via the "
+            "GUI wizard.)"
+        )
+
+    # Collect gap candidates
+    candidates = collect_refine_candidates()
+    if not candidates:
+        click.echo(
+            "\nNo skills are ready to review yet.\n"
+            "Apply to more jobs or wait for more gap data to accumulate."
+        )
+        return
+
+    # Limit the session size so it doesn't feel like a chore
+    candidates = candidates[:max_skills]
+
+    click.echo(f"\n{'=' * 60}")
+    click.echo(f"Resume refinement — {len(candidates)} skill(s) to review")
+    click.echo(f"{'=' * 60}")
+    click.echo(
+        "For each skill, tell us if you have experience with it. If you do, "
+        "the AI will draft resume bullets using ONLY what you describe — "
+        "no made-up details.\n"
+    )
+
+    added_count = 0
+    learning_count = 0
+    dismissed_count = 0
+    skipped_count = 0
+
+    evolution = EvolutionEngine()
+
+    for i, cand in enumerate(candidates, 1):
+        click.echo(f"\n[{i}/{len(candidates)}] Skill: {cand.skill}")
+        click.echo(
+            f"  Appeared in {cand.count} jobs you applied to "
+            f"(using your '{cand.resume_label}' resume)"
+        )
+        if cand.sample_companies:
+            click.echo(f"  Examples: {', '.join(cand.sample_companies[:3])}")
+
+        click.echo("\nWhat would you like to do?")
+        click.echo("  (a) I have experience — let me describe it")
+        click.echo("  (b) I'm currently learning this")
+        click.echo("  (c) Not interested — don't suggest again")
+        click.echo("  (d) Skip for now")
+        click.echo("  (q) Quit the session")
+
+        choice = click.prompt("Choice", type=click.Choice(
+            ["a", "b", "c", "d", "q"],
+        ), default="d").strip().lower()
+
+        if choice == "q":
+            click.echo("\nEnding session early.")
+            break
+
+        if choice == "d":
+            skipped_count += 1
+            continue
+
+        if choice == "c":
+            learning_goals.set_state(cand.skill, "not_interested")
+            evolution.mark_prompted(cand.skill)
+            click.echo(f"  [OK] Dismissed '{cand.skill}'.")
+            dismissed_count += 1
+            continue
+
+        if choice == "b":
+            learning_goals.set_state(cand.skill, "learning")
+            click.echo(f"  [OK] Added '{cand.skill}' to your learning list.")
+            learning_count += 1
+            continue
+
+        # choice == "a": have experience
+        level = click.prompt(
+            "Your level with this skill",
+            type=click.Choice(["beginner", "intermediate", "advanced", "expert"]),
+            default="intermediate",
+        )
+        description = click.prompt(
+            "Briefly describe a project or role where you used this "
+            "(1-2 sentences, just the facts)",
+            type=str,
+        )
+
+        if not description.strip():
+            click.echo("  Empty description — skipping.")
+            skipped_count += 1
+            continue
+
+        resume_text = resume_manager.get_resume_text(cand.resume_label)
+        bullets = await generate_bullets(
+            skill=cand.skill,
+            user_description=description,
+            resume_label=cand.resume_label,
+            resume_text=resume_text,
+            router=router,
+            level=level,
+        )
+
+        if not bullets:
+            click.echo(
+                "  AI couldn't generate solid bullets from that description.\n"
+                "  Try again with more specifics (what, where, a concrete "
+                "outcome if you can recall one)."
+            )
+            skipped_count += 1
+            continue
+
+        click.echo("\n  Proposed bullets:")
+        for b in bullets:
+            click.echo(f"    * {b}")
+
+        if not click.confirm("\nAdd these to your resume?", default=True):
+            click.echo("  Not added.")
+            skipped_count += 1
+            continue
+
+        ok = save_confirmed_skill(
+            resume_label=cand.resume_label,
+            skill=cand.skill,
+            level=level,
+            bullets=bullets,
+            resume_manager=resume_manager,
+        )
+        if ok:
+            evolution.mark_prompted(cand.skill)
+            click.echo(
+                f"  [OK] Added '{cand.skill}' to '{cand.resume_label}' resume."
+            )
+            added_count += 1
+        else:
+            click.echo("  [FAIL] Could not save — resume profile missing.")
+            skipped_count += 1
+
+    # Summary
+    click.echo(f"\n{'=' * 60}")
+    click.echo("Refinement session complete")
+    click.echo(f"{'=' * 60}")
+    click.echo(f"  Added to resume:        {added_count}")
+    click.echo(f"  Added to learning list: {learning_count}")
+    click.echo(f"  Dismissed:              {dismissed_count}")
+    click.echo(f"  Skipped:                {skipped_count}")
+    if added_count:
+        click.echo(
+            "\nYour next `cli run` will score against the updated resumes."
+        )
+
+
+@cli.group()
+def learn():
+    """Track skills you're learning or already know.
+
+    Three states:
+      learning        — studying this skill now
+      certified       — you've completed it; candidate to add to resume
+      not_interested  — never suggest this one again
+    """
+    pass
+
+
+@learn.command("add")
+@click.argument("skill")
+def learn_add(skill):
+    """Mark a skill as something you're currently learning."""
+    from auto_applier.analysis.learning_goals import set_state
+    set_state(skill, "learning")
+    click.echo(f"[OK] Now tracking '{skill}' as: learning")
+
+
+@learn.command("done")
+@click.argument("skill")
+def learn_done(skill):
+    """Mark a skill as completed/certified.
+
+    The refine chat will use this to propose adding the skill
+    as a confirmed item on your resume profile.
+    """
+    from auto_applier.analysis.learning_goals import set_state
+    set_state(skill, "certified")
+    click.echo(
+        f"[OK] Marked '{skill}' as certified.\n"
+        "     Run `cli refine` to add this to your resume."
+    )
+
+
+@learn.command("dismiss")
+@click.argument("skill")
+def learn_dismiss(skill):
+    """Stop suggesting this skill in gaps/trends reports."""
+    from auto_applier.analysis.learning_goals import set_state
+    set_state(skill, "not_interested")
+    click.echo(f"[OK] Dismissed '{skill}' — it will no longer appear in reports.")
+
+
+@learn.command("list")
+@click.option("--state", default=None,
+              type=click.Choice(["learning", "certified", "not_interested"]),
+              help="Filter by state")
+def learn_list(state):
+    """List skills you're tracking."""
+    from auto_applier.analysis.learning_goals import list_goals
+    goals = list_goals(state=state)
+    if not goals:
+        click.echo("No skills tracked yet.")
+        click.echo(
+            "TIP: Add one with `python -m auto_applier --cli learn add <skill>`"
+        )
+        return
+
+    click.echo("")
+    buckets: dict[str, list[str]] = {}
+    for skill, st in goals:
+        buckets.setdefault(st, []).append(skill)
+
+    # Ordered display
+    for st in ("learning", "certified", "not_interested"):
+        skills = buckets.get(st, [])
+        if not skills:
+            continue
+        click.echo(f"{st.upper()}:")
+        for s in skills:
+            click.echo(f"  - {s}")
+        click.echo("")
+
+
+@learn.command("remove")
+@click.argument("skill")
+def learn_remove(skill):
+    """Stop tracking a skill entirely (forget its state)."""
+    from auto_applier.analysis.learning_goals import remove
+    ok = remove(skill)
+    if ok:
+        click.echo(f"[OK] Removed '{skill}' from learning goals.")
+    else:
+        click.echo(f"'{skill}' was not tracked.")
+
+
 @cli.command("auto-ghost")
 @click.option("--days", default=30, type=int,
               help="Days without response to mark as ghosted (default 30)")
@@ -720,26 +1033,232 @@ def auto_ghost(days):
 
 
 @cli.command()
-def gaps():
-    """Show skill gap analysis."""
-    from auto_applier.resume.evolution import EvolutionEngine
+@click.option("--by-resume", is_flag=True,
+              help="Group gaps by the resume that was used")
+@click.option("--by-title", is_flag=True,
+              help="Group gaps by job title archetype")
+@click.option("--limit", default=30, type=int,
+              help="Max skills to show (default 30)")
+def gaps(by_resume, by_title, limit):
+    """Show skills missing from your resume across job applications.
 
-    engine = EvolutionEngine()
-    summary = engine.get_gap_summary()
+    Default view: flat ranked list of skills most frequently asked for
+    but not on your resume.
 
-    if not summary:
-        click.echo("No skill gaps recorded yet.")
+    --by-resume: breaks down gaps per resume label, so you can see
+    which of your resumes is missing what.
+
+    --by-title: groups by archetype (analyst, engineer, scientist, etc.)
+    so you can see which skills belong to which career track.
+
+    You can combine --by-resume --by-title to get the full breakdown.
+    """
+    from auto_applier.analysis.gap_tracker import gaps_with_context
+    from auto_applier.analysis.learning_goals import skills_by_state
+    from collections import Counter, defaultdict
+
+    contexts = gaps_with_context()
+
+    if not contexts:
+        click.echo(
+            "No skill gaps recorded yet.\n"
+            "Run some applications first with: "
+            "python -m auto_applier --cli run --dry-run"
+        )
         return
 
-    click.echo(f"\nTop skill gaps (out of {len(summary)} total):\n")
-    for label, count, category in summary[:30]:
-        click.echo(f"  {count:3d}x  [{category:13s}]  {label}")
+    # Respect learning goals: hide "not_interested" skills entirely,
+    # tag "learning" and "certified" with labels so the user knows.
+    goal_states = skills_by_state()
+    dismissed = goal_states["not_interested"]
+    learning_set = goal_states["learning"]
+    certified_set = goal_states["certified"]
 
-    triggers = engine.check_triggers()
-    if triggers:
-        click.echo(f"\n{len(triggers)} skills ready for resume evolution:")
-        for t in triggers:
-            click.echo(f"  -> {t.skill_name} (seen {t.times_seen}x)")
+    def _annotate(skill: str) -> str:
+        if skill in learning_set:
+            return f"{skill}  [learning]"
+        if skill in certified_set:
+            return f"{skill}  [certified]"
+        return skill
+
+    # Filter out dismissed skills
+    contexts = [c for c in contexts
+                if c.gap.field_label.lower().strip() not in dismissed]
+
+    if not contexts:
+        click.echo(
+            "All tracked gaps have been dismissed.\n"
+            "Run more applications to discover new skills."
+        )
+        return
+
+    # Auto-detect single-resume vs multi-resume. If only one resume
+    # is in use, the --by-resume grouping is just noise.
+    resume_labels = {c.gap.resume_label for c in contexts if c.gap.resume_label}
+    single_resume = len(resume_labels) <= 1
+
+    # FLAT view (default)
+    if not by_resume and not by_title:
+        counter: Counter = Counter()
+        for c in contexts:
+            key = c.gap.field_label.lower().strip()
+            counter[key] += 1
+
+        total = len(contexts)
+        unique = len(counter)
+        click.echo(
+            f"\nSkills you're missing across {total} application"
+            f"{'s' if total != 1 else ''} "
+            f"({unique} unique skill{'s' if unique != 1 else ''}):\n"
+        )
+        for skill, count in counter.most_common(limit):
+            pct = count / total * 100 if total else 0
+            click.echo(f"  {count:3d}  ({pct:4.1f}%)  {_annotate(skill)}")
+
+        if len(counter) > limit:
+            click.echo(f"\n... and {len(counter) - limit} more.")
+
+        click.echo(
+            "\nTIP: Run `python -m auto_applier --cli trends` to see "
+            "which skills to prioritize learning."
+        )
+        return
+
+    # GROUPED view — by resume and/or by title
+    # Decide grouping keys
+    def _group_key(ctx):
+        parts = []
+        if by_resume and not single_resume:
+            parts.append(("resume", ctx.gap.resume_label or "(unknown)"))
+        if by_title:
+            parts.append(("title", ctx.archetype))
+        return tuple(parts) if parts else (("all", "all"),)
+
+    buckets: dict[tuple, Counter] = defaultdict(Counter)
+    for c in contexts:
+        buckets[_group_key(c)][c.gap.field_label.lower().strip()] += 1
+
+    # Print each bucket
+    click.echo("")
+    for group, counts in sorted(buckets.items(), key=lambda x: -sum(x[1].values())):
+        header_parts = []
+        for kind, val in group:
+            if kind == "resume":
+                header_parts.append(f"Resume: {val}")
+            elif kind == "title":
+                header_parts.append(f"Title archetype: {val}")
+        header = "  |  ".join(header_parts) if header_parts else "All"
+        click.echo(f"=== {header} ({sum(counts.values())} gaps) ===")
+        for skill, count in counts.most_common(limit):
+            click.echo(f"  {count:3d}  {skill}")
+        click.echo("")
+
+    if single_resume and by_resume:
+        click.echo(
+            "(You only have one resume loaded, so --by-resume grouping "
+            "was skipped.)"
+        )
+
+
+@cli.command()
+@click.option("--limit", default=10, type=int,
+              help="Max skills to show per section (default 10)")
+def trends(limit):
+    """Show which skills to prioritize learning.
+
+    Groups your recurring gaps into:
+    - Universal skills: show up across MULTIPLE career tracks. These
+      are foundational and unlock jobs in more than one direction.
+    - Track-specific skills: only appear in one archetype.
+
+    Universal skills are usually the highest-leverage things to learn
+    first. If you had to pick one thing, start with #1 here.
+    """
+    from auto_applier.analysis.gap_tracker import gaps_with_context
+    from auto_applier.analysis.learning_goals import skills_by_state
+    from collections import Counter, defaultdict
+
+    contexts = gaps_with_context()
+
+    if not contexts:
+        click.echo(
+            "No skill gaps recorded yet. Apply to some jobs first."
+        )
+        return
+
+    # Filter dismissed / already-certified skills so trends only shows
+    # things the user hasn't dealt with yet.
+    goal_states = skills_by_state()
+    excluded = goal_states["not_interested"] | goal_states["certified"]
+    learning_set = goal_states["learning"]
+
+    # Build: skill -> set of archetypes it appeared in, and total count
+    skill_archetypes: dict[str, set[str]] = defaultdict(set)
+    skill_counts: Counter = Counter()
+    for c in contexts:
+        key = c.gap.field_label.lower().strip()
+        if key in excluded:
+            continue
+        skill_archetypes[key].add(c.archetype)
+        skill_counts[key] += 1
+
+    # Universal = missing in >= 2 different archetypes AND >= 2 apps
+    universal: list[tuple[str, int, set[str]]] = []
+    track_specific: dict[str, list[tuple[str, int]]] = defaultdict(list)
+
+    for skill, count in skill_counts.most_common():
+        archetypes = skill_archetypes[skill]
+        # Don't count 'other' archetype as a real track
+        real_archetypes = archetypes - {"other"}
+        if len(real_archetypes) >= 2 and count >= 2:
+            universal.append((skill, count, real_archetypes))
+        elif len(real_archetypes) == 1:
+            (track,) = real_archetypes
+            track_specific[track].append((skill, count))
+
+    # Present
+    total_apps = len(contexts)
+    click.echo(
+        f"\nBased on {total_apps} application{'s' if total_apps != 1 else ''}, "
+        "here's what to prioritize learning:\n"
+    )
+
+    def _annotate(skill: str) -> str:
+        if skill in learning_set:
+            return f"{skill} [learning]"
+        return skill
+
+    if universal:
+        click.echo("UNIVERSAL skills (highest priority - open more doors):")
+        for skill, count, archetypes in universal[:limit]:
+            archs = ", ".join(sorted(archetypes))
+            click.echo(f"  {count:3d}  {_annotate(skill):36s}  (across: {archs})")
+        click.echo("")
+
+    if track_specific:
+        click.echo("TRACK-SPECIFIC skills (useful only for one career path):")
+        for track in sorted(track_specific.keys()):
+            skills = track_specific[track]
+            if not skills:
+                continue
+            click.echo(f"\n  {track.upper()} track:")
+            for skill, count in skills[:limit]:
+                click.echo(f"    {count:3d}  {_annotate(skill)}")
+        click.echo("")
+
+    if not universal and not track_specific:
+        click.echo(
+            "Not enough data yet — apply to more jobs across different "
+            "role types to see trends."
+        )
+        return
+
+    click.echo(
+        "TIP: Mark a skill you're learning:\n"
+        "     python -m auto_applier --cli learn add <skill>\n"
+        "  Or dismiss one you don't care about:\n"
+        "     python -m auto_applier --cli learn dismiss <skill>"
+    )
 
 
 @cli.command()
