@@ -144,7 +144,11 @@ def auto_mark_ghosted(days: int = GHOST_DAYS) -> int:
 
 
 def outcome_summary() -> dict[str, int]:
-    """Return counts of each outcome across all 'applied' rows.
+    """Return counts of each outcome across all submitted rows.
+
+    Counts both "applied" (real submissions) and "dry_run" rows so
+    users can track outcomes during testing too. Skipped/failed rows
+    have no outcome worth summarizing.
 
     Keys are outcome strings, values are counts. Useful for status
     dashboards.
@@ -153,7 +157,7 @@ def outcome_summary() -> dict[str, int]:
     apps = repository.load_all(Application)
     counter: Counter = Counter()
     for app in apps:
-        if app.status != "applied":
+        if app.status not in ("applied", "dry_run"):
             continue
         counter[app.outcome or "pending"] += 1
     return dict(counter)

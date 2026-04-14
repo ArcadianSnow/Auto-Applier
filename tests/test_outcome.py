@@ -171,6 +171,12 @@ class TestOutcomeSummary:
         summary = outcome_summary()
         assert summary == {}
 
+    def test_includes_dry_run_rows(self, isolated_apps):
+        """Dry runs are testing territory — users want outcome visibility."""
+        repository.save(_app(status="dry_run", outcome="interview"))
+        summary = outcome_summary()
+        assert summary == {"interview": 1}
+
 
 # ------------------------------------------------------------------
 # Constants sanity

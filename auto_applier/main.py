@@ -117,7 +117,19 @@ def _print_run_explainer(applied: int, skipped: int, failed: int, dry_run: bool)
     Tells the user: what the counts mean, and what to do next.
     Pulls recent Application records for a "why were these skipped"
     breakdown so the user isn't guessing.
+
+    Wrapped in a broad try/except at the end because EventEmitter
+    silently swallows handler exceptions. A bug here would make the
+    whole novice summary disappear without any error to investigate.
     """
+    try:
+        _run_explainer_body(applied, skipped, failed, dry_run)
+    except Exception as exc:
+        # Surface the error so we can debug, but don't crash the run.
+        click.echo(f"\n(explainer error: {exc})", err=True)
+
+
+def _run_explainer_body(applied: int, skipped: int, failed: int, dry_run: bool) -> None:
     from auto_applier.storage.models import Application
     from auto_applier.storage.repository import load_all
     from collections import Counter
@@ -125,28 +137,29 @@ def _print_run_explainer(applied: int, skipped: int, failed: int, dry_run: bool)
 
     click.echo("")  # spacer
 
+    # Small helper for plural suffixes
+    def _s(n: int) -> str:
+        return "s" if n != 1 else ""
+
     # What the applied number means
     if applied == 0:
         if skipped == 0 and failed == 0:
             click.echo(
-                "No jobs were scored this run — try a broader search "
+                "No jobs were scored this run - try a broader search "
                 "(different keywords or location)."
             )
             return
-        click.echo(
-            "No applications went through this run."
-        )
+        click.echo("No applications went through this run.")
     else:
         if dry_run:
             click.echo(
-                f"✓ The tool successfully walked through {applied} "
-                "application{s} (but did not submit — this was a test run).".format(
-                    applied=applied, s="s" if applied != 1 else "",
-                )
+                f"[OK] The tool successfully walked through {applied} "
+                f"application{_s(applied)} (but did not submit - "
+                "this was a test run)."
             )
         else:
             click.echo(
-                f"✓ Submitted {applied} application{'s' if applied != 1 else ''}."
+                f"[OK] Submitted {applied} application{_s(applied)}."
             )
 
     # Breakdown of WHY skips happened — pulled from failure_reason
@@ -185,13 +198,15 @@ def _print_run_explainer(applied: int, skipped: int, failed: int, dry_run: bool)
         ]
         if externals:
             click.echo("")
+            plural = "s" if len(externals) != 1 else ""
+            needs = "" if len(externals) != 1 else "s"
             click.echo(
-                f"💡 {len(externals)} high-score job{'s' if len(externals) != 1 else ''} "
-                f"need{'s' if len(externals) == 1 else ''} manual application on the "
+                f"TIP: {len(externals)} high-score job{plural} "
+                f"need{needs} manual application on the "
                 "company's own website."
             )
             click.echo(
-                "   Run: python -m auto_applier --cli almost"
+                "     Run: python -m auto_applier --cli almost"
             )
     except Exception:
         pass
@@ -307,25 +322,15 @@ def status():
         # Display in a meaningful order
         order = ["pending", "acknowledged", "interview", "offer",
                  "rejected", "ghosted", "withdrawn"]
-        icons = {
-            "pending": "⏳",
-            "acknowledged": "📬",
-            "interview": "🎉",
-            "offer": "🏆",
-            "rejected": "❌",
-            "ghosted": "👻",
-            "withdrawn": "↩️",
-        }
         total = sum(summary.values())
         for key in order:
             count = summary.get(key, 0)
             if count == 0:
                 continue
             pct = (count / total * 100) if total else 0
-            icon = icons.get(key, " ")
-            click.echo(f"  {icon} {key:14s}  {count:3d}  ({pct:4.1f}%)")
+            click.echo(f"  {key:14s}  {count:3d}  ({pct:4.1f}%)")
         click.echo(
-            "\n💡 Update outcomes with: "
+            "\nTIP: Update outcomes with: "
             "python -m auto_applier --cli respond <job_id> <outcome>"
         )
 
@@ -391,15 +396,15 @@ def almost(min_score, cover):
                 f"  @ {job.company[:30] if job.company else '(unknown company)'}"
             )
             if job.url:
-                click.echo(f"       → {job.url}")
+                click.echo(f"       URL: {job.url}")
             if app.failure_reason:
                 click.echo(f"       {app.failure_reason}")
             click.echo("")
 
     if not cover:
         click.echo(
-            "💡 To generate cover letters for these, run:\n"
-            "   python -m auto_applier --cli almost --cover\n"
+            "TIP: To generate cover letters for these, run:\n"
+            "     python -m auto_applier --cli almost --cover\n"
         )
         return
 
@@ -438,16 +443,16 @@ async def _generate_almost_cover_letters(candidates, jobs) -> None:
                 preferred_resume=app.resume_used,
             )
         except Exception as exc:
-            click.echo(f"    ✗ Failed: {exc}")
+            click.echo(f"    [FAIL] {exc}")
             failed += 1
             continue
 
         if result is None or not result.letter:
-            click.echo(f"    ✗ Could not generate letter")
+            click.echo(f"    [FAIL] Could not generate letter")
             failed += 1
             continue
 
-        click.echo(f"    ✓ Saved to {result.file_path}")
+        click.echo(f"    [OK] Saved to {result.file_path}")
         success += 1
 
     click.echo(f"\n{success} cover letter(s) saved.")
@@ -504,7 +509,7 @@ def cover(job_id, resume, print_text):
         )
         return
 
-    click.echo(f"\n✓ Cover letter generated for:")
+    click.echo(f"\n[OK] Cover letter generated for:")
     click.echo(f"  {result.job_title} @ {result.company}")
     click.echo(f"  Resume used: {result.resume_label}")
     if result.file_path:
@@ -566,15 +571,15 @@ def respond(job_id, outcome, source, note):
 
     # Friendly confirmation messages per outcome
     messages = {
-        "interview": "🎉 Congrats on the interview! Good luck.",
-        "offer": "🎉 Congratulations on the offer!",
-        "rejected": "Recorded. Don't give up — each 'no' gets you closer.",
+        "interview": "Congrats on the interview! Good luck.",
+        "offer": "Congratulations on the offer!",
+        "rejected": "Recorded. Don't give up - each 'no' gets you closer.",
         "acknowledged": "Recorded the acknowledgement.",
         "ghosted": "Recorded as ghosted.",
         "withdrawn": "Marked as withdrawn.",
         "pending": "Reset to pending.",
     }
-    click.echo(f"\n✓ Outcome recorded: {outcome}")
+    click.echo(f"\n[OK] Outcome recorded: {outcome}")
     click.echo(f"  Job ID: {job_id}")
     if messages.get(outcome):
         click.echo(f"\n{messages[outcome]}")
@@ -599,7 +604,7 @@ def auto_ghost(days):
         )
     else:
         click.echo(
-            f"✓ Marked {count} old application{'s' if count != 1 else ''} as ghosted."
+            f"[OK] Marked {count} old application{'s' if count != 1 else ''} as ghosted."
         )
 
 
