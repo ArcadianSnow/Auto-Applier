@@ -98,9 +98,103 @@ def _on_run_finished(**kw):
     skipped = kw.get("skipped", 0)
     failed = kw.get("failed", 0)
     reason = kw.get("reason", "")
+    dry_run = kw.get("dry_run", False)
+
     click.echo(
         f"\nDone ({reason}). Applied: {applied}, Skipped: {skipped}, Failed: {failed}"
     )
+
+    # Plain-English explainer. The raw numbers above can be confusing
+    # for a first-time user — they might see "Skipped: 7" and think
+    # the tool is broken when actually most skips are perfectly normal
+    # (external apply links, dead listings, low-match jobs).
+    _print_run_explainer(applied, skipped, failed, dry_run)
+
+
+def _print_run_explainer(applied: int, skipped: int, failed: int, dry_run: bool) -> None:
+    """Novice-friendly summary of what just happened.
+
+    Tells the user: what the counts mean, and what to do next.
+    Pulls recent Application records for a "why were these skipped"
+    breakdown so the user isn't guessing.
+    """
+    from auto_applier.storage.models import Application
+    from auto_applier.storage.repository import load_all
+    from collections import Counter
+    import datetime
+
+    click.echo("")  # spacer
+
+    # What the applied number means
+    if applied == 0:
+        if skipped == 0 and failed == 0:
+            click.echo(
+                "No jobs were scored this run — try a broader search "
+                "(different keywords or location)."
+            )
+            return
+        click.echo(
+            "No applications went through this run."
+        )
+    else:
+        if dry_run:
+            click.echo(
+                f"✓ The tool successfully walked through {applied} "
+                "application{s} (but did not submit — this was a test run).".format(
+                    applied=applied, s="s" if applied != 1 else "",
+                )
+            )
+        else:
+            click.echo(
+                f"✓ Submitted {applied} application{'s' if applied != 1 else ''}."
+            )
+
+    # Breakdown of WHY skips happened — pulled from failure_reason
+    # on the most recent skipped/failed Applications.
+    if skipped or failed:
+        apps = load_all(Application)
+        # Just today's records — count per failure reason
+        today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+        recent = [
+            a for a in apps
+            if a.status in ("skipped", "failed")
+            and a.applied_at.startswith(today)
+        ]
+        reason_counts = Counter(
+            a.failure_reason or "other"
+            for a in recent
+        )
+        if reason_counts:
+            click.echo("")
+            click.echo(f"Why jobs were skipped or failed:")
+            for reason, count in reason_counts.most_common(5):
+                label = reason[:60] if reason else "(no reason recorded)"
+                click.echo(f"  {count:3d}  {label}")
+
+    # Hint the user toward `cli almost` if we saw any high-score externals
+    try:
+        from auto_applier.storage.models import Application as App
+        from auto_applier.storage.repository import load_all as _load_all
+        today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+        externals = [
+            a for a in _load_all(App)
+            if a.status == "skipped"
+            and a.applied_at.startswith(today)
+            and a.score >= 8
+            and "company" in (a.failure_reason or "").lower()
+        ]
+        if externals:
+            click.echo("")
+            click.echo(
+                f"💡 {len(externals)} high-score job{'s' if len(externals) != 1 else ''} "
+                f"need{'s' if len(externals) == 1 else ''} manual application on the "
+                "company's own website."
+            )
+            click.echo(
+                "   Run: python -m auto_applier --cli almost"
+            )
+    except Exception:
+        pass
 
 
 def _attach_cli_handlers(events):
@@ -204,6 +298,309 @@ def status():
         click.echo("\nResume usage:")
         for resume, count in resume_counts.most_common():
             click.echo(f"  {resume}: {count}")
+
+    # Outcome breakdown — how are your submitted applications doing?
+    from auto_applier.analysis.outcome import outcome_summary
+    summary = outcome_summary()
+    if summary:
+        click.echo("\nWhat happened after you applied:")
+        # Display in a meaningful order
+        order = ["pending", "acknowledged", "interview", "offer",
+                 "rejected", "ghosted", "withdrawn"]
+        icons = {
+            "pending": "⏳",
+            "acknowledged": "📬",
+            "interview": "🎉",
+            "offer": "🏆",
+            "rejected": "❌",
+            "ghosted": "👻",
+            "withdrawn": "↩️",
+        }
+        total = sum(summary.values())
+        for key in order:
+            count = summary.get(key, 0)
+            if count == 0:
+                continue
+            pct = (count / total * 100) if total else 0
+            icon = icons.get(key, " ")
+            click.echo(f"  {icon} {key:14s}  {count:3d}  ({pct:4.1f}%)")
+        click.echo(
+            "\n💡 Update outcomes with: "
+            "python -m auto_applier --cli respond <job_id> <outcome>"
+        )
+
+
+@cli.command()
+@click.option("--min-score", default=9, type=int,
+              help="Minimum score to surface (default 9)")
+@click.option("--cover", is_flag=True,
+              help="Generate cover letters for all shown jobs")
+def almost(min_score, cover):
+    """Show high-score jobs you should apply to manually.
+
+    Lists jobs that scored >= min-score but couldn't be auto-applied
+    through this platform (because the company wants you to apply
+    on their own website, the posting is externally hosted, etc.).
+
+    These are jobs worth your time to apply manually.
+    """
+    from auto_applier.storage.models import Application, Job
+    from auto_applier.storage.repository import load_all as _load_all
+
+    apps = _load_all(Application)
+    jobs = {j.job_id: j for j in _load_all(Job)}
+
+    # Find skipped applications with preserved scores
+    candidates = [
+        a for a in apps
+        if a.status == "skipped"
+        and a.score >= min_score
+        and a.resume_used  # must have a resume recorded
+    ]
+
+    if not candidates:
+        click.echo(
+            f"\nNo jobs scoring {min_score}+ were skipped yet.\n"
+            "Run some dry-runs or real runs first: "
+            "python -m auto_applier --cli run --dry-run"
+        )
+        return
+
+    # Sort by score descending, then by company for stable display
+    candidates.sort(key=lambda a: (-a.score, jobs.get(a.job_id, Job("", "", "", "")).company))
+
+    click.echo(f"\n{'=' * 60}")
+    click.echo(f"  Good jobs you should apply to manually")
+    click.echo(f"  (scored {min_score}+, but need external application)")
+    click.echo(f"{'=' * 60}\n")
+
+    # Group by recommended resume
+    from collections import defaultdict
+    by_resume: dict[str, list] = defaultdict(list)
+    for app in candidates:
+        by_resume[app.resume_used].append(app)
+
+    for resume_label, app_list in sorted(by_resume.items()):
+        click.echo(f"Use resume: {resume_label}")
+        for app in app_list:
+            job = jobs.get(app.job_id)
+            if not job:
+                continue
+            click.echo(
+                f"  [{app.score:2d}] {job.title[:55]}"
+                f"  @ {job.company[:30] if job.company else '(unknown company)'}"
+            )
+            if job.url:
+                click.echo(f"       → {job.url}")
+            if app.failure_reason:
+                click.echo(f"       {app.failure_reason}")
+            click.echo("")
+
+    if not cover:
+        click.echo(
+            "💡 To generate cover letters for these, run:\n"
+            "   python -m auto_applier --cli almost --cover\n"
+        )
+        return
+
+    # Interactive cover letter generation
+    if not click.confirm(
+        f"\nGenerate cover letters for all {len(candidates)} job(s)?",
+        default=True,
+    ):
+        return
+
+    asyncio.run(_generate_almost_cover_letters(candidates, jobs))
+
+
+async def _generate_almost_cover_letters(candidates, jobs) -> None:
+    """Generate cover letters for each high-score external job."""
+    from auto_applier.llm.router import LLMRouter
+    from auto_applier.resume.manager import ResumeManager
+    from auto_applier.resume.cover_letter_service import generate_cover_letter
+
+    router = LLMRouter()
+    await router.initialize()
+    resume_manager = ResumeManager(router)
+
+    success = 0
+    failed = 0
+    for app in candidates:
+        job = jobs.get(app.job_id)
+        if not job:
+            continue
+        click.echo(f"  Generating cover letter for {job.title} @ {job.company}...")
+        try:
+            result = await generate_cover_letter(
+                job_id=app.job_id,
+                router=router,
+                resume_manager=resume_manager,
+                preferred_resume=app.resume_used,
+            )
+        except Exception as exc:
+            click.echo(f"    ✗ Failed: {exc}")
+            failed += 1
+            continue
+
+        if result is None or not result.letter:
+            click.echo(f"    ✗ Could not generate letter")
+            failed += 1
+            continue
+
+        click.echo(f"    ✓ Saved to {result.file_path}")
+        success += 1
+
+    click.echo(f"\n{success} cover letter(s) saved.")
+    if failed:
+        click.echo(f"{failed} failed — check logs for details.")
+    from auto_applier.config import COVER_LETTERS_DIR
+    click.echo(f"Cover letters folder: {COVER_LETTERS_DIR}")
+
+
+@cli.command()
+@click.argument("job_id")
+@click.option("--resume", default="",
+              help="Override which resume to use (default: auto-pick)")
+@click.option("--print-text", is_flag=True,
+              help="Also print the letter to terminal for copy-paste")
+def cover(job_id, resume, print_text):
+    """Generate a cover letter for any job in your history.
+
+    Writes the letter to data/cover_letters/ as a Markdown file.
+    Uses the resume that was recorded with the application, or the
+    one you pass with --resume.
+    """
+    from auto_applier.llm.router import LLMRouter
+    from auto_applier.resume.manager import ResumeManager
+    from auto_applier.resume.cover_letter_service import generate_cover_letter
+
+    async def run_it():
+        router = LLMRouter()
+        await router.initialize()
+        resume_manager = ResumeManager(router)
+        return await generate_cover_letter(
+            job_id=job_id,
+            router=router,
+            resume_manager=resume_manager,
+            preferred_resume=resume,
+        )
+
+    result = asyncio.run(run_it())
+
+    if result is None:
+        click.echo(
+            f"No job found with id '{job_id}'.\n"
+            "Run `python -m auto_applier --cli show <job_id>` to check.",
+            err=True,
+        )
+        return
+
+    if not result.letter:
+        click.echo(
+            f"Could not generate a cover letter for {result.job_title} "
+            f"@ {result.company}.\n"
+            "Check that Ollama is running and a resume is loaded.",
+            err=True,
+        )
+        return
+
+    click.echo(f"\n✓ Cover letter generated for:")
+    click.echo(f"  {result.job_title} @ {result.company}")
+    click.echo(f"  Resume used: {result.resume_label}")
+    if result.file_path:
+        click.echo(f"  Saved to: {result.file_path}")
+
+    if print_text:
+        click.echo(f"\n{'-' * 60}")
+        click.echo(result.letter)
+        click.echo(f"{'-' * 60}\n")
+
+
+@cli.command()
+@click.argument("job_id")
+@click.argument("outcome", type=click.Choice([
+    "acknowledged", "interview", "rejected", "offer",
+    "ghosted", "withdrawn", "pending",
+]))
+@click.option("--source", default="",
+              help="Narrow match to a specific platform (e.g., indeed)")
+@click.option("--note", default="",
+              help="Optional free-text note")
+def respond(job_id, outcome, source, note):
+    """Record what happened after you applied to a job.
+
+    Examples:
+        python -m auto_applier --cli respond ind-abc123 interview
+        python -m auto_applier --cli respond zr-xyz789 rejected --note "generic email"
+
+    Outcomes:
+        acknowledged — "thanks for applying" email
+        interview    — got an interview invitation
+        rejected     — employer said no
+        offer        — received a job offer
+        ghosted      — no response after many weeks
+        withdrawn    — you withdrew your application
+        pending      — reset to default (haven't heard back yet)
+    """
+    from auto_applier.analysis.outcome import set_outcome
+    try:
+        result = set_outcome(
+            job_id=job_id,
+            outcome=outcome,
+            source=source,
+            note=note,
+        )
+    except ValueError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        return
+
+    if result is None:
+        click.echo(
+            f"No application found for job_id '{job_id}'"
+            + (f" on source '{source}'." if source else ".")
+        )
+        click.echo(
+            "Run `python -m auto_applier --cli status` to see your applications."
+        )
+        return
+
+    # Friendly confirmation messages per outcome
+    messages = {
+        "interview": "🎉 Congrats on the interview! Good luck.",
+        "offer": "🎉 Congratulations on the offer!",
+        "rejected": "Recorded. Don't give up — each 'no' gets you closer.",
+        "acknowledged": "Recorded the acknowledgement.",
+        "ghosted": "Recorded as ghosted.",
+        "withdrawn": "Marked as withdrawn.",
+        "pending": "Reset to pending.",
+    }
+    click.echo(f"\n✓ Outcome recorded: {outcome}")
+    click.echo(f"  Job ID: {job_id}")
+    if messages.get(outcome):
+        click.echo(f"\n{messages[outcome]}")
+
+
+@cli.command("auto-ghost")
+@click.option("--days", default=30, type=int,
+              help="Days without response to mark as ghosted (default 30)")
+def auto_ghost(days):
+    """Auto-mark old pending applications as ghosted.
+
+    Walks through all your applications with outcome=pending and
+    status=applied. If the applied date is older than --days days,
+    marks the outcome as ghosted.
+    """
+    from auto_applier.analysis.outcome import auto_mark_ghosted
+    count = auto_mark_ghosted(days=days)
+    if count == 0:
+        click.echo(
+            f"No applications needed ghosting — all pending applications "
+            f"are newer than {days} days."
+        )
+    else:
+        click.echo(
+            f"✓ Marked {count} old application{'s' if count != 1 else ''} as ghosted."
+        )
 
 
 @cli.command()

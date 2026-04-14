@@ -57,6 +57,17 @@ class Application:
     fields_total: int = 0
     used_llm: bool = False
     applied_at: str = field(default_factory=_now_iso)
+    # Outcome tracking — "what happened after we submitted":
+    #   pending      — we just submitted, haven't heard back
+    #   acknowledged — employer sent a "thanks for applying" email
+    #   interview    — interview invitation received
+    #   rejected     — employer said no
+    #   offer        — received an offer
+    #   ghosted      — no response after 30+ days (auto-set, confirmable)
+    #   withdrawn    — candidate withdrew their application
+    outcome: str = "pending"
+    outcome_at: str = ""  # ISO timestamp when outcome was recorded
+    outcome_note: str = ""  # Optional free-text the user can add
 
 
 @dataclass

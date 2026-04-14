@@ -283,6 +283,7 @@ class ApplicationEngine:
                 applied=self.applied_count,
                 skipped=self.skipped_count,
                 failed=self.failed_count,
+                dry_run=self.dry_run,
             )
 
     # ------------------------------------------------------------------
@@ -476,29 +477,56 @@ class ApplicationEngine:
                     self.events.emit(CAPTCHA_DETECTED, platform=platform_key)
                     return  # Hard stop
 
-                # Skip dead listings and external-only jobs before
-                # any scoring runs. Both states are set by
-                # fetch_description from the already-loaded page, so
-                # this block saves the 20-70 second scoring cost
-                # on jobs we already know can't be applied to via
-                # this platform.
+                # Skip dead listings immediately — can't apply anyway,
+                # so scoring would be wasted work.
+                #
+                # External jobs are different: we WANT to score them so
+                # `cli almost` can surface high-score externals as
+                # manual-apply candidates. This trades ~20-60s of LLM
+                # time per external job for the ability to tell the
+                # user "these 9/10 jobs are worth applying to manually."
                 if job.liveness in ("dead", "external"):
                     self.skipped_count += 1
-                    logger.info(
-                        "Skip: %s [%s] — %s",
-                        job.title[:50], job.liveness, job.job_id,
-                    )
+                    ext_score = 0
+                    ext_resume = ""
+                    if job.liveness == "external":
+                        try:
+                            external_score_result = await self.scorer.score(
+                                job.description, cli_mode=self.cli_mode,
+                            )
+                            ext_score = external_score_result.score
+                            ext_resume = external_score_result.resume_label
+                            logger.info(
+                                "Skipped (apply on company site): %s — "
+                                "score %d/10 with resume '%s'",
+                                job.title[:60], ext_score, ext_resume,
+                            )
+                        except Exception as exc:
+                            logger.debug(
+                                "Could not score external job %s: %s",
+                                job.job_id, exc,
+                            )
+                            logger.info(
+                                "Skipped (apply on company site): %s",
+                                job.title[:60],
+                            )
+                    else:
+                        logger.info(
+                            "Skipped (this job is no longer open): %s",
+                            job.title[:60],
+                        )
                     reason = (
-                        "dead listing" if job.liveness == "dead"
-                        else "external-only listing (no in-platform apply)"
+                        "This job is no longer open"
+                        if job.liveness == "dead"
+                        else "Company wants you to apply on their own website"
                     )
                     save(
                         Application(
                             job_id=job.job_id,
                             status="skipped",
                             source=platform_key,
-                            resume_used="",
-                            score=0,
+                            resume_used=ext_resume,
+                            score=ext_score,
                             failure_reason=reason,
                         )
                     )
@@ -540,7 +568,8 @@ class ApplicationEngine:
                                     resume_used="",
                                     score=0,
                                     failure_reason=(
-                                        f"likely ghost listing: {ghost_result.verdict}"
+                                        f"This job may not be real "
+                                        f"(ghost listing — {ghost_result.verdict})"
                                     ),
                                 )
                             )

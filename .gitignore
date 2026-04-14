@@ -3,6 +3,8 @@
 
 # Data files (contain personal info)
 data/browser_profile/
+data/browser_profile_chromium/
+data/cover_letters/
 data/cache/
 data/profiles/
 data/research/
