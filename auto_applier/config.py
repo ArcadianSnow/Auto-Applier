@@ -76,3 +76,21 @@ try:
     FOLLOWUP_CADENCE_DAYS = [int(d.strip()) for d in _cadence_env.split(",") if d.strip()]
 except ValueError:
     FOLLOWUP_CADENCE_DAYS = [7, 14, 21]
+
+# Title expansion config — set in user_config.json, NOT env vars,
+# so each user can opt in via the wizard / config edit.
+#
+# auto_expand_titles (bool, default False):
+#   When True, if a keyword search returns fewer than
+#   title_expansion_threshold jobs, the engine asks the LLM (or static
+#   fallback dict) for adjacent titles and queues them into the same
+#   keyword loop. Each seed only expands once per run.
+#
+# title_expansion_threshold (int, default 10):
+#   Below this raw-job-count threshold, expansion fires. Bigger numbers
+#   = more aggressive broadening. Set to 0 to effectively disable.
+#
+# Both live under config root in user_config.json:
+#   {"auto_expand_titles": true, "title_expansion_threshold": 8, ...}
+DEFAULT_AUTO_EXPAND_TITLES = False
+DEFAULT_TITLE_EXPANSION_THRESHOLD = 10

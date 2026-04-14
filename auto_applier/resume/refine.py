@@ -96,26 +96,29 @@ def collect_refine_candidates(
     prompted = evolution._load_prompted()
     excluded = excluded_from_goals | prompted
 
-    # Group by (resume, archetype, skill)
-    grouped: dict[tuple[str, str, str], list[GapContext]] = defaultdict(list)
+    # Group by (resume, skill) — count occurrences across all
+    # archetypes. A skill missing in 1 analyst job + 1 engineer job
+    # still counts as 2 occurrences for the user, even though it's
+    # split across archetypes. Archetype becomes metadata (the most
+    # common one for this skill on this resume).
+    grouped: dict[tuple[str, str], list[GapContext]] = defaultdict(list)
     for ctx in contexts:
         key = ctx.gap.field_label.lower().strip()
         if key in excluded:
             continue
-        grouping = (
-            ctx.gap.resume_label or "(unknown)",
-            ctx.archetype,
-            key,
-        )
+        grouping = (ctx.gap.resume_label or "(unknown)", key)
         grouped[grouping].append(ctx)
 
     # Turn groupings into candidates
     candidates: list[RefineCandidate] = []
-    for (resume, archetype, skill), items in grouped.items():
+    for (resume, skill), items in grouped.items():
         if len(items) < min_count:
             continue
-        # Collect example companies/titles for the user to see where
-        # this skill keeps appearing
+        # Most common archetype for this skill+resume becomes the
+        # surfaced label (used for grouping the session display).
+        archetype_counts: Counter = Counter(i.archetype for i in items)
+        primary_archetype = archetype_counts.most_common(1)[0][0]
+
         companies: list[str] = []
         titles: list[str] = []
         seen_co: set[str] = set()
@@ -131,22 +134,24 @@ def collect_refine_candidates(
             skill=skill,
             count=len(items),
             resume_label=resume,
-            archetype=archetype,
+            archetype=primary_archetype,
             sample_companies=companies,
             sample_titles=titles,
             category=items[0].gap.category,
         ))
 
-    # Within each (resume, archetype), keep only top N by count
+    # Within each (resume, primary_archetype), cap to top N by count
+    # so the session stays focused. A skill that primarily appears
+    # in analyst jobs counts toward analyst's quota; one in engineer
+    # jobs counts toward engineer's quota.
     by_group: dict[tuple[str, str], list[RefineCandidate]] = defaultdict(list)
     for c in candidates:
         by_group[(c.resume_label, c.archetype)].append(c)
     for group, items in by_group.items():
         items.sort(key=lambda c: -c.count)
-        # mutate in place: keep top max_per_group
         del items[max_per_group:]
 
-    # Flatten, sort by frequency across the pool
+    # Flatten, sort by frequency overall
     flattened = [c for items in by_group.values() for c in items]
     flattened.sort(key=lambda c: -c.count)
     return flattened
@@ -181,19 +186,12 @@ async def generate_bullets(
     )
 
     try:
+        # The base RESUME_BULLET system prompt now carries the full
+        # hallucination guard. No need to override here — keeps the
+        # GUI evolution panel and CLI refine on the same guardrails.
         result = await router.complete_json(
             prompt=prompt_text,
-            system_prompt=(
-                RESUME_BULLET.system
-                + "\n\nABSOLUTE RULES - violations make the tool unusable:\n"
-                "- Use ONLY facts the user provided. DO NOT invent "
-                "numbers, team sizes, employers, project scopes, "
-                "timelines, or outcome metrics.\n"
-                "- If the user's description is vague, return an empty "
-                "list rather than padding with imagined details.\n"
-                "- Return ONLY a JSON array of strings, no object wrapper. "
-                "Example: [\"Built X\", \"Optimized Y\"]"
-            ),
+            system_prompt=RESUME_BULLET.system,
         )
     except Exception as exc:
         logger.warning("Bullet generation failed: %s", exc)

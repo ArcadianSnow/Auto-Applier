@@ -121,10 +121,26 @@ SKILL_EXTRACT_JD = PromptTemplate(
 
 RESUME_BULLET = PromptTemplate(
     system=(
-        "Generate 2-3 resume bullet points for a confirmed skill. Be "
-        "specific, use strong action verbs, and quantify impact where "
-        "possible. Respond ONLY with a JSON array of strings (no other "
-        "text): [\"bullet 1\", \"bullet 2\", ...]"
+        "Generate 2-3 resume bullet points for a confirmed skill, "
+        "using ONLY facts the user provided in 'Context from user' "
+        "and the existing resume.\n\n"
+        "ABSOLUTE RULES — these prevent the tool from putting lies "
+        "on the candidate's resume:\n"
+        "- Never invent numbers, percentages, dollar amounts, team "
+        "sizes, or other quantitative claims. If the user did not "
+        "give you a number, do NOT add one — even if it would 'look "
+        "better'.\n"
+        "- Never invent employer names, project names, technologies, "
+        "team structures, timelines, or outcome metrics.\n"
+        "- If the user said 'I built a dashboard', you may write "
+        "'Built a dashboard'. You may NOT write 'Built a dashboard "
+        "tracking 12 KPIs for a Fortune 500 retailer'.\n"
+        "- If the user's context is too vague to write specific "
+        "bullets, return an EMPTY JSON array: []. Do not pad with "
+        "imagined details.\n\n"
+        "Style: strong action verbs, concise, ATS-friendly. Respond "
+        "ONLY with a JSON array of strings (no other text, no code "
+        'fences): ["bullet 1", "bullet 2", ...]'
     ),
     template=(
         "Skill: {skill_name}\n"

@@ -49,6 +49,21 @@ python -m auto_applier --cli followup list --due  # pending follow-ups
 python -m auto_applier --cli followup draft <job_id>  # draft follow-up email
 python -m auto_applier --cli archetype list       # archetype routing config
 
+# CLI mode — novice differentiation features (Phases 1-7)
+python -m auto_applier --cli almost               # high-score jobs needing manual apply
+python -m auto_applier --cli almost --cover       # also generate cover letters
+python -m auto_applier --cli cover <job_id>       # on-demand cover letter for any job
+python -m auto_applier --cli respond <job_id> interview --note "..."  # record outcome
+python -m auto_applier --cli auto-ghost --days 30 # auto-mark stale pending apps
+python -m auto_applier --cli expand "Data Analyst" --add  # title expansion w/ approve+save
+python -m auto_applier --cli trends               # what-to-learn-next ranked list
+python -m auto_applier --cli gaps --by-resume --by-title  # grouped gap breakdown
+python -m auto_applier --cli learn add Tableau    # mark skill as learning
+python -m auto_applier --cli learn done Python    # mark skill as certified
+python -m auto_applier --cli learn dismiss Rust   # never suggest again
+python -m auto_applier --cli learn list           # all tracked skills
+python -m auto_applier --cli refine               # interactive resume improvement chat
+
 # Tests (asyncio_mode = "auto" in pyproject.toml)
 pip install -e ".[dev]"
 pytest

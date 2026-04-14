@@ -486,11 +486,20 @@ class ApplicationEngine:
 
         # Build effective keyword list. When auto_expand_titles is on
         # and a keyword yields few jobs, we'll broaden on the fly.
+        from auto_applier.config import (
+            DEFAULT_AUTO_EXPAND_TITLES,
+            DEFAULT_TITLE_EXPANSION_THRESHOLD,
+        )
         effective_keywords = list(keywords)
         already_expanded: set[str] = set()
-        auto_expand = self.config.get("auto_expand_titles", False)
+        auto_expand = self.config.get(
+            "auto_expand_titles", DEFAULT_AUTO_EXPAND_TITLES,
+        )
         expand_threshold = int(
-            self.config.get("title_expansion_threshold", 10)
+            self.config.get(
+                "title_expansion_threshold",
+                DEFAULT_TITLE_EXPANSION_THRESHOLD,
+            )
         )
 
         kw_index = 0

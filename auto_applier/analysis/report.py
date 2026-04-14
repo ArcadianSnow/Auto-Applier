@@ -102,7 +102,7 @@ def print_gaps_report() -> None:
     if triggers:
         click.echo(f"\n  Ready for resume evolution ({len(triggers)} skills):")
         for t in triggers:
-            click.echo(f"    → {t.skill_name} (seen {t.times_seen}x, resume: {t.resume_label or 'any'})")
+            click.echo(f"    -> {t.skill_name} (seen {t.times_seen}x, resume: {t.resume_label or 'any'})")
         click.echo(f"\n  Run the GUI wizard to confirm these skills and update your resume.")
 
     click.echo()

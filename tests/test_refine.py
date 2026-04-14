@@ -107,6 +107,22 @@ class TestCollectRefineCandidates:
         result = collect_refine_candidates()
         assert result == []
 
+    def test_counts_across_archetypes(self, isolated):
+        """A skill missing in 1 analyst job + 1 engineer job should count
+        as 2 occurrences (regression test — earlier grouping by archetype
+        split the count and required min_count to be hit per-archetype)."""
+        _save_job("j_analyst", title="Data Analyst")
+        _save_job("j_engineer", title="Software Engineer")
+        _save_gap("j_analyst", "dbt")
+        _save_gap("j_engineer", "dbt")
+
+        result = collect_refine_candidates(min_count=2)
+        assert len(result) == 1
+        assert result[0].skill == "dbt"
+        assert result[0].count == 2
+        # Primary archetype = first one alphabetically when tied
+        assert result[0].archetype in ("analyst", "engineer")
+
     def test_includes_company_samples(self, isolated):
         companies = ["Airbnb", "Stripe", "Uber"]
         for i, co in enumerate(companies):
