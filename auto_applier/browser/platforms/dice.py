@@ -37,17 +37,27 @@ logger = logging.getLogger(__name__)
 
 # ── Selector Groups (multiple fallbacks for DOM changes) ─────────────
 
-# Indicators that the user is logged in
+# Indicators that the user is logged in.
+#
+# IMPORTANT: These selectors need to match ONLY when logged in, not
+# on Dice's signup / login pages. Generic href selectors like
+# a[href*='/dashboard'] and a[href*='/profile'] are BANNED here
+# because Dice's signup pages have "Already have an account? Go to
+# dashboard" links that match these selectors and cause false
+# positives, leading the tool to walk the signup form as if it were
+# an apply form.
 LOGGED_IN_SELECTORS = [
     "[data-cy='user-menu']",
-    ".user-menu",
-    "img.user-avatar",
     "[data-cy='header-user-menu']",
-    "a[href*='/dashboard']",
+    ".user-menu",
     ".header-user-info",
-    "[aria-label='User Menu']",
-    "a[href*='/profile']",
+    "img.user-avatar",
     ".avatar-img",
+    "[aria-label='User Menu']",
+    # Header avatar image with candidate initials — present only
+    # when the user is logged in
+    "img[alt*='avatar']",
+    "button[aria-label*='account menu' i]",
 ]
 
 # Job card selectors on the search results page. Newest Dice layout
@@ -826,6 +836,51 @@ class DicePlatform(JobPlatform):
             return True
         return False
 
+    async def _looks_like_auth_page(self, page: Page) -> bool:
+        """Detect signup / login / account-creation pages that were
+        mistakenly treated as the apply flow.
+
+        Signals:
+        1. URL contains /login, /register, /signup, /auth, /account/create
+        2. Page has a password input AND a submit button labelled
+           'Sign up', 'Create account', 'Register', or 'Log in'
+
+        Both signals are strong — false positives would require an
+        actual apply form with password fields, which Dice doesn't use.
+        """
+        try:
+            url = (page.url or "").lower()
+        except Exception:
+            url = ""
+        auth_url_patterns = (
+            "/login", "/register", "/signup", "/sign-up",
+            "/auth", "/account/create", "/create-account",
+        )
+        if any(pat in url for pat in auth_url_patterns):
+            return True
+
+        # DOM check — password field + signup/login button text
+        try:
+            has_password = await page.query_selector(
+                "input[type='password']"
+            )
+            if not has_password:
+                return False
+            buttons = await page.query_selector_all("button, input[type='submit']")
+            for btn in buttons:
+                try:
+                    text = (await btn.inner_text()).strip().lower()
+                except Exception:
+                    continue
+                if any(kw in text for kw in (
+                    "sign up", "create account", "register", "log in",
+                    "sign in",
+                )):
+                    return True
+        except Exception:
+            pass
+        return False
+
     async def _walk_easy_apply_modal(
         self, page: Page, job: Job, resume_path: str, dry_run: bool
     ) -> ApplyResult:
@@ -834,6 +889,26 @@ class DicePlatform(JobPlatform):
         Handles: form fields, resume upload, Next/Submit buttons.
         Returns when either Submit is clicked or an error occurs.
         """
+        # SAFETY CHECK: if this is actually a signup/login page (not an
+        # apply page), bail out before we waste 8 modal-step cycles on
+        # a form we can never complete. This catches the common false-
+        # positive where Dice redirects to create-account and our
+        # login selectors mistakenly matched the "go to dashboard"
+        # link in the signup page's nav.
+        if await self._looks_like_auth_page(page):
+            logger.warning(
+                "Dice: apply page looks like a signup/login form — "
+                "bailing out. URL=%s", page.url,
+            )
+            return self._build_result(
+                success=False,
+                failure_reason=(
+                    "Dice redirected to a sign-up / login page instead "
+                    "of the apply form. Please log in to Dice manually "
+                    "in the browser window and retry."
+                ),
+            )
+
         for step in range(MAX_MODAL_STEPS):
             logger.info(
                 "Dice: Easy Apply step %d for %s", step + 1, job.job_id
