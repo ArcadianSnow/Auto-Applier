@@ -93,6 +93,57 @@ class ReadyStep(ttk.Frame):
             command=self.wizard.destroy,
         ).pack(side="right")
 
+        # ------------------------------------------------------------------
+        # After-Run tools — surfaces the new differentiation features
+        # (cli almost / trends / refine equivalents) as GUI panels so
+        # novice users discover them without a terminal.
+        # ------------------------------------------------------------------
+        tools_label = ttk.Label(
+            self,
+            text="After-run tools (use these once you've applied to some jobs):",
+            style="Small.TLabel",
+        )
+        tools_label.pack(anchor="w", padx=PAD_X, pady=(PAD_Y, 4))
+
+        tools_row = tk.Frame(self, bg=BG)
+        tools_row.pack(fill="x", padx=PAD_X, pady=(0, PAD_Y))
+
+        ttk.Button(
+            tools_row, text="Jobs to apply manually",
+            command=self._open_almost,
+        ).pack(side="left", padx=(0, 8))
+
+        ttk.Button(
+            tools_row, text="What to learn next",
+            command=self._open_trends,
+        ).pack(side="left", padx=(0, 8))
+
+        ttk.Button(
+            tools_row, text="Refine my resume",
+            command=self._open_refine,
+        ).pack(side="left", padx=(0, 8))
+
+        ttk.Button(
+            tools_row, text="Track outcomes",
+            command=self._open_outcome_tracker,
+        ).pack(side="left", padx=(0, 8))
+
+    def _open_almost(self) -> None:
+        from auto_applier.gui.panels.almost import AlmostPanel
+        AlmostPanel(self.wizard)
+
+    def _open_trends(self) -> None:
+        from auto_applier.gui.panels.trends import TrendsPanel
+        TrendsPanel(self.wizard)
+
+    def _open_refine(self) -> None:
+        from auto_applier.gui.panels.refine import RefinePanel
+        RefinePanel(self.wizard)
+
+    def _open_outcome_tracker(self) -> None:
+        from auto_applier.gui.panels.outcome_tracker import OutcomeTrackerPanel
+        OutcomeTrackerPanel(self.wizard)
+
     def _recheck(self) -> None:
         """Re-run the checks without rebuilding the summary."""
         for w in self._preflight_rows:

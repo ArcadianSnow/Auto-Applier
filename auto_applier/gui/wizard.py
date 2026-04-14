@@ -64,23 +64,28 @@ class WizardApp(tk.Tk):
         from auto_applier.gui.steps.answers import AnswersStep
         from auto_applier.gui.steps.ready import ReadyStep
 
+        # AI Setup moved to position 2 — needs to run before
+        # Resumes (skill extraction uses LLM) and Preferences
+        # (title expansion uses LLM). Verifying Ollama early
+        # prevents the user from configuring everything else only
+        # to find the AI step fails at the end.
         self.step_classes = [
             WelcomeStep,
+            LLMSetupStep,
             SitesStep,
             ResumesStep,
             PersonalStep,
             PreferencesStep,
-            LLMSetupStep,
             AnswersStep,
             ReadyStep,
         ]
         self.step_labels = [
             "Welcome",
+            "AI Setup",
             "Platforms",
             "Resumes",
             "Personal",
             "Preferences",
-            "AI Setup",
             "Answers",
             "Ready",
         ]
