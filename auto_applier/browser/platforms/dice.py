@@ -279,11 +279,11 @@ class DicePlatform(JobPlatform):
         )
 
         # Wait for user to log in manually (5 minute timeout).
-        # Use ONLY the logged-in selector — the URL pattern "dice.com"
-        # matches the login page itself, causing false positives.
+        # Pass ALL logged-in selectors — any match confirms login.
+        # URL pattern "dice.com" is a false positive (matches login page).
         return await self.wait_for_manual_login(
             page,
-            check_selector=LOGGED_IN_SELECTORS[0],
+            check_selector=LOGGED_IN_SELECTORS,
             timeout=300,
         )
 
@@ -750,7 +750,7 @@ class DicePlatform(JobPlatform):
                 )
                 logged_back = await self.wait_for_manual_login(
                     page,
-                    check_selector=LOGGED_IN_SELECTORS[0],
+                    check_selector=LOGGED_IN_SELECTORS,
                     timeout=180,
                 )
                 if not logged_back:

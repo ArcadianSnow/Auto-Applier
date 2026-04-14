@@ -443,32 +443,43 @@ class JobPlatform(ABC):
         self,
         page: Page,
         check_url_pattern: str = "",
-        check_selector: str = "",
+        check_selector: str | list[str] = "",
         timeout: int = 300,
     ) -> bool:
         """Wait for the user to manually log in via the headed browser.
 
         Polls every 2 seconds for login indicators (URL pattern or
         DOM selector). Times out after ``timeout`` seconds (default 5 min).
+
+        ``check_selector`` accepts either a single CSS selector string
+        or a list of selectors — any match wins. Platforms typically
+        pass their full LOGGED_IN_SELECTORS list so fallback selectors
+        catch the login state even when the primary one changes.
         """
+        if isinstance(check_selector, str):
+            selectors = [check_selector] if check_selector else []
+        else:
+            selectors = list(check_selector)
+
         logger.info(
-            "Waiting for manual login on %s (timeout=%ds)...",
+            "Waiting for manual login on %s (timeout=%ds, %d selectors)...",
             self.display_name,
             timeout,
+            len(selectors),
         )
         start = time.monotonic()
         while time.monotonic() - start < timeout:
             if check_url_pattern and check_url_pattern in page.url:
                 logger.info("Login detected via URL pattern")
                 return True
-            if check_selector:
+            for sel in selectors:
                 try:
-                    el = await page.query_selector(check_selector)
+                    el = await page.query_selector(sel)
                     if el:
-                        logger.info("Login detected via selector")
+                        logger.info("Login detected via selector: %s", sel)
                         return True
                 except Exception:
-                    pass
+                    continue
             await asyncio.sleep(2.0)
 
         logger.warning("Manual login timed out after %ds", timeout)

@@ -285,11 +285,12 @@ class ZipRecruiterPlatform(JobPlatform):
             wait_until="domcontentloaded",
         )
 
-        # Wait for user to log in manually (5 minute timeout)
+        # Wait for user to log in manually (5 minute timeout).
+        # Pass ALL logged-in selectors — any match confirms login.
+        # URL pattern "ziprecruiter.com" is false-positive on login page.
         return await self.wait_for_manual_login(
             page,
-            check_url_pattern="ziprecruiter.com",
-            check_selector=LOGGED_IN_SELECTORS[0],
+            check_selector=LOGGED_IN_SELECTORS,
             timeout=300,
         )
 
@@ -950,6 +951,38 @@ class ZipRecruiterPlatform(JobPlatform):
 
         return False
 
+    # Labels that belong to the ZipRecruiter page CHROME (persistent
+    # header search bar, footer, etc.) — NOT the application form.
+    # Stepping through the form loop and only finding these means
+    # the apply form has closed / submitted and we should stop looping.
+    _CHROME_LABEL_PATTERNS = (
+        "search for job title",
+        "search job title",
+        "search jobs",
+        "search keyword",
+        "location",  # ONLY when paired with "search"
+        "what",
+        "where",
+    )
+
+    def _is_chrome_field(self, label: str) -> bool:
+        """True if a field label looks like page chrome (header search bar)."""
+        lower = label.lower().strip()
+        # Exact match to known chrome labels
+        chrome_exact = {
+            "search for job title or keyword",
+            "search job title and location",
+            "search job title",
+            "search",
+            "zip code and/or city, state",  # ZR header location input
+        }
+        if lower in chrome_exact:
+            return True
+        # "Search ..." at the start is always chrome
+        if lower.startswith("search for") or lower.startswith("search job"):
+            return True
+        return False
+
     async def _walk_application_form(
         self, page: Page, job: Job, resume_path: str, dry_run: bool
     ) -> ApplyResult:
@@ -957,7 +990,14 @@ class ZipRecruiterPlatform(JobPlatform):
 
         ZipRecruiter forms are typically shorter than LinkedIn or
         Indeed -- often just a resume upload and 1-3 screener questions.
+
+        Tracks whether each step found real application-form fields
+        vs. only page chrome (header search bar). If we previously
+        filled real fields but a later step only sees chrome, the
+        apply form is gone — treat as submission complete.
         """
+        any_real_fields_filled = False
+
         for step in range(MAX_FORM_STEPS):
             logger.info(
                 "ZipRecruiter: Application form step %d for %s",
@@ -970,14 +1010,39 @@ class ZipRecruiterPlatform(JobPlatform):
             # Handle resume upload on this step
             await self._handle_resume_upload(page, resume_path)
 
-            # Detect and fill form fields
+            # Detect and fill form fields — filter out page chrome
+            real_fields_on_step = 0
             if self.form_filler:
                 fields = await find_form_fields(page)
-                for field in fields:
+                real_fields = [
+                    f for f in fields if not self._is_chrome_field(f.label)
+                ]
+                for field in real_fields:
                     await self.form_filler.fill_field(
                         page, field, job_id=job.job_id
                     )
                     await random_delay(0.5, 1.5)
+                real_fields_on_step = len(real_fields)
+                if real_fields_on_step > 0:
+                    any_real_fields_filled = True
+                logger.debug(
+                    "ZipRecruiter: step %d — %d real fields, %d chrome fields",
+                    step + 1, real_fields_on_step,
+                    len(fields) - real_fields_on_step,
+                )
+
+            # If we've previously filled real fields but this step has
+            # none, the apply form is gone. Assume success — ZR's apply
+            # flow often closes the modal silently after submit.
+            if any_real_fields_filled and real_fields_on_step == 0 and step > 0:
+                logger.info(
+                    "ZipRecruiter: apply form closed (only chrome fields "
+                    "remain) — treating as submission complete for %s",
+                    job.job_id,
+                )
+                return self._build_result(
+                    success=True, dry_run=dry_run,
+                )
 
             await simulate_organic_behavior(page)
 
