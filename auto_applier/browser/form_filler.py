@@ -338,6 +338,26 @@ class FormFiller:
                 self.used_llm = True
                 logger.debug("  LLM returned → %r", answer)
 
+        # Priority 4.5: Neutral fallback for free-text fields only.
+        # When Ollama exhausts and returns empty on a required textarea,
+        # the whole form dead-locks because required-field validation
+        # blocks Continue. A neutral "I'd be happy to discuss..." answer
+        # keeps the form moving without fabricating factual claims.
+        #
+        # DELIBERATELY LIMITED to textarea / long-form text fields —
+        # never fabricates for yes/no, number, select, radio, checkbox
+        # where a made-up answer could be actively wrong on the app.
+        if not answer:
+            fallback = self._neutral_fallback(field)
+            if fallback:
+                logger.info(
+                    "  → LLM empty, using neutral fallback for '%s'",
+                    field.label[:60],
+                )
+                answer = fallback
+                # Still record the gap so the user sees this happened
+                self._record_gap(field, job_id)
+
         # Priority 5: Record as gap
         if not answer:
             logger.debug("  → NO ANSWER FOUND, recording as skill gap")
@@ -548,6 +568,68 @@ class FormFiller:
         except Exception as exc:
             logger.warning("LLM answer generation failed for '%s': %s", field.label, exc)
             return ""
+
+    # ------------------------------------------------------------------
+    # Neutral fallback for dead-locked required fields
+    # ------------------------------------------------------------------
+
+    # Phrases that suggest an open-ended question. When the label
+    # matches ANY of these AND the field is text/textarea, we use
+    # the neutral fallback instead of leaving the field empty.
+    _OPEN_ENDED_PATTERNS = (
+        "tell us about",
+        "tell me about",
+        "describe",
+        "why do you want",
+        "why are you",
+        "what interests",
+        "what makes you",
+        "what attracted",
+        "cover letter",  # already handled earlier, but safe to include
+        "anything else",
+        "additional information",
+        "share your",
+        "elaborate",
+        "explain",
+        "questions for us",
+    )
+
+    _NEUTRAL_OPEN_ENDED = (
+        "I would be happy to discuss this in more detail during an "
+        "interview."
+    )
+
+    def _neutral_fallback(self, field: FormField) -> str:
+        """Return a safe placeholder for free-text required fields.
+
+        Only fires when:
+        - field.field_type is 'text' or 'textarea'
+        - the label matches an open-ended question pattern (above) OR
+          the field is a textarea (textareas are almost always free-text)
+
+        Returns empty string for number, select, radio, checkbox, date,
+        file — fabricating answers for those would put factually wrong
+        data on the application (e.g. an invented years-of-experience
+        number could disqualify the candidate at pre-screen).
+        """
+        if field.field_type not in ("text", "textarea"):
+            return ""
+
+        label_lower = field.label.lower()
+
+        # Textareas are almost always free-text open-ended by UI
+        # convention. Safe to fallback.
+        if field.field_type == "textarea":
+            return self._NEUTRAL_OPEN_ENDED
+
+        # Text inputs — only fallback when the label LOOKS like an
+        # open-ended question. Avoid text inputs that want a number,
+        # date, yes/no, or specific factual answer.
+        for pattern in self._OPEN_ENDED_PATTERNS:
+            if pattern in label_lower:
+                return self._NEUTRAL_OPEN_ENDED
+
+        return ""
 
     # ------------------------------------------------------------------
     # Cover Letter
