@@ -139,7 +139,27 @@ MAX_MODAL_STEPS = 8  # Safety limit for multi-step modals
 class LinkedInPlatform(JobPlatform):
     """LinkedIn job search and Easy Apply adapter.
 
-    Requires the user to be logged in manually -- this adapter will
+    ⚠️  EXPERIMENTAL — USE WITH CAUTION.
+
+    LinkedIn has the most aggressive bot detection of any job board
+    we integrate with. Even with patchright + human-like mouse paths
+    + URL-based login detection + all the hardening ported from
+    Dice/ZR, real-world validation on 2026-04-14 showed LinkedIn
+    silently serving empty job-detail pages (no description, no
+    Easy Apply button) when it flagged the session as automated —
+    a "soft ban" that doesn't trigger CAPTCHA but makes the tool
+    useless.
+
+    Guidance for users:
+    - Keep LinkedIn DISABLED in user_config.json unless you accept
+      the risk of a temporary account review or ban.
+    - If LinkedIn stops returning job descriptions mid-run, STOP
+      and wait 24-48 hours before retrying.
+    - Prefer to use `cli almost` to surface high-score non-LinkedIn
+      jobs and apply to LinkedIn manually.
+    - Never run LinkedIn more than once per day if you do enable it.
+
+    Requires the user to be logged in manually — this adapter will
     never automate credential entry. It navigates to LinkedIn, checks
     for login indicators, and waits for the user if needed.
     """
@@ -585,14 +605,32 @@ class LinkedInPlatform(JobPlatform):
     # Job Description
     # ------------------------------------------------------------------
 
+    # Tracks consecutive empty-description failures. LinkedIn soft-
+    # blocks sessions it flags as automated by serving the job page
+    # but stripping the description + Easy Apply button. Hammering
+    # through more jobs after this starts happening risks tripping
+    # harder detection (temporary account review). We bail early.
+    _LI_CONSECUTIVE_EMPTY_DESCRIPTIONS: int = 0
+    _LI_MAX_CONSECUTIVE_EMPTY: int = 2
+
     async def get_job_description(self, job: Job) -> str:
-        """Navigate to the job detail page and extract the description."""
+        """Navigate to the job detail page and extract the description.
+
+        If LinkedIn returns empty descriptions for N jobs in a row,
+        raises CaptchaDetectedError to stop the platform run. This
+        is a SOFT-BLOCK detection — LinkedIn isn't serving a CAPTCHA
+        but is stripping content because it flagged the session.
+        Continuing would just waste cycles and risk escalation.
+        """
         page = await self.get_page()
 
         if job.url:
             await page.goto(job.url, wait_until="domcontentloaded")
         else:
-            logger.warning("LinkedIn: No URL for job %s, cannot fetch description", job.job_id)
+            logger.warning(
+                "LinkedIn: No URL for job %s, cannot fetch description",
+                job.job_id,
+            )
             return ""
 
         await reading_pause(page)
@@ -612,16 +650,41 @@ class LinkedInPlatform(JobPlatform):
         await random_delay(0.5, 1.5)
 
         # Extract description text
-        description = await self.safe_get_text(page, JOB_DESCRIPTION_SELECTORS, timeout=5000)
+        description = await self.safe_get_text(
+            page, JOB_DESCRIPTION_SELECTORS, timeout=5000,
+        )
 
         if description:
+            # Reset the soft-block counter on any successful extract
+            self._LI_CONSECUTIVE_EMPTY_DESCRIPTIONS = 0
             logger.debug(
                 "LinkedIn: Got description for %s (%d chars)",
-                job.job_id,
-                len(description),
+                job.job_id, len(description),
             )
         else:
-            logger.warning("LinkedIn: Could not extract description for %s", job.job_id)
+            self._LI_CONSECUTIVE_EMPTY_DESCRIPTIONS += 1
+            logger.warning(
+                "LinkedIn: Could not extract description for %s "
+                "(%d consecutive empty)",
+                job.job_id,
+                self._LI_CONSECUTIVE_EMPTY_DESCRIPTIONS,
+            )
+            if self._LI_CONSECUTIVE_EMPTY_DESCRIPTIONS >= self._LI_MAX_CONSECUTIVE_EMPTY:
+                # Likely soft-blocked — stop to protect the account.
+                # Raise CaptchaDetectedError so the engine halts the
+                # platform run cleanly (same path as real CAPTCHAs).
+                logger.error(
+                    "LinkedIn: %d consecutive empty job descriptions — "
+                    "session appears soft-blocked. Stopping LinkedIn to "
+                    "protect the account. Wait 24-48h before retrying.",
+                    self._LI_CONSECUTIVE_EMPTY_DESCRIPTIONS,
+                )
+                raise CaptchaDetectedError(
+                    f"LinkedIn appears to have soft-blocked this session "
+                    f"({self._LI_CONSECUTIVE_EMPTY_DESCRIPTIONS} jobs "
+                    "returned empty descriptions in a row). Stopping to "
+                    "protect your account."
+                )
 
         return description
 

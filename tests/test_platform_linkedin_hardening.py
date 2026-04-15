@@ -230,6 +230,91 @@ class TestLinkedInConfig:
 
 
 # ------------------------------------------------------------------
+# Soft-block detector (consecutive empty descriptions)
+# ------------------------------------------------------------------
+
+class TestSoftBlockDetector:
+    """LinkedIn soft-blocks flagged sessions by serving empty job
+    pages. After N consecutive empty descriptions, the adapter must
+    raise CaptchaDetectedError to halt the platform run."""
+
+    def _setup_platform(self, description_texts: list[str]):
+        """Build a platform with get_page + safe_get_text stubs
+        that return the given description texts in sequence."""
+        from unittest.mock import patch
+
+        platform = _platform()
+        platform._LI_CONSECUTIVE_EMPTY_DESCRIPTIONS = 0
+        platform._LI_MAX_CONSECUTIVE_EMPTY = 2
+
+        page = MagicMock()
+        page.url = "https://www.linkedin.com/feed/"
+        page.goto = AsyncMock()
+        page.query_selector = AsyncMock(return_value=None)
+
+        platform.get_page = AsyncMock(return_value=page)
+        platform.safe_click = AsyncMock(return_value=False)
+        platform.safe_get_text = AsyncMock(side_effect=description_texts)
+        platform.check_and_abort_on_captcha = AsyncMock()
+
+        return platform
+
+    def test_empty_description_increments_counter(self):
+        from auto_applier.browser.base_platform import CaptchaDetectedError
+        from auto_applier.storage.models import Job
+        from unittest.mock import patch
+
+        platform = self._setup_platform(["", ""])
+
+        async def run_twice():
+            # Patch reading_pause to be a no-op async
+            async def _no_op(*a, **kw): pass
+            with patch(
+                "auto_applier.browser.platforms.linkedin.reading_pause",
+                _no_op,
+            ), patch(
+                "auto_applier.browser.platforms.linkedin.random_delay",
+                _no_op,
+            ):
+                job1 = Job(job_id="a", title="t", company="c",
+                           url="https://www.linkedin.com/jobs/view/1")
+                await platform.get_job_description(job1)
+                assert platform._LI_CONSECUTIVE_EMPTY_DESCRIPTIONS == 1
+
+                job2 = Job(job_id="b", title="t", company="c",
+                           url="https://www.linkedin.com/jobs/view/2")
+                with pytest.raises(CaptchaDetectedError) as exc_info:
+                    await platform.get_job_description(job2)
+                assert "soft-blocked" in str(exc_info.value).lower()
+
+        _run(run_twice())
+
+    def test_successful_description_resets_counter(self):
+        from auto_applier.storage.models import Job
+        from unittest.mock import patch
+
+        platform = self._setup_platform(["Real description content here."])
+        platform._LI_CONSECUTIVE_EMPTY_DESCRIPTIONS = 1  # one already failed
+
+        async def run_once():
+            async def _no_op(*a, **kw): pass
+            with patch(
+                "auto_applier.browser.platforms.linkedin.reading_pause",
+                _no_op,
+            ), patch(
+                "auto_applier.browser.platforms.linkedin.random_delay",
+                _no_op,
+            ):
+                job = Job(job_id="a", title="t", company="c",
+                          url="https://www.linkedin.com/jobs/view/1")
+                result = await platform.get_job_description(job)
+                assert "Real description" in result
+                assert platform._LI_CONSECUTIVE_EMPTY_DESCRIPTIONS == 0
+
+        _run(run_once())
+
+
+# ------------------------------------------------------------------
 # Apply result summary logging
 # ------------------------------------------------------------------
 
