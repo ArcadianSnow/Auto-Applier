@@ -129,7 +129,9 @@ Pipeline: discover -> fetch description -> score (all resumes) -> decide -> fill
 
 ### Cross-Source Deduplication (`storage/dedup.py`)
 
-Canonical hashing: `normalize_title(title) + normalize_company(company)` -> SHA-256. Before scoring, the engine checks `job_seen_canonically(hash)` to skip cross-posted duplicates (same job on LinkedIn and Indeed). Per-source dedup via `job_already_applied(job_id, source)` catches re-runs.
+Canonical hashing: `normalize_title(title) + normalize_company(company)` -> SHA-256. Before scoring, the engine checks `job_seen_canonically(hash)` to skip cross-posted duplicates (same job on LinkedIn and Indeed). Per-source dedup via `job_already_processed(job_id, source)` catches re-runs.
+
+**Dedup keys off PROCESSED state, not scraped state.** A Job that was scraped but never scored (budget ran out mid-batch, stop flag fired, platform crashed) does NOT dedupe — continuous-run mode relies on this so cycle 2 can reach jobs cycle 1 ran out of budget on. Both helpers join applications → jobs: only canonical_hashes / (job_id, source) pairs with at least one Application row dedup. Use `repository.processed_pairs()` and `repository.processed_canonical_hashes()` for batch-friendly one-shot loads.
 
 ### Ghost Job Detection (`browser/ghost_check.py`)
 

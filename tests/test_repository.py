@@ -53,6 +53,39 @@ class TestRepository:
         assert repository.job_already_applied("test1", "indeed") == False
         assert repository.job_already_applied("test2", "linkedin") == False
 
+    def test_job_already_processed_includes_skipped(self, temp_csvs):
+        """Phase A: any Application row dedupes, not just 'applied'.
+        Continuous mode would otherwise re-score skipped jobs every cycle."""
+        repository.save(Application(job_id="s1", status="skipped", source="indeed"))
+        assert repository.job_already_processed("s1", "indeed") == True
+
+    def test_processed_pairs_batch_helper(self, temp_csvs):
+        """Batch-level dedup source used by pipeline.discover_jobs."""
+        repository.save(Application(job_id="a", status="applied", source="indeed"))
+        repository.save(Application(job_id="b", status="skipped", source="dice"))
+        pairs = repository.processed_pairs()
+        assert ("a", "indeed") in pairs
+        assert ("b", "dice") in pairs
+        assert ("c", "linkedin") not in pairs
+
+    def test_processed_canonical_hashes_joins_jobs(self, temp_csvs):
+        """Must join applications → jobs so unscored Jobs don't dedupe."""
+        scored = Job(
+            job_id="j1", title="Senior Data Analyst",
+            company="Acme", url="u", source="linkedin",
+        )
+        unscored = Job(
+            job_id="j2", title="Staff Engineer",
+            company="Other", url="u2", source="indeed",
+        )
+        repository.save(scored)
+        repository.save(unscored)
+        repository.save(Application(job_id="j1", status="skipped", source="linkedin"))
+
+        hashes = repository.processed_canonical_hashes()
+        assert scored.canonical_hash in hashes
+        assert unscored.canonical_hash not in hashes
+
     def test_multiple_records(self, temp_csvs):
         for i in range(5):
             repository.save(Job(job_id=f"j{i}", title=f"Job {i}", company="Co", url="https://x.com"))

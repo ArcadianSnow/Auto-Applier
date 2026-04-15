@@ -101,31 +101,77 @@ def load_all(model_type: Type[T]) -> list[T]:
     return records
 
 
-def job_already_applied(job_id: str, source: str) -> bool:
-    """Check whether this job has already been applied to (or dry-run applied)."""
+def job_already_processed(job_id: str, source: str) -> bool:
+    """Return True if any Application exists for this (job_id, source).
+
+    "Processed" covers every terminal state the scoring pipeline can
+    reach: applied, dry_run, skipped (low score / ghost / external /
+    discovery-only). The job has already been seen and graded, so
+    re-running scoring in a subsequent cycle would just burn LLM time
+    for the same verdict.
+
+    Unscored Jobs in jobs.csv — those scraped but never picked up by
+    the engine's inner loop (e.g. because the per-platform budget was
+    hit mid-batch in an earlier cycle) — intentionally do NOT dedupe
+    here. Continuous mode needs to be able to come back to them next
+    cycle.
+    """
     for app in load_all(Application):
-        if (
-            app.job_id == job_id
-            and app.source == source
-            and app.status in ("applied", "dry_run")
-        ):
+        if app.job_id == job_id and app.source == source:
             return True
     return False
 
 
+# Kept as an alias so external callers / old scripts keep working.
+# Prefer ``job_already_processed`` for new code.
+job_already_applied = job_already_processed
+
+
+def processed_pairs() -> set[tuple[str, str]]:
+    """Return every (job_id, source) pair with any Application row.
+
+    Batch-friendly companion to ``job_already_processed``. Call once
+    per batch and check pair membership in-memory instead of
+    re-reading applications.csv per job.
+    """
+    return {(a.job_id, a.source) for a in load_all(Application)}
+
+
+def processed_canonical_hashes() -> set[str]:
+    """Return canonical_hashes of Jobs that have at least one Application.
+
+    Batch-friendly companion to ``job_seen_canonically``. Joins
+    jobs → applications so unscored jobs don't dedupe — which is
+    required for continuous-run mode where cycle 1 may only score
+    the first 3 of 99 scraped jobs and cycle 2 must be free to reach
+    the remaining 96.
+    """
+    processed_ids = {a.job_id for a in load_all(Application)}
+    return {
+        j.canonical_hash
+        for j in load_all(Job)
+        if j.canonical_hash and j.job_id in processed_ids
+    }
+
+
 def job_seen_canonically(canonical_hash: str) -> bool:
-    """Return True if any previously-recorded job has this canonical hash.
+    """Return True if this canonical_hash has been PROCESSED before.
 
     Used to skip cross-posted duplicates — the same "Senior Data
     Analyst at Acme Corp" listing appearing on both LinkedIn and
     Indeed, within or across runs.
 
+    "Processed" means any Application row exists for any Job with
+    this hash. A Job that was scraped but never scored (budget ran
+    out mid-batch) does NOT dedupe — continuous-run mode relies on
+    this so later cycles can pick up where earlier cycles stopped.
+
     Empty hash is always False (unknown identity — callers fall back
-    to per-source ``job_already_applied``).
+    to per-source ``job_already_processed``).
     """
     if not canonical_hash:
         return False
-    return any(job.canonical_hash == canonical_hash for job in load_all(Job))
+    return canonical_hash in processed_canonical_hashes()
 
 
 def schedule_followups(

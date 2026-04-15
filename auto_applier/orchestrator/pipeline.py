@@ -43,31 +43,28 @@ async def discover_jobs(
     # Build dedup sets ONCE per batch instead of re-reading the CSVs on
     # every iteration. Naive per-job calls gave us O(jobs × rows) reads
     # that would noticeably degrade after a few hundred runs.
-    applied_pairs: set[tuple[str, str]] = set()
-    canonical_hashes: set[str] = set()
+    #
+    # Both sets deliberately key off PROCESSED state (any Application
+    # row exists), not Jobs-as-scraped. That keeps continuous-run mode
+    # honest: cycle 1 may only score 3 of 99 scraped jobs because the
+    # per-platform budget ran out, and cycle 2 has to be free to pick
+    # up the other 96. Dedupping on the raw Job set would bury them.
+    processed_pairs: set[tuple[str, str]] = set()
+    processed_hashes: set[str] = set()
     if not dry_run:
-        from auto_applier.storage.models import Application as _App
-        applied_pairs = {
-            (a.job_id, a.source)
-            for a in repository.load_all(_App)
-            if a.status in ("applied", "dry_run")
-        }
-        canonical_hashes = {
-            j.canonical_hash
-            for j in repository.load_all(Job)
-            if j.canonical_hash
-        }
+        processed_pairs = repository.processed_pairs()
+        processed_hashes = repository.processed_canonical_hashes()
 
     for job in all_jobs:
         if not dry_run:
-            if (job.job_id, job.source) in applied_pairs:
+            if (job.job_id, job.source) in processed_pairs:
                 filtered_applied += 1
                 continue
             if job.canonical_hash:
                 if job.canonical_hash in seen_this_batch:
                     filtered_batch_dup += 1
                     continue
-                if job.canonical_hash in canonical_hashes:
+                if job.canonical_hash in processed_hashes:
                     filtered_canonical += 1
                     continue
                 seen_this_batch.add(job.canonical_hash)

@@ -39,6 +39,10 @@ from auto_applier.orchestrator.events import (
     EVOLUTION_TRIGGERS,
     RUN_FINISHED,
     CAPTCHA_DETECTED,
+    CYCLE_STARTED,
+    CYCLE_IDLE,
+    CYCLE_RESUMING,
+    CONTINUOUS_FINISHED,
 )
 from auto_applier.orchestrator.pipeline import discover_jobs, fetch_description, apply_to_job
 
@@ -85,17 +89,50 @@ class ApplicationEngine:
         # starts after the flag is set.
         self._stop_requested: bool = False
 
+        # Continuous-mode flags. When _keep_browser_alive is True,
+        # stop() leaves the browser running so the next cycle reuses
+        # the same session (warmer fingerprint, no re-login).
+        # _stop_after_cycle is a softer stop than _stop_requested —
+        # it lets the CURRENT cycle finish naturally but skips the
+        # next idle/cycle in run_continuous(). The GUI can wire a
+        # separate "Finish this cycle and quit" button to it.
+        self._started: bool = False
+        self._keep_browser_alive: bool = False
+        self._stop_after_cycle: bool = False
+        self._current_cycle: int = 0
+
     def request_stop(self) -> None:
         """Signal the engine to stop after the current job finishes."""
         self._stop_requested = True
         logger.info("Stop requested — will finish current job and exit.")
+
+    def request_stop_after_cycle(self) -> None:
+        """Finish the current continuous cycle cleanly, then stop.
+
+        Softer than request_stop(): the current cycle's applications
+        all complete normally, but run_continuous() breaks out of the
+        loop instead of sleeping for the next idle window. No effect
+        in single-run mode.
+        """
+        self._stop_after_cycle = True
+        logger.info(
+            "Stop-after-cycle requested — will finish this cycle and exit.",
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     async def start(self):
-        """Initialize all components."""
+        """Initialize all components.
+
+        Idempotent — safe to call multiple times. Continuous-run mode
+        calls start() once and then run() many times; run() also calls
+        start() at the top. The second call is a no-op.
+        """
+        if self._started:
+            return
+
         # LLM router
         self.router = LLMRouter()
         await self.router.initialize()
@@ -121,10 +158,22 @@ class ApplicationEngine:
         self.browser = BrowserSession()
         await self.browser.start()
 
+        self._started = True
+
     async def stop(self):
-        """Clean up resources."""
+        """Clean up resources.
+
+        In continuous mode, ``_keep_browser_alive`` suppresses the
+        browser close — the next cycle reuses the same session for a
+        warmer fingerprint. run_continuous() flips the flag off before
+        the final call so shutdown still releases resources.
+        """
+        if self._keep_browser_alive:
+            return
         if self.browser:
             await self.browser.stop()
+            self.browser = None
+        self._started = False
 
     # ------------------------------------------------------------------
     # Main run loop
@@ -141,7 +190,17 @@ class ApplicationEngine:
         set_fast_mode(self.dry_run)
 
     async def run(self):
-        """Execute the full application pipeline."""
+        """Execute the full application pipeline.
+
+        Counters reset at the top so each run() (including each cycle
+        of run_continuous()) reports its own applied/skipped/failed
+        numbers. The prior run's RUN_FINISHED has already fired with
+        its totals by the time we get here.
+        """
+        self.applied_count = 0
+        self.skipped_count = 0
+        self.failed_count = 0
+        self.pending_review = []
         self.events.emit(RUN_STARTED, dry_run=self.dry_run)
 
         try:
@@ -285,6 +344,186 @@ class ApplicationEngine:
                 failed=self.failed_count,
                 dry_run=self.dry_run,
             )
+
+    # ------------------------------------------------------------------
+    # Continuous-run mode
+    # ------------------------------------------------------------------
+
+    async def run_continuous(self) -> None:
+        """Loop the pipeline on a cadence until stopped.
+
+        Cycle outline:
+          1. Check stop flags + max-cycles cap; bail if hit.
+          2. Check active-hours window. If outside, emit CYCLE_IDLE
+             with refinement_only=True and sleep until the window
+             opens — the browser stays warm, user can refine resumes
+             via the GUI/CLI during the wait.
+          3. Emit CYCLE_STARTED, call run(), honor stop-after-cycle.
+          4. Pick a random delay from continuous_cycle_delay_min/max,
+             emit CYCLE_IDLE with seconds_until_next, sleep in small
+             slices so request_stop() breaks out promptly.
+          5. Emit CYCLE_RESUMING, loop.
+
+        Browser session is reused across cycles for fingerprint
+        stability. Counters reset every cycle via run().
+        """
+        import asyncio
+        import random
+        from datetime import datetime
+
+        from auto_applier.config import (
+            DEFAULT_CONTINUOUS_ACTIVE_HOURS,
+            DEFAULT_CONTINUOUS_CYCLE_DELAY_MAX,
+            DEFAULT_CONTINUOUS_CYCLE_DELAY_MIN,
+            DEFAULT_CONTINUOUS_MAX_CYCLES,
+        )
+        from auto_applier.orchestrator.active_hours import parse_active_hours
+
+        delay_min = max(60, int(self.config.get(
+            "continuous_cycle_delay_min",
+            DEFAULT_CONTINUOUS_CYCLE_DELAY_MIN,
+        )))
+        delay_max = max(delay_min, int(self.config.get(
+            "continuous_cycle_delay_max",
+            DEFAULT_CONTINUOUS_CYCLE_DELAY_MAX,
+        )))
+        max_cycles = int(self.config.get(
+            "continuous_max_cycles", DEFAULT_CONTINUOUS_MAX_CYCLES,
+        ))
+        window = parse_active_hours(self.config.get(
+            "continuous_active_hours", DEFAULT_CONTINUOUS_ACTIVE_HOURS,
+        ))
+
+        # Pre-start once so the browser is up for the idle-window wait
+        # too — the GUI can open resume-refine panels against a warm
+        # session even if we're outside the active window.
+        await self.start()
+        self._keep_browser_alive = True
+
+        reason = "Complete"
+        try:
+            while True:
+                if self._stop_requested or self._stop_after_cycle:
+                    reason = "Stopped by user"
+                    break
+                if max_cycles and self._current_cycle >= max_cycles:
+                    reason = f"Reached max_cycles={max_cycles}"
+                    break
+
+                now = datetime.now()
+                if not window.is_active(now):
+                    # Outside the active-hours window — idle until it
+                    # opens. Refinement flows still work (Phase C).
+                    wait_secs = window.seconds_until_open(now)
+                    logger.info(
+                        "Continuous: outside active-hours window %s, "
+                        "idling %d min (refinement allowed).",
+                        window.raw, wait_secs // 60,
+                    )
+                    self.events.emit(
+                        CYCLE_IDLE,
+                        cycle_number=self._current_cycle,
+                        seconds_until_next=wait_secs,
+                        refinement_only=True,
+                        reason="outside active hours",
+                        refinement_candidates=self._count_refine_candidates(),
+                    )
+                    if not await self._sleep_with_stop_check(wait_secs):
+                        reason = "Stopped by user"
+                        break
+                    continue
+
+                self._current_cycle += 1
+                self.events.emit(
+                    CYCLE_STARTED,
+                    cycle_number=self._current_cycle,
+                    max_cycles=max_cycles,
+                )
+                logger.info(
+                    "Continuous: starting cycle %d%s",
+                    self._current_cycle,
+                    f" of {max_cycles}" if max_cycles else "",
+                )
+                try:
+                    await self.run()
+                except CaptchaDetectedError:
+                    # CAPTCHA hard-stops the continuous loop — digging
+                    # deeper into detection by retrying immediately is
+                    # the exact opposite of what we want.
+                    reason = "CAPTCHA detected — continuous loop halted"
+                    break
+
+                if self._stop_requested or self._stop_after_cycle:
+                    reason = "Stopped by user"
+                    break
+                if max_cycles and self._current_cycle >= max_cycles:
+                    reason = f"Reached max_cycles={max_cycles}"
+                    break
+
+                # Inter-cycle idle. Random delay in [min, max] so the
+                # fingerprint doesn't look like a fixed-interval bot.
+                delay = random.randint(delay_min, delay_max)
+                logger.info(
+                    "Continuous: cycle %d done, idling %d min before "
+                    "next cycle.", self._current_cycle, delay // 60,
+                )
+                self.events.emit(
+                    CYCLE_IDLE,
+                    cycle_number=self._current_cycle,
+                    seconds_until_next=delay,
+                    refinement_only=False,
+                    reason="cycle cooldown",
+                    refinement_candidates=self._count_refine_candidates(),
+                )
+                if not await self._sleep_with_stop_check(delay):
+                    reason = "Stopped by user"
+                    break
+                self.events.emit(
+                    CYCLE_RESUMING, cycle_number=self._current_cycle,
+                )
+        finally:
+            # Clean shutdown — release the browser now that the loop
+            # is really done.
+            self._keep_browser_alive = False
+            await self.stop()
+            self.events.emit(
+                CONTINUOUS_FINISHED,
+                reason=reason,
+                total_cycles=self._current_cycle,
+            )
+
+    async def _sleep_with_stop_check(
+        self, total_seconds: int, slice_seconds: float = 2.0,
+    ) -> bool:
+        """Sleep in small slices so stop flags break out promptly.
+
+        Returns False if stop was requested during the sleep, True if
+        the full duration elapsed.
+        """
+        import asyncio
+        remaining = float(total_seconds)
+        while remaining > 0:
+            if self._stop_requested or self._stop_after_cycle:
+                return False
+            chunk = min(slice_seconds, remaining)
+            await asyncio.sleep(chunk)
+            remaining -= chunk
+        return True
+
+    def _count_refine_candidates(self) -> int:
+        """Count refine-ready skill gaps for the CYCLE_IDLE payload.
+
+        Listeners (GUI Refine panel, CLI idle tip) use this to decide
+        whether to prompt the user during idle time. Fails closed (0)
+        on any error — refinement is optional, must never crash the
+        continuous loop.
+        """
+        try:
+            from auto_applier.resume.refine import collect_refine_candidates
+            return len(collect_refine_candidates())
+        except Exception as exc:
+            logger.debug("Refine candidate count failed: %s", exc)
+            return 0
 
     # ------------------------------------------------------------------
     # Batch review queue
@@ -578,16 +817,14 @@ class ApplicationEngine:
             # direct-URL navigation on those platforms.
             if getattr(platform, "discovery_only", False):
                 # Dedup against prior discovery-only rows. Dry runs in
-                # pipeline.discover_jobs bypass `job_already_applied`,
-                # so without this guard each dry run would re-save a
+                # pipeline.discover_jobs bypass job-level dedup, so
+                # without this guard each dry run would re-save a
                 # skipped Application for every LinkedIn job it sees,
                 # flooding applications.csv.
-                from auto_applier.storage.models import Application as _App
-                from auto_applier.storage.repository import load_all as _load_all
+                from auto_applier.storage.repository import processed_pairs
                 seen_pairs = {
-                    (a.job_id, a.source)
-                    for a in _load_all(_App)
-                    if a.source == platform_key
+                    pair for pair in processed_pairs()
+                    if pair[1] == platform_key
                 }
                 for job in jobs:
                     if self._stop_requested:

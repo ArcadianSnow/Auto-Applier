@@ -132,15 +132,48 @@ class TestCrossSourceDedup:
         repository.save(Job(job_id="li-1", title="Analyst", company="Acme", url="u", source="linkedin"))
         assert repository.job_seen_canonically("abcdef0123456789") is False
 
-    def test_seen_hash_returns_true(self, temp_csvs):
-        job = Job(job_id="li-1", title="Senior Data Analyst", company="Acme Inc.", url="u", source="linkedin")
+    def test_unscored_job_does_not_dedupe(self, temp_csvs):
+        """Phase A: scraped-but-never-scored Jobs must NOT dedupe.
+        Continuous-run mode relies on this — cycle 1 may only score
+        3 of 99 scraped jobs, cycle 2 must still find the other 96.
+        """
+        job = Job(
+            job_id="li-1", title="Senior Data Analyst",
+            company="Acme Inc.", url="u", source="linkedin",
+        )
         repository.save(job)
-        # Construct an Indeed cross-post of the same role
-        dup = Job(job_id="ind-99", title="Senior Data Analyst", company="ACME Corp", url="u2", source="indeed")
+        # No Application saved → job is not yet "processed"
+        assert repository.job_seen_canonically(job.canonical_hash) is False
+
+    def test_scored_job_dedupes_across_sources(self, temp_csvs):
+        """A Job with any Application row (even skipped) dedupes its
+        canonical_hash everywhere — that's the cross-source guard."""
+        job = Job(
+            job_id="li-1", title="Senior Data Analyst",
+            company="Acme Inc.", url="u", source="linkedin",
+        )
+        repository.save(job)
+        repository.save(Application(job_id="li-1", source="linkedin", status="skipped"))
+        dup = Job(
+            job_id="ind-99", title="Senior Data Analyst",
+            company="ACME Corp", url="u2", source="indeed",
+        )
         assert dup.canonical_hash == job.canonical_hash
         assert repository.job_seen_canonically(dup.canonical_hash) is True
 
+    def test_applied_job_dedupes(self, temp_csvs):
+        """Backwards-compat: applied Applications dedup just like
+        skipped ones (any Application row is enough)."""
+        job = Job(
+            job_id="li-1", title="Senior Data Analyst",
+            company="Acme Inc.", url="u", source="linkedin",
+        )
+        repository.save(job)
+        repository.save(Application(job_id="li-1", source="linkedin", status="applied"))
+        assert repository.job_seen_canonically(job.canonical_hash) is True
+
     def test_different_titles_not_deduped(self, temp_csvs):
         repository.save(Job(job_id="li-1", title="Analyst", company="Acme", url="u", source="linkedin"))
+        repository.save(Application(job_id="li-1", source="linkedin", status="skipped"))
         other = Job(job_id="ind-99", title="Engineer", company="Acme", url="u", source="indeed")
         assert repository.job_seen_canonically(other.canonical_hash) is False

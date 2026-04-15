@@ -40,10 +40,15 @@ class TestRealRunDedup:
     """Real runs must skip jobs already in the store."""
 
     def test_filters_previously_seen_canonical(self, temp_csvs):
-        # Pre-populate: one job from a previous run
+        # Pre-populate: one job from a previous run, AND an Application
+        # row marking it as processed. Phase A semantics: a Job alone
+        # is not enough to dedupe — it must have been scored.
         repository.save(Job(
             job_id="ind-old", title="Data Analyst", company="Acme Inc",
             url="u", source="indeed",
+        ))
+        repository.save(Application(
+            job_id="ind-old", status="skipped", source="indeed",
         ))
         # Now search finds the same job again
         new_job = Job(
@@ -53,6 +58,24 @@ class TestRealRunDedup:
         platform = _fake_platform([new_job])
         result = _run(discover_jobs(platform, "data analyst", "remote", dry_run=False))
         assert result == []  # filtered
+
+    def test_unscored_previously_saved_job_does_not_filter(self, temp_csvs):
+        """Phase A: a Job saved but never scored (budget ran out in a
+        prior cycle, etc.) must NOT dedupe — continuous-run mode needs
+        to come back to it next cycle."""
+        repository.save(Job(
+            job_id="ind-old", title="Data Analyst", company="Acme Inc",
+            url="u", source="indeed",
+        ))
+        # No Application saved → not processed
+        new_job = Job(
+            job_id="ind-new", title="Data Analyst", company="Acme Inc",
+            url="u", source="indeed",
+        )
+        platform = _fake_platform([new_job])
+        result = _run(discover_jobs(platform, "data analyst", "remote", dry_run=False))
+        assert len(result) == 1
+        assert result[0].job_id == "ind-new"
 
     def test_filters_already_applied(self, temp_csvs):
         repository.save(Application(
