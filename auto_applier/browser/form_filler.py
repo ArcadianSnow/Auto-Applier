@@ -702,13 +702,33 @@ class FormFiller:
                     return True
 
             elif field.field_type == "radio":
-                await field.element.check()
+                # Try a normal check first; fall back to force=True if
+                # a spinner / layout container intercepts the click.
+                # Without this, Playwright retries for 30s and the
+                # whole apply flow can stall on Dice (spinner inside
+                # the radio's label container) or LinkedIn (transient
+                # overlay during step transitions).
+                try:
+                    await field.element.check(timeout=4000)
+                except Exception as exc:
+                    logger.debug(
+                        "Normal check() failed (%s), retrying with force=True",
+                        exc,
+                    )
+                    await field.element.check(force=True, timeout=2000)
                 self.fields_filled += 1
                 return True
 
             elif field.field_type == "checkbox":
                 if answer.lower() in ("yes", "true", "1"):
-                    await field.element.check()
+                    try:
+                        await field.element.check(timeout=4000)
+                    except Exception as exc:
+                        logger.debug(
+                            "Normal check() failed (%s), retrying with force=True",
+                            exc,
+                        )
+                        await field.element.check(force=True, timeout=2000)
                 self.fields_filled += 1
                 return True
 
