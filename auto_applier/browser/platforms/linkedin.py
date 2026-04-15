@@ -86,14 +86,33 @@ EASY_APPLY_BUTTON_SELECTORS = [
     "button.jobs-apply-button[data-control-name='jobdetails_topcard_inapply']",
 ]
 
-# Job description on the detail panel
+# Job description on the detail panel. LinkedIn ships multiple
+# layouts simultaneously (A/B tests): full-page view, side-panel
+# over search results, and (occasionally) a modal overlay. Each
+# uses different markup. Historical selectors stay in the list so
+# we don't regress on old layouts that some accounts still see.
 JOB_DESCRIPTION_SELECTORS = [
+    # 2025+ layouts (most common today)
+    "article.jobs-description__container",
+    "div.jobs-description__container",
+    ".jobs-description__content--condensed",
+    "div.job-details-jobs-unified-top-card__description-container",
+    "div.jobs-description-details",
+    # Shared / historical
     ".jobs-description__content",
     ".jobs-description-content__text",
     ".jobs-box__html-content",
     "#job-details",
     "[class*='jobs-description']",
     ".jobs-unified-top-card__description",
+    # Side-panel layouts
+    ".jobs-search__job-details--container [class*='description']",
+    ".jobs-details__main-content [class*='description']",
+    # Semantic fallbacks
+    "[aria-label='Job details']",
+    "[aria-label='About the job']",
+    "article [class*='description']",
+    "main [class*='description']",
 ]
 
 # Easy Apply modal navigation buttons
@@ -611,48 +630,132 @@ class LinkedInPlatform(JobPlatform):
     # through more jobs after this starts happening risks tripping
     # harder detection (temporary account review). We bail early.
     _LI_CONSECUTIVE_EMPTY_DESCRIPTIONS: int = 0
-    _LI_MAX_CONSECUTIVE_EMPTY: int = 2
+    # 3 gives us 3 diagnostic dumps to iterate on before bailing.
+    # Still small enough that we don't risk account escalation.
+    _LI_MAX_CONSECUTIVE_EMPTY: int = 3
 
     async def get_job_description(self, job: Job) -> str:
         """Navigate to the job detail page and extract the description.
 
-        If LinkedIn returns empty descriptions for N jobs in a row,
-        raises CaptchaDetectedError to stop the platform run. This
-        is a SOFT-BLOCK detection — LinkedIn isn't serving a CAPTCHA
-        but is stripping content because it flagged the session.
-        Continuing would just waste cycles and risk escalation.
+        Multi-strategy extraction designed for LinkedIn's three
+        concurrent layouts (full-page, side-panel, modal overlay):
+
+        1. Navigate, then wait for ANY known description marker to
+           appear (not just domcontentloaded — descriptions load
+           via XHR AFTER DOM-ready on LinkedIn).
+        2. Try CSS selectors in our hardened list.
+        3. JS fallback: find the largest content block in main/
+           article that looks like a JD (has 200-15000 chars,
+           doesn't look like navigation chrome).
+        4. On total failure, dump a comprehensive diagnostic so we
+           can see WHY extraction failed — URL changed, page
+           skeleton only, empty main, etc.
+
+        Still honors the soft-block detector: after N consecutive
+        empties, raises CaptchaDetectedError to protect the account.
         """
         page = await self.get_page()
 
-        if job.url:
-            await page.goto(job.url, wait_until="domcontentloaded")
-        else:
+        if not job.url:
             logger.warning(
                 "LinkedIn: No URL for job %s, cannot fetch description",
                 job.job_id,
             )
             return ""
 
+        url_before = ""
+        try:
+            url_before = page.url
+        except Exception:
+            pass
+
+        # Navigate with networkidle so XHR descriptions have a chance
+        # to load. Fall back to domcontentloaded on timeout.
+        try:
+            await page.goto(
+                job.url, wait_until="networkidle", timeout=15000,
+            )
+        except Exception as exc:
+            logger.debug(
+                "LinkedIn: networkidle timed out for %s (%s), "
+                "retrying with domcontentloaded",
+                job.job_id, exc,
+            )
+            try:
+                await page.goto(
+                    job.url, wait_until="domcontentloaded", timeout=15000,
+                )
+            except Exception as exc2:
+                logger.warning(
+                    "LinkedIn: nav failed for %s: %s", job.job_id, exc2,
+                )
+                return ""
+
+        # Log before/after URL so redirects are visible
+        try:
+            url_after = page.url
+            if url_after != job.url:
+                logger.info(
+                    "LinkedIn: URL changed during nav for %s: "
+                    "target=%s actual=%s",
+                    job.job_id, job.url, url_after,
+                )
+        except Exception:
+            pass
+
         await reading_pause(page)
         await self.check_and_abort_on_captcha(page)
 
-        # Try to expand "See more" in the description
+        # Wait for any description marker to appear. This is the key
+        # missing piece — LinkedIn loads descriptions lazily, so
+        # domcontentloaded fires before the content is present.
+        try:
+            await page.wait_for_selector(
+                ", ".join([
+                    "article.jobs-description__container",
+                    "div.jobs-description__container",
+                    ".jobs-description__content",
+                    ".jobs-box__html-content",
+                    "[class*='jobs-description']",
+                    "[aria-label='About the job']",
+                ]),
+                state="attached",
+                timeout=6000,
+            )
+        except Exception:
+            logger.debug(
+                "LinkedIn: no description marker appeared after 6s for %s",
+                job.job_id,
+            )
+
+        # Try to expand "See more" — now includes modern aria labels
         await self.safe_click(
             page,
             [
                 "button[aria-label='Click to see more description']",
                 "button.jobs-description__footer-button",
                 "button[aria-label='Show more']",
+                "button[aria-label='Show more, visually hide less']",
                 ".jobs-description__content button",
+                "button.show-more-less-button",
             ],
             timeout=2000,
         )
         await random_delay(0.5, 1.5)
 
-        # Extract description text
+        # Strategy 1: CSS selector sweep (fast, narrow)
         description = await self.safe_get_text(
-            page, JOB_DESCRIPTION_SELECTORS, timeout=5000,
+            page, JOB_DESCRIPTION_SELECTORS, timeout=3000,
         )
+
+        # Strategy 2: JS heuristic fallback (slower, wide net)
+        if not description:
+            description = await self._js_description_fallback(page)
+            if description:
+                logger.info(
+                    "LinkedIn: Got description via JS fallback for %s (%d chars)",
+                    job.job_id, len(description),
+                )
 
         if description:
             # Reset the soft-block counter on any successful extract
@@ -669,10 +772,10 @@ class LinkedInPlatform(JobPlatform):
                 job.job_id,
                 self._LI_CONSECUTIVE_EMPTY_DESCRIPTIONS,
             )
+            # Full diagnostic dump so we can see why extraction failed
+            await self._dump_page_diagnostic(page, job.job_id)
+
             if self._LI_CONSECUTIVE_EMPTY_DESCRIPTIONS >= self._LI_MAX_CONSECUTIVE_EMPTY:
-                # Likely soft-blocked — stop to protect the account.
-                # Raise CaptchaDetectedError so the engine halts the
-                # platform run cleanly (same path as real CAPTCHAs).
                 logger.error(
                     "LinkedIn: %d consecutive empty job descriptions — "
                     "session appears soft-blocked. Stopping LinkedIn to "
@@ -687,6 +790,118 @@ class LinkedInPlatform(JobPlatform):
                 )
 
         return description
+
+    async def _js_description_fallback(self, page: Page) -> str:
+        """Heuristic fallback: find the largest text block that looks
+        like a job description — not navigation, not chrome.
+
+        Rules:
+        - Text length between 200 and 15000 chars (JDs fit this range)
+        - Contains at least one JD-like heading word (responsibilities,
+          qualifications, requirements, about, role, duties, skills)
+          OR is inside a main/article/section semantic landmark
+        - Not inside a nav/header/footer/aside element
+        - Doesn't contain too many h2s (suggests search results list)
+        """
+        try:
+            return await page.evaluate("""() => {
+                const jdHeadings = /(responsibilit|qualification|requirement|about (the|this|us|our)|role|duties|skills|you will|who you are|what you|experience)/i;
+
+                const isChrome = (el) => {
+                    let p = el;
+                    while (p) {
+                        const t = (p.tagName || '').toLowerCase();
+                        if (['nav','header','footer','aside'].includes(t)) return true;
+                        const role = (p.getAttribute && p.getAttribute('role')) || '';
+                        if (['navigation','banner','contentinfo'].includes(role)) return true;
+                        p = p.parentElement;
+                    }
+                    return false;
+                };
+
+                const candidates = [...document.querySelectorAll(
+                    'article, section, div, main'
+                )].filter(el => {
+                    if (isChrome(el)) return false;
+                    const text = (el.innerText || '').trim();
+                    if (text.length < 200 || text.length > 15000) return false;
+                    const h2Count = el.querySelectorAll('h2').length;
+                    if (h2Count > 5) return false;  // likely search results
+                    return jdHeadings.test(text);
+                });
+
+                if (candidates.length === 0) return '';
+                // Pick the SMALLEST qualifying candidate (most specific
+                // container rather than the page wrapper)
+                candidates.sort((a, b) => a.innerText.length - b.innerText.length);
+                return candidates[0].innerText.substring(0, 8000);
+            }""")
+        except Exception as exc:
+            logger.debug("LinkedIn: JS description fallback crashed: %s", exc)
+            return ""
+
+    async def _dump_page_diagnostic(self, page: Page, job_id: str) -> None:
+        """Dump a comprehensive snapshot of page state to the log.
+
+        Captures URL, title, visible text around main areas, inventory
+        of landmark elements, and any modal / overlay markers. Helps
+        us iterate on description extraction without needing a
+        separate probe script.
+        """
+        try:
+            diag = await page.evaluate("""() => {
+                const report = {};
+                report.url = location.href;
+                report.title = document.title;
+                report.body_visible_text_preview =
+                    (document.body.innerText || '').trim().substring(0, 400);
+
+                // Count of landmark elements
+                report.landmarks = {
+                    main: document.querySelectorAll('main').length,
+                    article: document.querySelectorAll('article').length,
+                    section: document.querySelectorAll('section').length,
+                    modal: document.querySelectorAll('[role=dialog], .artdeco-modal').length,
+                };
+
+                // Find any element whose class contains 'description'
+                const descLike = [...document.querySelectorAll(
+                    '[class*=description]'
+                )].slice(0, 5).map(el => ({
+                    tag: el.tagName,
+                    className: (el.className || '').substring(0, 120),
+                    textLen: (el.innerText || '').length,
+                    textPreview: (el.innerText || '').trim().substring(0, 150),
+                }));
+                report.description_like_elements = descLike;
+
+                // Any jobs-* classes visible?
+                const jobsLike = [...document.querySelectorAll(
+                    '[class*=jobs-]'
+                )].slice(0, 8).map(el =>
+                    el.tagName + '.' + (el.className || '').substring(0, 60)
+                );
+                report.jobs_like_elements = jobsLike;
+
+                // Visible buttons (helps spot Sign In / Join prompts)
+                const buttons = [...document.querySelectorAll('button')]
+                    .filter(b => b.offsetParent !== null)
+                    .slice(0, 8)
+                    .map(b => ({
+                        text: (b.innerText || '').trim().substring(0, 40),
+                        ariaLabel: b.getAttribute('aria-label') || '',
+                    }));
+                report.visible_buttons = buttons;
+
+                return report;
+            }""")
+            import json as _json
+            logger.info(
+                "LinkedIn: PAGE DIAGNOSTIC for %s:\n%s",
+                job_id, _json.dumps(diag, indent=2)[:3000],
+            )
+        except Exception as exc:
+            logger.debug("LinkedIn: diagnostic dump failed: %s", exc)
 
     async def check_is_external(self, job: Job) -> bool:
         """LinkedIn: no Easy Apply button visible means external-only.
