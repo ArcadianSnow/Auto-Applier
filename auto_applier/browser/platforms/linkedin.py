@@ -177,6 +177,57 @@ class LinkedInPlatform(JobPlatform):
         "/checkpoint/challenge",
     ]
 
+    # URL substring patterns indicating the user is on a LinkedIn
+    # auth / not-logged-in page (not a logged-in page). When any of
+    # these appears in the URL, the user MUST log in first regardless
+    # of what DOM elements happen to be present.
+    #
+    # /authwall shows when a logged-out user clicks a job/profile
+    # link. /checkpoint and /uas are the login / 2FA flow. /signup is
+    # the account creation form. Watching for these keeps us from
+    # walking a login/signup form as if it were an apply modal.
+    _AUTH_URL_PATTERNS = (
+        "/login",
+        "/signup",
+        "/checkpoint",
+        "/uas/login",
+        "/authwall",
+        "/m/login",  # mobile login redirect
+    )
+
+    # Labels that belong to LinkedIn PAGE CHROME (persistent header
+    # search bar, messaging drawer, notification filters) — NOT the
+    # application form. LinkedIn has FAR more chrome than ZR: the
+    # site-wide "Search" is on every page, plus the jobs page has its
+    # own filter bar. The chrome-field filter from ZR ported here
+    # keeps the form_filler from wasting LLM calls on these during
+    # modal walks that bleed back to the main page.
+    _CHROME_LABEL_PATTERNS = (
+        "search by title",
+        "search by skill",
+        "search by company",
+        "search jobs",
+        "search for job",
+        "search messages",
+        "search people",
+        "jobs search",
+        "messaging search",
+    )
+
+    def _is_chrome_field(self, label: str) -> bool:
+        """True if a field label looks like LinkedIn page chrome."""
+        lower = (label or "").lower().strip()
+        chrome_exact = {
+            "search",
+            "search by title, skill, or company",
+            "city, state, or zip code",  # jobs location filter
+        }
+        if lower in chrome_exact:
+            return True
+        if lower.startswith("search "):
+            return True
+        return any(pat in lower for pat in self._CHROME_LABEL_PATTERNS)
+
     # ------------------------------------------------------------------
     # Login
     # ------------------------------------------------------------------
@@ -184,32 +235,165 @@ class LinkedInPlatform(JobPlatform):
     async def ensure_logged_in(self) -> bool:
         """Navigate to LinkedIn and verify the user is logged in.
 
-        If not logged in, navigates to the login page and waits up to
-        5 minutes for the user to log in manually.
+        Uses URL-first detection: the user is logged in when they're
+        on linkedin.com but NOT on /login, /signup, /authwall, or
+        /checkpoint. DOM selectors are too fragile for LinkedIn —
+        their feed page markup changes constantly and single-selector
+        matches are either too broad (false-positive on login page's
+        nav) or too narrow (miss the logged-in UI after a redesign).
         """
         page = await self.get_page()
 
         # Navigate to feed to check login state
-        await page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded")
+        await page.goto(
+            "https://www.linkedin.com/feed/",
+            wait_until="domcontentloaded",
+        )
         await random_delay(2.0, 4.0)
 
-        # Check if already logged in
-        logged_in = await self.safe_query(page, LOGGED_IN_SELECTORS, timeout=5000)
-        if logged_in:
-            logger.info("LinkedIn: Already logged in")
+        if await self._url_indicates_logged_in(page):
+            logger.info(
+                "LinkedIn: Already logged in (URL=%s)", page.url,
+            )
             return True
 
-        # Not logged in -- navigate to login page
-        logger.info("LinkedIn: Not logged in. Navigating to login page for manual login...")
-        await page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded")
-
-        # Wait for user to log in manually (5 minute timeout)
-        return await self.wait_for_manual_login(
-            page,
-            check_url_pattern="/feed",
-            check_selector=LOGGED_IN_SELECTORS[0],
-            timeout=300,
+        # Not logged in — navigate to login page
+        logger.info(
+            "LinkedIn: Not logged in. Navigating to login page for "
+            "manual login..."
         )
+        await page.goto(
+            "https://www.linkedin.com/login",
+            wait_until="domcontentloaded",
+        )
+
+        return await self._wait_for_manual_login_url(page, timeout=300)
+
+    async def _url_indicates_logged_in(self, page: Page) -> bool:
+        """True when the page URL is on linkedin.com but NOT on an
+        auth / challenge page."""
+        try:
+            url = (page.url or "").lower()
+        except Exception:
+            return False
+        if "linkedin.com" not in url:
+            return False
+        if any(pat in url for pat in self._AUTH_URL_PATTERNS):
+            return False
+        return True
+
+    async def _wait_for_manual_login_url(
+        self, page: Page, timeout: int = 300,
+    ) -> bool:
+        """Poll every 2s for URL-based login confirmation."""
+        import time
+        logger.info(
+            "Waiting for manual login on LinkedIn "
+            "(URL-based, timeout=%ds)...",
+            timeout,
+        )
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            if await self._url_indicates_logged_in(page):
+                logger.info(
+                    "LinkedIn: Login detected (URL=%s)", page.url,
+                )
+                return True
+            await asyncio.sleep(2.0)
+        logger.warning(
+            "LinkedIn: Manual login timed out after %ds", timeout,
+        )
+        return False
+
+    async def _looks_like_auth_page(self, page: Page) -> bool:
+        """Detect signup / login / challenge pages that were
+        mistakenly treated as the apply flow.
+
+        URL patterns + DOM password-field check, same two-signal
+        pattern as the Dice adapter. Bails early so we don't walk an
+        auth form as if it were an Easy Apply modal.
+        """
+        try:
+            url = (page.url or "").lower()
+        except Exception:
+            url = ""
+        if any(pat in url for pat in self._AUTH_URL_PATTERNS):
+            return True
+
+        # DOM signal: password input + sign-in/signup-style button
+        try:
+            has_password = await page.query_selector(
+                "input[type='password']"
+            )
+            if not has_password:
+                return False
+            buttons = await page.query_selector_all(
+                "button, input[type='submit']",
+            )
+            for btn in buttons:
+                try:
+                    text = (await btn.inner_text()).strip().lower()
+                except Exception:
+                    continue
+                if any(kw in text for kw in (
+                    "sign in", "sign up", "join now",
+                    "log in", "continue with password",
+                )):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    async def _wait_for_spinners_to_clear(
+        self, page: Page, timeout_ms: int = 3500,
+    ) -> None:
+        """Wait for loading spinners to disappear before clicking.
+
+        LinkedIn's modals show a brief progressbar or loading
+        indicator during step transitions; Playwright retries clicks
+        for 30s if a spinner intercepts. Same pattern as Dice.
+        Short combined wait, pass-through on timeout.
+        """
+        try:
+            await page.wait_for_selector(
+                "[role='progressbar'], .artdeco-loader, "
+                "svg[class*='animate-spin'], [class*='spinner']",
+                state="hidden",
+                timeout=timeout_ms,
+            )
+        except Exception:
+            pass
+
+    async def _scan_validation_errors(self, page: Page) -> str:
+        """Return a short description of any visible validation error.
+
+        LinkedIn surfaces required-field warnings with specific
+        classes; catching them lets us surface the real reason a
+        form stuck instead of the generic "no navigation button".
+        """
+        error_selectors = [
+            ".artdeco-inline-feedback--error",
+            "[role='alert']",
+            ".fb-form-element__error-text",
+            "[class*='error-text']",
+            "[aria-invalid='true'] + *",
+        ]
+        for sel in error_selectors:
+            try:
+                els = await page.query_selector_all(sel)
+                for el in els:
+                    try:
+                        visible = await el.is_visible()
+                    except Exception:
+                        visible = False
+                    if not visible:
+                        continue
+                    text = (await el.inner_text()).strip()
+                    if text and len(text) < 200:
+                        return text
+            except Exception:
+                continue
+        return ""
 
     # ------------------------------------------------------------------
     # Job Search
@@ -482,14 +666,51 @@ class LinkedInPlatform(JobPlatform):
             await self.check_and_abort_on_captcha(page)
 
             # Click the Easy Apply button
-            clicked = await self.safe_click(page, EASY_APPLY_BUTTON_SELECTORS, timeout=5000)
+            clicked = await self.safe_click(
+                page, EASY_APPLY_BUTTON_SELECTORS, timeout=5000,
+            )
             if not clicked:
+                # Diagnostic: what apply-like buttons ARE on the page?
+                # LinkedIn changes button markup often; this dump tells
+                # us which selector to add next time.
+                try:
+                    snippet = await page.evaluate("""() => {
+                        const btns = [...document.querySelectorAll('button, a')]
+                            .filter(el => /apply|save/i.test(el.textContent || ''))
+                            .map(el => el.outerHTML.substring(0, 200));
+                        return 'apply-ish buttons: ' + JSON.stringify(btns.slice(0, 5));
+                    }""")
+                    logger.info(
+                        "LinkedIn: apply button diagnostic: %s", snippet,
+                    )
+                except Exception:
+                    pass
                 return ApplyResult(
                     success=False,
-                    failure_reason="Easy Apply button not found -- job may require external application",
+                    failure_reason=(
+                        "Easy Apply button not found — job may require "
+                        "external application"
+                    ),
                 )
 
             await random_delay(1.5, 3.0)
+
+            # Apply click can redirect to login if session cookie is
+            # stale. Bail out cleanly instead of walking the login form.
+            if await self._looks_like_auth_page(page):
+                logger.warning(
+                    "LinkedIn: apply redirected to auth page (URL=%s)",
+                    page.url,
+                )
+                return ApplyResult(
+                    success=False,
+                    failure_reason=(
+                        "LinkedIn redirected to a login / challenge "
+                        "page. Please log in to LinkedIn manually in "
+                        "the browser window and retry."
+                    ),
+                )
+
             await self.check_and_abort_on_captcha(page)
 
             # Walk the multi-step modal
@@ -517,21 +738,44 @@ class LinkedInPlatform(JobPlatform):
 
         Handles: form fields, resume upload, Next/Review/Submit buttons.
         Returns when either Submit is clicked or an error occurs.
+
+        Uses the hardened patterns from Dice/ZR: chrome-field filter
+        (LinkedIn headers are noisier than ZR's), spinner-wait before
+        navigation clicks, validation-error scan when forms get stuck.
         """
+        any_real_fields_filled = False
+
         for step in range(MAX_MODAL_STEPS):
-            logger.info("LinkedIn: Easy Apply step %d for %s", step + 1, job.job_id)
+            logger.info(
+                "LinkedIn: Easy Apply step %d for %s",
+                step + 1, job.job_id,
+            )
 
             await self.check_and_abort_on_captcha(page)
 
             # Handle resume upload on this step
             await self._handle_resume_upload(page, resume_path)
 
-            # Detect and fill form fields
+            # Detect and fill form fields — filter out page chrome
+            real_fields_on_step = 0
             if self.form_filler:
                 fields = await find_form_fields(page)
-                for field in fields:
-                    await self.form_filler.fill_field(page, field, job_id=job.job_id)
+                real_fields = [
+                    f for f in fields if not self._is_chrome_field(f.label)
+                ]
+                for field in real_fields:
+                    await self.form_filler.fill_field(
+                        page, field, job_id=job.job_id,
+                    )
                     await random_delay(0.5, 1.5)
+                real_fields_on_step = len(real_fields)
+                if real_fields_on_step > 0:
+                    any_real_fields_filled = True
+                logger.debug(
+                    "LinkedIn: step %d — %d real fields, %d chrome fields",
+                    step + 1, real_fields_on_step,
+                    len(fields) - real_fields_on_step,
+                )
 
             await simulate_organic_behavior(page)
 
@@ -542,19 +786,28 @@ class LinkedInPlatform(JobPlatform):
             if is_submit_step:
                 if dry_run:
                     logger.info(
-                        "LinkedIn: DRY RUN -- would submit application for %s",
+                        "LinkedIn: DRY RUN -- would submit application "
+                        "for %s",
                         job.job_id,
                     )
                     await self._close_modal(page)
                     return self._build_result(success=True, dry_run=True)
 
-                # Submit the application
-                clicked = await self.safe_click(page, MODAL_SUBMIT_SELECTORS, timeout=3000)
+                # Wait for spinner, then submit
+                await self._wait_for_spinners_to_clear(page)
+                clicked = await self.safe_click(
+                    page, MODAL_SUBMIT_SELECTORS, timeout=3000,
+                )
                 if clicked:
                     await random_delay(2.0, 4.0)
-                    logger.info("LinkedIn: Submitted application for %s", job.job_id)
+                    logger.info(
+                        "LinkedIn: Submitted application for %s",
+                        job.job_id,
+                    )
                     # Dismiss any post-submit dialog
-                    await self.safe_click(page, MODAL_CLOSE_SELECTORS, timeout=2000)
+                    await self.safe_click(
+                        page, MODAL_CLOSE_SELECTORS, timeout=2000,
+                    )
                     return self._build_result(success=True, dry_run=False)
                 else:
                     return self._build_result(
@@ -563,36 +816,47 @@ class LinkedInPlatform(JobPlatform):
                     )
 
             elif is_review_step:
-                clicked = await self.safe_click(page, MODAL_REVIEW_SELECTORS, timeout=3000)
+                await self._wait_for_spinners_to_clear(page)
+                clicked = await self.safe_click(
+                    page, MODAL_REVIEW_SELECTORS, timeout=3000,
+                )
                 if not clicked:
                     # Try the generic primary button
                     clicked = await self.safe_click(
-                        page, MODAL_NEXT_SELECTORS, timeout=3000
+                        page, MODAL_NEXT_SELECTORS, timeout=3000,
                     )
                 if not clicked:
+                    validation_msg = await self._scan_validation_errors(page)
+                    reason = "Review button not found"
+                    if validation_msg:
+                        reason += f" (validation: {validation_msg})"
                     return self._build_result(
-                        success=False,
-                        failure_reason="Review button not found",
+                        success=False, failure_reason=reason,
                     )
                 await random_delay(1.5, 3.0)
 
             else:
-                # Click Next to advance to the next step
-                clicked = await self.safe_click(page, MODAL_NEXT_SELECTORS, timeout=3000)
+                await self._wait_for_spinners_to_clear(page)
+                clicked = await self.safe_click(
+                    page, MODAL_NEXT_SELECTORS, timeout=3000,
+                )
                 if not clicked:
-                    # Maybe we reached an unknown state
-                    logger.warning(
-                        "LinkedIn: No Next/Review/Submit button found at step %d",
-                        step + 1,
-                    )
+                    # Scan for validation errors before giving up
+                    validation_msg = await self._scan_validation_errors(page)
+                    reason = f"No navigation button found at step {step + 1}"
+                    if validation_msg:
+                        reason += f" (validation: {validation_msg})"
+                    logger.warning("LinkedIn: %s", reason)
                     return self._build_result(
-                        success=False,
-                        failure_reason=f"No navigation button found at step {step + 1}",
+                        success=False, failure_reason=reason,
                     )
                 await random_delay(1.5, 3.0)
 
         # Exceeded max steps
-        logger.warning("LinkedIn: Exceeded %d modal steps for %s", MAX_MODAL_STEPS, job.job_id)
+        logger.warning(
+            "LinkedIn: Exceeded %d modal steps for %s",
+            MAX_MODAL_STEPS, job.job_id,
+        )
         await self._close_modal(page)
         return self._build_result(
             success=False,
@@ -664,7 +928,7 @@ class LinkedInPlatform(JobPlatform):
     ) -> ApplyResult:
         """Build an ApplyResult from the current form_filler state."""
         if self.form_filler:
-            return ApplyResult(
+            result = ApplyResult(
                 success=success,
                 gaps=list(self.form_filler.gaps),
                 resume_used=self.form_filler.resume_label,
@@ -674,7 +938,19 @@ class LinkedInPlatform(JobPlatform):
                 fields_total=self.form_filler.fields_total,
                 used_llm=self.form_filler.used_llm,
             )
-        return ApplyResult(
-            success=success,
-            failure_reason=failure_reason,
-        )
+        else:
+            result = ApplyResult(
+                success=success,
+                failure_reason=failure_reason,
+            )
+        # Log a summary line so dry-run testing shows field fill rates
+        if result.success:
+            logger.info(
+                "LinkedIn: Apply result: success [%d/%d fields, llm=%s]",
+                result.fields_filled, result.fields_total, result.used_llm,
+            )
+        else:
+            logger.info(
+                "LinkedIn: Apply result: failed: %s", result.failure_reason,
+            )
+        return result
