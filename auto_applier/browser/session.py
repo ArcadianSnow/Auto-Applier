@@ -1,4 +1,5 @@
 """Browser lifecycle with persistent context and anti-detection."""
+import asyncio
 import logging
 import shutil
 import sys
@@ -121,16 +122,32 @@ class BrowserSession:
             await self._apply_stealth_to_pages(self._context.pages)
 
     async def stop(self) -> None:
-        """Close browser and playwright gracefully."""
+        """Close browser and playwright gracefully.
+
+        Each close() is wrapped in a timeout. Playwright's context.close()
+        can hang indefinitely when a page is stuck in a JS loop or the
+        browser process has crashed in a weird state — without a timeout
+        the whole run would wedge at shutdown and never emit RUN_FINISHED.
+        """
         if self._context:
             try:
-                await self._context.close()
+                await asyncio.wait_for(self._context.close(), timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Browser context.close() timed out after 10s — "
+                    "continuing shutdown. Browser process may need to be "
+                    "killed manually if it stays alive."
+                )
             except Exception as exc:
                 logger.warning("Error closing browser context: %s", exc)
             self._context = None
         if self._playwright:
             try:
-                await self._playwright.stop()
+                await asyncio.wait_for(self._playwright.stop(), timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "playwright.stop() timed out after 10s — continuing."
+                )
             except Exception as exc:
                 logger.warning("Error stopping playwright: %s", exc)
             self._playwright = None

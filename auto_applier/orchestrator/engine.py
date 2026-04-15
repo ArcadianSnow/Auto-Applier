@@ -187,8 +187,8 @@ class ApplicationEngine:
                         merged = dict(saved_personal)
                         merged.update(personal_info)
                         personal_info = merged
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Could not merge saved personal_info: %s", exc)
 
             # Merge .env credentials into config
             self._load_credentials()
@@ -449,8 +449,10 @@ class ApplicationEngine:
                     resume_text = self.resume_manager.get_resume_text(
                         resumes[0].label,
                     )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                "Could not load resume_text for title expansion: %s", exc,
+            )
 
         result = await expand_title(
             seed=keyword,
@@ -890,8 +892,11 @@ class ApplicationEngine:
                             resume_label=job_score.resume_label,
                         )
                         append_stories(stories)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug(
+                            "Story generation failed for %s: %s",
+                            job.job_id, exc,
+                        )
 
     # ------------------------------------------------------------------
     # Helpers

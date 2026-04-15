@@ -1,9 +1,32 @@
 """CSV-backed persistence layer with Excel compatibility."""
 import csv
+import os
 from dataclasses import asdict, fields as dc_fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypeVar, Type
+
+
+def _atomic_rewrite(path: Path, headers: list[str], rows: list[dict]) -> None:
+    """Rewrite a CSV file atomically.
+
+    Writes to ``<path>.tmp`` then os.replace()s over the original.
+    os.replace is atomic on POSIX and (since Python 3.3) on Windows.
+    A crash mid-write leaves the original intact — the partial tmp
+    file is orphaned but never visible to readers.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=headers)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            pass  # fsync not available on all filesystems — best-effort
+    os.replace(tmp, path)
 
 from auto_applier.config import (
     JOBS_CSV, APPLICATIONS_CSV, SKILL_GAPS_CSV, FOLLOWUPS_CSV,
@@ -181,19 +204,19 @@ def update_followups_for_job(
             continue
         f.status = new_status
         updated += 1
-    # Rewrite the file
+    # Rewrite the file atomically so a crash mid-write can't leave
+    # followups.csv truncated or half-written.
     headers = [fld.name for fld in dc_fields(Followup)]
-    with open(path, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=headers)
-        writer.writeheader()
-        for f in followups:
-            row = {k: v for k, v in asdict(f).items()}
-            for k, v in row.items():
-                if isinstance(v, bool):
-                    row[k] = str(v)
-                elif isinstance(v, list):
-                    row[k] = str(v)
-            writer.writerow(row)
+    rows = []
+    for f in followups:
+        row = {k: v for k, v in asdict(f).items()}
+        for k, v in row.items():
+            if isinstance(v, bool):
+                row[k] = str(v)
+            elif isinstance(v, list):
+                row[k] = str(v)
+        rows.append(row)
+    _atomic_rewrite(path, headers, rows)
     return updated
 
 

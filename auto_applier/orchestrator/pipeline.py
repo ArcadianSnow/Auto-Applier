@@ -40,16 +40,34 @@ async def discover_jobs(
     filtered_canonical = 0
     filtered_batch_dup = 0
 
+    # Build dedup sets ONCE per batch instead of re-reading the CSVs on
+    # every iteration. Naive per-job calls gave us O(jobs × rows) reads
+    # that would noticeably degrade after a few hundred runs.
+    applied_pairs: set[tuple[str, str]] = set()
+    canonical_hashes: set[str] = set()
+    if not dry_run:
+        from auto_applier.storage.models import Application as _App
+        applied_pairs = {
+            (a.job_id, a.source)
+            for a in repository.load_all(_App)
+            if a.status in ("applied", "dry_run")
+        }
+        canonical_hashes = {
+            j.canonical_hash
+            for j in repository.load_all(Job)
+            if j.canonical_hash
+        }
+
     for job in all_jobs:
         if not dry_run:
-            if repository.job_already_applied(job.job_id, job.source):
+            if (job.job_id, job.source) in applied_pairs:
                 filtered_applied += 1
                 continue
             if job.canonical_hash:
                 if job.canonical_hash in seen_this_batch:
                     filtered_batch_dup += 1
                     continue
-                if repository.job_seen_canonically(job.canonical_hash):
+                if job.canonical_hash in canonical_hashes:
                     filtered_canonical += 1
                     continue
                 seen_this_batch.add(job.canonical_hash)

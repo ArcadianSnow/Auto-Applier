@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import shutil
 from dataclasses import fields as dc_fields
 from datetime import datetime, timezone
@@ -31,6 +32,8 @@ from pathlib import Path
 from typing import Any
 
 from auto_applier.config import BACKUP_DIR, SCHEMA_VERSION_FILE
+
+_BACKUP_RETENTION = 10  # keep the N newest backups per file; older ones are purged
 
 
 def _model_columns(model_type: type) -> list[str]:
@@ -92,11 +95,31 @@ def _save_schema_state(state: dict) -> None:
 
 
 def _backup(path: Path) -> Path:
-    """Copy a CSV to the backup directory with a UTC timestamp suffix."""
+    """Copy a CSV to the backup directory with a UTC timestamp suffix.
+
+    Also prunes old backups for the same file so ``.backups/`` doesn't
+    grow unbounded across many migrations — keeps the ``_BACKUP_RETENTION``
+    newest and deletes the rest.
+    """
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     dest = BACKUP_DIR / f"{path.stem}.{ts}{path.suffix}"
     shutil.copy2(path, dest)
+
+    try:
+        siblings = sorted(
+            BACKUP_DIR.glob(f"{path.stem}.*{path.suffix}"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for old in siblings[_BACKUP_RETENTION:]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass  # rotation is best-effort — a missing dir is harmless
+
     return dest
 
 
@@ -141,8 +164,11 @@ def migrate_csv(path: Path, model_type: type) -> dict | None:
         reader = csv.DictReader(f)
         rows = list(reader)
 
-    # Rewrite with canonical header, preserving overlap + backfilling added
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    # Rewrite atomically with canonical header, preserving overlap +
+    # backfilling added. A crash mid-rewrite leaves the original file
+    # intact (the backup is also already on disk from _backup() above).
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=target)
         writer.writeheader()
         for row in rows:
@@ -153,6 +179,12 @@ def migrate_csv(path: Path, model_type: type) -> dict | None:
                 else:
                     new_row[col] = defaults[col]
             writer.writerow(new_row)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            pass
+    os.replace(tmp, path)
 
     record = {
         "model": model_type.__name__,
