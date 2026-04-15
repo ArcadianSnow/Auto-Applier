@@ -34,13 +34,13 @@ PLATFORMS = [
     ),
     (
         "linkedin",
-        "LinkedIn  (advanced — expect challenges)",
-        "Largest professional network, but by far the hardest site "
-        "to automate. LinkedIn actively challenges anything that "
-        "looks unusual — fresh browser profile, brand-new account, "
-        "too-fast navigation. If you want to try LinkedIn, make "
-        "sure the account is verified and has been used manually "
-        "from this browser at least once.",
+        "LinkedIn  (discovery only — Auto Applier will NOT apply for you)",
+        "LinkedIn's anti-automation blocks direct job-page navigation, "
+        "so Auto Applier only SCANS LinkedIn listings and scores them "
+        "for you. Matches show up under 'Almost — apply manually' so "
+        "you can open each one in your normal browser and click Easy "
+        "Apply yourself. No auto-apply, no submissions, no risk to "
+        "your account.",
     ),
 ]
 

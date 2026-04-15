@@ -343,9 +343,14 @@ def status():
 def almost(min_score, cover):
     """Show high-score jobs you should apply to manually.
 
-    Lists jobs that scored >= min-score but couldn't be auto-applied
-    through this platform (because the company wants you to apply
-    on their own website, the posting is externally hosted, etc.).
+    Lists jobs that scored >= min-score but couldn't be auto-applied.
+    This includes:
+      - LinkedIn jobs (discovery-only — Auto Applier never auto-applies
+        on LinkedIn because its anti-automation blocks direct job-page
+        navigation)
+      - Externally-hosted jobs (company wants you to apply on their own
+        site)
+      - Jobs the platform blocked mid-flow
 
     These are jobs worth your time to apply manually.
     """

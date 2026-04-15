@@ -475,6 +475,15 @@ class ApplicationEngine:
             config=self.config,
         )
 
+        # Discovery-only banner — make it loud so the user (and the
+        # logs) know this platform is scanning, not applying.
+        if getattr(platform, "discovery_only", False):
+            logger.info(
+                "%s: DISCOVERY-ONLY mode. Jobs will be scored and saved "
+                "for manual apply via `cli almost` — no submissions.",
+                platform.display_name,
+            )
+
         # Ensure logged in
         self.events.emit(PLATFORM_LOGIN_NEEDED, platform=platform_key)
         logged_in = await platform.ensure_logged_in()
@@ -558,6 +567,73 @@ class ApplicationEngine:
                             k.lower() for k in effective_keywords
                         }:
                             effective_keywords.append(exp_title)
+
+            # Discovery-only platforms (LinkedIn): never navigate to
+            # the detail page. Score from title+company only and save
+            # each job as a skipped Application so `cli almost` /
+            # the Almost panel surfaces it for manual apply. This
+            # side-steps the anti-automation defenses that kill
+            # direct-URL navigation on those platforms.
+            if getattr(platform, "discovery_only", False):
+                # Dedup against prior discovery-only rows. Dry runs in
+                # pipeline.discover_jobs bypass `job_already_applied`,
+                # so without this guard each dry run would re-save a
+                # skipped Application for every LinkedIn job it sees,
+                # flooding applications.csv.
+                from auto_applier.storage.models import Application as _App
+                from auto_applier.storage.repository import load_all as _load_all
+                seen_pairs = {
+                    (a.job_id, a.source)
+                    for a in _load_all(_App)
+                    if a.source == platform_key
+                }
+                for job in jobs:
+                    if self._stop_requested:
+                        logger.info(
+                            "Stop requested, finishing %s after current job",
+                            platform_key,
+                        )
+                        break
+                    if (job.job_id, platform_key) in seen_pairs:
+                        continue
+                    pseudo_desc = (
+                        f"Job title: {job.title}\n"
+                        f"Company: {job.company}\n\n"
+                        "(Scored from title and company only — "
+                        "discovery-only platform.)"
+                    )
+                    try:
+                        job_score = await self.scorer.score(
+                            pseudo_desc, cli_mode=self.cli_mode,
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            "Discovery-only scoring failed for %s: %s",
+                            job.job_id, exc,
+                        )
+                        continue
+                    logger.info(
+                        "Score (discovery-only): %s @ %s -> %.1f [resume=%s]",
+                        job.title[:50], platform_key,
+                        job_score.score, job_score.resume_label,
+                    )
+                    self.events.emit(JOB_SCORED, job=job, score=job_score)
+                    self.skipped_count += 1
+                    save(
+                        Application(
+                            job_id=job.job_id,
+                            status="skipped",
+                            source=platform_key,
+                            resume_used=job_score.resume_label,
+                            score=job_score.score,
+                            failure_reason=(
+                                platform.discovery_only_reason
+                                or "Discovery-only platform — apply manually."
+                            ),
+                        )
+                    )
+                    seen_pairs.add((job.job_id, platform_key))
+                continue
 
             for job in jobs:
                 if applied_this_platform >= budget:

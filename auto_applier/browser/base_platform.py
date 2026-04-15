@@ -43,6 +43,15 @@ class JobPlatform(ABC):
     source_id: str  # "linkedin", "indeed", etc.
     display_name: str  # "LinkedIn", "Indeed", etc.
 
+    # Discovery-only mode. When True, the engine scrapes search
+    # results and scores jobs from title+company only — it never
+    # navigates to the job detail page and never attempts to apply.
+    # Matching jobs surface in `cli almost` / the Almost panel as
+    # manual-apply candidates. Used for platforms whose anti-automation
+    # defenses reliably catch direct detail-page navigation (LinkedIn).
+    discovery_only: bool = False
+    discovery_only_reason: str = ""
+
     # Liveness detection — subclasses override to tighten detection.
     # See browser/liveness.py for how these are used.
     dead_listing_selectors: list[str] = []

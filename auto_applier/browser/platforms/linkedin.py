@@ -186,6 +186,22 @@ class LinkedInPlatform(JobPlatform):
     source_id = "linkedin"
     display_name = "LinkedIn"
 
+    # LinkedIn is DISCOVERY-ONLY. Real-world validation on 2026-04-14
+    # showed LinkedIn's anti-automation stack (TLS/JA3 fingerprinting,
+    # WebGL renderer fingerprinting, CDP timing analysis) defeats
+    # patchright + our hardening — direct navigation to /jobs/view/<id>
+    # trips a redirect loop that even a human can't break out of without
+    # closing the browser. We scrape the search results, score by
+    # title+company only, and surface matches through `cli almost` so
+    # the user can open them manually in a normal browser.
+    discovery_only = True
+    discovery_only_reason = (
+        "LinkedIn's anti-automation detects direct job-page navigation. "
+        "Auto Applier scans LinkedIn listings and scores them for you, "
+        "but you'll apply manually — open each match in your normal "
+        "browser and click Easy Apply yourself. See: cli almost."
+    )
+
     dead_listing_selectors = [
         ".jobs-details-top-card__apply-error",
         ".jobs-details__no-longer-accepting",
