@@ -104,6 +104,46 @@ def _on_run_finished(**kw):
         f"\nDone ({reason}). Applied: {applied}, Skipped: {skipped}, Failed: {failed}"
     )
 
+
+def _on_cycle_started(**kw):
+    n = kw.get("cycle_number", 0)
+    max_n = kw.get("max_cycles", 0)
+    suffix = f" of {max_n}" if max_n else ""
+    click.echo(f"\n=== Starting cycle {n}{suffix} ===")
+
+
+def _on_cycle_idle(**kw):
+    secs = kw.get("seconds_until_next", 0)
+    mins = max(1, secs // 60)
+    refinement_only = kw.get("refinement_only", False)
+    candidates = kw.get("refinement_candidates", 0)
+    cycle_n = kw.get("cycle_number", 0)
+
+    if refinement_only:
+        click.echo(
+            f"\n[Cycle {cycle_n}] Outside active hours. Next cycle in ~{mins} "
+            "min."
+        )
+    else:
+        click.echo(
+            f"\n[Cycle {cycle_n}] Done. Next cycle in ~{mins} min."
+        )
+
+    if candidates > 0:
+        click.echo(
+            f"  TIP: You have {candidates} skill gap(s) ready for review. "
+            "Run in another terminal:"
+        )
+        click.echo("       python -m auto_applier --cli refine")
+
+
+def _on_continuous_finished(**kw):
+    reason = kw.get("reason", "")
+    total = kw.get("total_cycles", 0)
+    click.echo(
+        f"\nContinuous mode finished after {total} cycle(s). {reason}"
+    )
+
     # Plain-English explainer. The raw numbers above can be confusing
     # for a first-time user — they might see "Skipped: 7" and think
     # the tool is broken when actually most skips are perfectly normal
@@ -227,6 +267,9 @@ def _attach_cli_handlers(events):
         CAPTCHA_DETECTED,
         EVOLUTION_TRIGGERS,
         RUN_FINISHED,
+        CYCLE_STARTED,
+        CYCLE_IDLE,
+        CONTINUOUS_FINISHED,
     )
 
     events.on(RUN_STARTED, _on_run_started)
@@ -241,6 +284,9 @@ def _attach_cli_handlers(events):
     events.on(CAPTCHA_DETECTED, _on_captcha_detected)
     events.on(EVOLUTION_TRIGGERS, _on_evolution_triggers)
     events.on(RUN_FINISHED, _on_run_finished)
+    events.on(CYCLE_STARTED, _on_cycle_started)
+    events.on(CYCLE_IDLE, _on_cycle_idle)
+    events.on(CONTINUOUS_FINISHED, _on_continuous_finished)
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +304,16 @@ def cli():
 @click.option("--dry-run", is_flag=True, help="Don't submit applications")
 @click.option("--platform", default=None, help="Run only on a specific platform")
 @click.option("--limit", default=0, type=int, help="Max applications this session")
-def run(dry_run, platform, limit):
+@click.option("--continuous", is_flag=True,
+              help="Loop the pipeline on a cadence instead of running once. "
+                   "Uses continuous_cycle_delay_min/max from user_config.json.")
+@click.option("--max-cycles", default=0, type=int,
+              help="Safety cap for --continuous (0 = unlimited).")
+@click.option("--active-hours", default=None,
+              help="Active-hours window for --continuous (e.g. '09:00-22:00'). "
+                   "Outside this window the loop idles — browser stays warm, "
+                   "refinement prompts still fire.")
+def run(dry_run, platform, limit, continuous, max_cycles, active_hours):
     """Run the job application pipeline."""
     from auto_applier.log_setup import start_run_logging
     log_path = start_run_logging()
@@ -273,6 +328,14 @@ def run(dry_run, platform, limit):
     if limit > 0:
         config["max_applications_per_day"] = limit
 
+    # Continuous-mode flags override user_config.json for this run only.
+    if continuous:
+        config["continuous_mode"] = True
+    if max_cycles:
+        config["continuous_max_cycles"] = max_cycles
+    if active_hours:
+        config["continuous_active_hours"] = active_hours
+
     from auto_applier.orchestrator.events import EventEmitter
     from auto_applier.orchestrator.engine import ApplicationEngine
 
@@ -280,7 +343,15 @@ def run(dry_run, platform, limit):
     _attach_cli_handlers(events)
 
     engine = ApplicationEngine(config, events, cli_mode=True)
-    asyncio.run(engine.run())
+    if config.get("continuous_mode"):
+        click.echo(
+            "Continuous mode: tool will loop between cycles. "
+            "Press Ctrl+C to stop, or run `auto-applier refine` in a "
+            "separate terminal during idle periods."
+        )
+        asyncio.run(engine.run_continuous())
+    else:
+        asyncio.run(engine.run())
 
 
 @cli.command()

@@ -33,6 +33,10 @@ from auto_applier.orchestrator.events import (
     EVOLUTION_TRIGGERS,
     RUN_FINISHED,
     CAPTCHA_DETECTED,
+    CYCLE_STARTED,
+    CYCLE_IDLE,
+    CYCLE_RESUMING,
+    CONTINUOUS_FINISHED,
 )
 
 
@@ -302,6 +306,13 @@ class DashboardWindow(tk.Toplevel):
         self.events.on(CAPTCHA_DETECTED, self._on_captcha)
         self.events.on(EVOLUTION_TRIGGERS, self._on_evolution_triggers)
         self.events.on(RUN_FINISHED, self._on_run_finished_event)
+        # Continuous-mode events. Dashboard shows cycle counter + a
+        # countdown to next cycle so the user knows the tool is alive
+        # during idle windows.
+        self.events.on(CYCLE_STARTED, self._on_cycle_started)
+        self.events.on(CYCLE_IDLE, self._on_cycle_idle)
+        self.events.on(CYCLE_RESUMING, self._on_cycle_resuming)
+        self.events.on(CONTINUOUS_FINISHED, self._on_continuous_finished)
 
     # ------------------------------------------------------------------
     # Event handlers (called from worker thread -- must use self.after)
@@ -434,6 +445,53 @@ class DashboardWindow(tk.Toplevel):
         self.after(0, lambda: self.log(
             f"Run finished: {reason} ({applied} applied)", "info"
         ))
+        # In continuous mode, each cycle's RUN_FINISHED is informational;
+        # the dashboard stays in a running state until CONTINUOUS_FINISHED.
+        if not (self._engine and getattr(self._engine, "_keep_browser_alive", False)):
+            self.after(0, self._on_run_finished)
+
+    def _on_cycle_started(self, **kw):
+        n = kw.get("cycle_number", 0)
+        max_n = kw.get("max_cycles", 0)
+        label = f"Cycle {n}" + (f" of {max_n}" if max_n else "")
+        self.after(0, lambda: self.log(f"=== {label} ===", "info"))
+
+    def _on_cycle_idle(self, **kw):
+        secs = kw.get("seconds_until_next", 0)
+        mins = max(1, secs // 60)
+        refinement_only = kw.get("refinement_only", False)
+        candidates = kw.get("refinement_candidates", 0)
+        cycle_n = kw.get("cycle_number", 0)
+
+        if refinement_only:
+            msg = (
+                f"[Cycle {cycle_n}] Outside active hours — idling ~{mins} min "
+                "(refinement allowed)."
+            )
+        else:
+            msg = f"[Cycle {cycle_n}] Done — next cycle in ~{mins} min."
+        self.after(0, lambda: self.log(msg, "info"))
+
+        if candidates > 0:
+            self.after(0, lambda: self.log(
+                f"TIP: {candidates} skill gap(s) ready to review. "
+                "Open the Refine panel while you wait.",
+                "info",
+            ))
+
+    def _on_cycle_resuming(self, **kw):
+        n = kw.get("cycle_number", 0)
+        self.after(0, lambda: self.log(
+            f"Resuming after cycle {n}...", "info",
+        ))
+
+    def _on_continuous_finished(self, **kw):
+        reason = kw.get("reason", "")
+        total = kw.get("total_cycles", 0)
+        self.after(0, lambda: self.log(
+            f"Continuous mode finished after {total} cycle(s). {reason}",
+            "info",
+        ))
         self.after(0, self._on_run_finished)
 
     # ------------------------------------------------------------------
@@ -553,7 +611,15 @@ class DashboardWindow(tk.Toplevel):
             from auto_applier.orchestrator.engine import ApplicationEngine
             engine = ApplicationEngine(config, self.events, cli_mode=False)
             self._engine = engine
-            loop.run_until_complete(engine.run())
+            if config.get("continuous_mode"):
+                self.after(0, lambda: self.log(
+                    "Continuous mode ON — cycles will repeat until you "
+                    "click Stop.",
+                    "info",
+                ))
+                loop.run_until_complete(engine.run_continuous())
+            else:
+                loop.run_until_complete(engine.run())
         except Exception as e:
             self.after(0, lambda: self.log(f"Error: {e}", "error"))
         finally:

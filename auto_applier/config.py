@@ -94,3 +94,31 @@ except ValueError:
 #   {"auto_expand_titles": true, "title_expansion_threshold": 8, ...}
 DEFAULT_AUTO_EXPAND_TITLES = False
 DEFAULT_TITLE_EXPANSION_THRESHOLD = 10
+
+# Continuous-run mode — loop the pipeline indefinitely instead of a
+# single pass. All settings live under user_config.json so each user
+# can tune via the wizard.
+#
+# continuous_mode (bool, default False):
+#   Master switch. When False, `run()` executes one pass and exits
+#   (the v1 behavior).
+#
+# continuous_cycle_delay_min/max (seconds, default 1800/5400 = 30/90 min):
+#   Sleep this many seconds (uniformly random) between cycles. Longer
+#   than 5 min so the browser fingerprint doesn't look like a bot on
+#   a fixed timer. Clamped to >=60 at load time.
+#
+# continuous_active_hours (str, default "09:00-22:00"):
+#   Only run auto-apply cycles during this local-time window. Cycles
+#   that wake outside the window fall through to refinement-only mode
+#   (browser stays warm, no submissions). Format "HH:MM-HH:MM".
+#   Overnight ranges are allowed ("22:00-06:00" spans midnight).
+#
+# continuous_max_cycles (int, default 0):
+#   Safety cap. 0 = unlimited, otherwise stop after N cycles. Used by
+#   tests and as a training-wheels option for first continuous runs.
+DEFAULT_CONTINUOUS_MODE = False
+DEFAULT_CONTINUOUS_CYCLE_DELAY_MIN = 30 * 60
+DEFAULT_CONTINUOUS_CYCLE_DELAY_MAX = 90 * 60
+DEFAULT_CONTINUOUS_ACTIVE_HOURS = "09:00-22:00"
+DEFAULT_CONTINUOUS_MAX_CYCLES = 0

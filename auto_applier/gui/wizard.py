@@ -131,6 +131,15 @@ class WizardApp(tk.Tk):
         self.data["cli_auto_apply_min"] = tk.IntVar(value=7)
         self.data["review_min"] = tk.IntVar(value=4)
 
+        # Continuous-run mode (loop the pipeline on a cadence). Off by
+        # default; users opt in via the Preferences step.
+        self.data["continuous_mode"] = tk.BooleanVar(value=False)
+        # Delays stored in MINUTES in the UI, converted to seconds on save.
+        self.data["continuous_cycle_delay_min"] = tk.IntVar(value=30)
+        self.data["continuous_cycle_delay_max"] = tk.IntVar(value=90)
+        self.data["continuous_active_hours"] = tk.StringVar(value="09:00-22:00")
+        self.data["continuous_max_cycles"] = tk.IntVar(value=0)
+
         # LLM settings
         from auto_applier.config import OLLAMA_MODEL
         self.data["ollama_model"] = tk.StringVar(value=OLLAMA_MODEL)
@@ -175,6 +184,26 @@ class WizardApp(tk.Tk):
         for key in ("auto_apply_min", "cli_auto_apply_min", "review_min"):
             if key in scoring:
                 self.data[key].set(scoring[key])
+
+        # Continuous-mode settings (flat at config root).
+        if "continuous_mode" in cfg:
+            self.data["continuous_mode"].set(bool(cfg["continuous_mode"]))
+        if "continuous_cycle_delay_min" in cfg:
+            self.data["continuous_cycle_delay_min"].set(
+                max(1, int(cfg["continuous_cycle_delay_min"]) // 60)
+            )
+        if "continuous_cycle_delay_max" in cfg:
+            self.data["continuous_cycle_delay_max"].set(
+                max(1, int(cfg["continuous_cycle_delay_max"]) // 60)
+            )
+        if "continuous_active_hours" in cfg:
+            self.data["continuous_active_hours"].set(
+                cfg["continuous_active_hours"]
+            )
+        if "continuous_max_cycles" in cfg:
+            self.data["continuous_max_cycles"].set(
+                int(cfg["continuous_max_cycles"])
+            )
 
         # LLM
         llm = cfg.get("llm", {})
@@ -412,6 +441,12 @@ class WizardApp(tk.Tk):
         raw_kw = self.data["search_keywords"].get()
         keywords = [k.strip() for k in raw_kw.split(",") if k.strip()]
 
+        # Clamp continuous delay min/max so the min is never above the max.
+        delay_min_min = max(1, self.data["continuous_cycle_delay_min"].get())
+        delay_max_min = max(
+            delay_min_min, self.data["continuous_cycle_delay_max"].get(),
+        )
+
         config = {
             "enabled_platforms": enabled,
             "personal_info": personal,
@@ -427,6 +462,11 @@ class WizardApp(tk.Tk):
                 "ollama_model": self.data["ollama_model"].get().strip(),
                 "gemini_api_key": self.data["gemini_api_key"].get().strip(),
             },
+            "continuous_mode": bool(self.data["continuous_mode"].get()),
+            "continuous_cycle_delay_min": delay_min_min * 60,
+            "continuous_cycle_delay_max": delay_max_min * 60,
+            "continuous_active_hours": self.data["continuous_active_hours"].get().strip(),
+            "continuous_max_cycles": int(self.data["continuous_max_cycles"].get()),
             "resumes": [
                 {"label": label, "path": path}
                 for label, path in self.resume_list

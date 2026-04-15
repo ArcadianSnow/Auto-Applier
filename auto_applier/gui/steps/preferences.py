@@ -65,6 +65,36 @@ HELP = {
         "Default is 4. Anything below 4 out of 10 is almost never "
         "worth applying to."
     ),
+    "continuous_mode": (
+        "Normally Auto Applier runs one pass (hits the application "
+        "cap on each site, then stops). Continuous mode keeps the "
+        "tool open and repeats that cycle — applying, waiting a "
+        "while, applying again, and so on.\n\n"
+        "It's a numbers game: more applications over the day beats "
+        "fewer, more-perfect ones. The wait between cycles keeps "
+        "your activity from looking robotic."
+    ),
+    "continuous_delay": (
+        "How long to wait between cycles, in MINUTES. The tool "
+        "picks a random delay somewhere in this range so it doesn't "
+        "look like a bot firing on a fixed timer.\n\n"
+        "Don't go shorter than 30 minutes — 30 to 90 is a safe, "
+        "human-looking rhythm."
+    ),
+    "continuous_active_hours": (
+        "Only apply to jobs during this window of your local day. "
+        "Outside the window the tool stays open but doesn't submit "
+        "anything — it just uses that time for resume refinement "
+        "questions.\n\n"
+        "Format: HH:MM-HH:MM (24-hour clock). Example: 09:00-22:00 "
+        "for 9am to 10pm. Overnight ranges work too: 22:00-06:00."
+    ),
+    "continuous_max_cycles": (
+        "A safety cap for how many cycles to run before stopping. "
+        "Set to 0 for unlimited (run until you hit Stop).\n\n"
+        "For your first time using continuous mode, try 3–5 so you "
+        "can see how it behaves before committing to an all-day run."
+    ),
 }
 
 
@@ -200,6 +230,99 @@ class PreferencesStep(ttk.Frame):
             font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
             justify="left",
         ).pack(anchor="w", pady=(8, 0))
+
+        # Continuous Mode card
+        cont_card = tk.Frame(
+            self, bg=BG_CARD, highlightbackground=BORDER,
+            highlightthickness=1, padx=20, pady=16,
+        )
+        cont_card.pack(fill="x", padx=PAD_X, pady=(0, 12))
+
+        header_row = tk.Frame(cont_card, bg=BG_CARD)
+        header_row.pack(fill="x")
+        tk.Label(
+            header_row, text="Continuous Mode (optional)",
+            font=FONT_SUBHEADING, fg=PRIMARY, bg=BG_CARD,
+        ).pack(side="left")
+        attach_help_icon(
+            header_row, HELP["continuous_mode"], bg=BG_CARD,
+        ).pack(side="left", padx=(6, 0))
+
+        tk.Label(
+            cont_card,
+            text=(
+                "Keep Auto Applier running and repeat the application "
+                "cycle throughout the day. Off by default — turn on "
+                "once you've confirmed a normal run works for you."
+            ),
+            font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
+            wraplength=680, justify="left",
+        ).pack(anchor="w", pady=(4, 10))
+
+        enable_row = tk.Frame(cont_card, bg=BG_CARD)
+        enable_row.pack(fill="x", pady=(0, 10))
+        ttk.Checkbutton(
+            enable_row, text="Enable continuous mode",
+            variable=self.wizard.data["continuous_mode"],
+        ).pack(side="left")
+
+        # Delay range (minutes)
+        delay_row = tk.Frame(cont_card, bg=BG_CARD)
+        delay_row.pack(fill="x", pady=(0, 10))
+        tk.Label(
+            delay_row, text="Wait between cycles (minutes)",
+            font=FONT_BODY, fg=TEXT, bg=BG_CARD,
+        ).pack(side="left")
+        attach_help_icon(
+            delay_row, HELP["continuous_delay"], bg=BG_CARD,
+        ).pack(side="left", padx=(6, 0))
+        spin_frame = tk.Frame(delay_row, bg=BG_CARD)
+        spin_frame.pack(side="right")
+        ttk.Spinbox(
+            spin_frame,
+            textvariable=self.wizard.data["continuous_cycle_delay_min"],
+            from_=1, to=720, width=5, font=FONT_BODY,
+        ).pack(side="left")
+        tk.Label(
+            spin_frame, text=" to ", font=FONT_BODY, fg=TEXT, bg=BG_CARD,
+        ).pack(side="left")
+        ttk.Spinbox(
+            spin_frame,
+            textvariable=self.wizard.data["continuous_cycle_delay_max"],
+            from_=1, to=720, width=5, font=FONT_BODY,
+        ).pack(side="left")
+
+        # Active hours
+        hours_row = tk.Frame(cont_card, bg=BG_CARD)
+        hours_row.pack(fill="x", pady=(0, 10))
+        tk.Label(
+            hours_row, text="Active hours (local time)",
+            font=FONT_BODY, fg=TEXT, bg=BG_CARD,
+        ).pack(side="left")
+        attach_help_icon(
+            hours_row, HELP["continuous_active_hours"], bg=BG_CARD,
+        ).pack(side="left", padx=(6, 0))
+        ttk.Entry(
+            hours_row,
+            textvariable=self.wizard.data["continuous_active_hours"],
+            font=FONT_BODY, width=14,
+        ).pack(side="right")
+
+        # Max cycles
+        cycles_row = tk.Frame(cont_card, bg=BG_CARD)
+        cycles_row.pack(fill="x")
+        tk.Label(
+            cycles_row, text="Safety cap: stop after N cycles (0 = never)",
+            font=FONT_BODY, fg=TEXT, bg=BG_CARD,
+        ).pack(side="left")
+        attach_help_icon(
+            cycles_row, HELP["continuous_max_cycles"], bg=BG_CARD,
+        ).pack(side="left", padx=(6, 0))
+        ttk.Spinbox(
+            cycles_row,
+            textvariable=self.wizard.data["continuous_max_cycles"],
+            from_=0, to=200, width=6, font=FONT_BODY,
+        ).pack(side="right")
 
     def validate(self) -> bool:
         """Require at least one keyword and a location."""

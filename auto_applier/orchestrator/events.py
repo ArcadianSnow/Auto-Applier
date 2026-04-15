@@ -109,3 +109,13 @@ PLATFORM_FINISHED = "platform_finished"
 EVOLUTION_TRIGGERS = "evolution_triggers"
 RUN_FINISHED = "run_finished"
 CAPTCHA_DETECTED = "captcha_detected"
+
+# Continuous-run mode — emitted by ApplicationEngine.run_continuous.
+# CYCLE_STARTED fires at the top of each cycle with cycle_number and
+# (optionally) total_cycles. CYCLE_IDLE fires after a cycle completes
+# with seconds_until_next so UIs can show a countdown. CYCLE_RESUMING
+# fires just before run() is called again.
+CYCLE_STARTED = "cycle_started"
+CYCLE_IDLE = "cycle_idle"
+CYCLE_RESUMING = "cycle_resuming"
+CONTINUOUS_FINISHED = "continuous_finished"
