@@ -262,11 +262,23 @@ class DicePlatform(JobPlatform):
     # Login
     # ------------------------------------------------------------------
 
+    # URL substring patterns indicating we're on a Dice auth page
+    # (NOT logged in). When the URL contains any of these, the user
+    # is on a sign-in / sign-up flow regardless of what's in the DOM.
+    _AUTH_URL_PATTERNS = (
+        "/login", "/register", "/signup", "/sign-up",
+        "/auth", "/account/create", "/create-account",
+    )
+
     async def ensure_logged_in(self) -> bool:
         """Navigate to Dice and verify the user is logged in.
 
-        If not logged in, navigates to the login page and waits up to
-        5 minutes for the user to log in manually.
+        Uses a URL-first detection strategy: the user is logged in
+        when they're on dice.com but NOT on an auth page. Selectors
+        are too fragile on their own — Dice's logged-in DOM uses
+        different markup across page templates, and popups often
+        intercept early DOM checks. URL-based detection is robust
+        across all of these.
         """
         page = await self.get_page()
 
@@ -274,10 +286,8 @@ class DicePlatform(JobPlatform):
         await page.goto("https://www.dice.com/", wait_until="domcontentloaded")
         await random_delay(2.0, 4.0)
 
-        # Check if already logged in
-        logged_in = await self.safe_query(page, LOGGED_IN_SELECTORS, timeout=5000)
-        if logged_in:
-            logger.info("Dice: Already logged in")
+        if await self._dice_url_indicates_logged_in(page):
+            logger.info("Dice: Already logged in (URL=%s)", page.url)
             return True
 
         # Not logged in -- navigate to login page
@@ -288,14 +298,101 @@ class DicePlatform(JobPlatform):
             "https://www.dice.com/dashboard/login", wait_until="domcontentloaded"
         )
 
-        # Wait for user to log in manually (5 minute timeout).
-        # Pass ALL logged-in selectors — any match confirms login.
-        # URL pattern "dice.com" is a false positive (matches login page).
-        return await self.wait_for_manual_login(
-            page,
-            check_selector=LOGGED_IN_SELECTORS,
-            timeout=300,
+        return await self._wait_for_dice_login(page, timeout=300)
+
+    async def _dice_url_indicates_logged_in(self, page: Page) -> bool:
+        """True when the page is on dice.com and NOT on an auth page.
+
+        Tries to dismiss any common popups first so subsequent flows
+        (apply click) aren't blocked. Popup dismissal is best-effort.
+        """
+        try:
+            url = (page.url or "").lower()
+        except Exception:
+            return False
+
+        if "dice.com" not in url:
+            return False
+        if any(pat in url for pat in self._AUTH_URL_PATTERNS):
+            return False
+
+        # We're on a dice.com page that isn't an auth page — almost
+        # certainly logged in. Dismiss any popups before proceeding.
+        await self._dismiss_common_popups(page)
+        return True
+
+    async def _wait_for_dice_login(self, page: Page, timeout: int = 300) -> bool:
+        """Custom polling loop for Dice login completion.
+
+        Replaces the generic wait_for_manual_login to use URL-based
+        detection. Polls every 2 seconds for ``timeout`` seconds.
+        Logs progress so the user sees the tool isn't stuck.
+        """
+        import time
+        logger.info(
+            "Waiting for manual login on Dice (URL-based, timeout=%ds)...",
+            timeout,
         )
+        start = time.monotonic()
+        last_log_url = ""
+        while time.monotonic() - start < timeout:
+            if await self._dice_url_indicates_logged_in(page):
+                logger.info(
+                    "Dice: Login detected (URL=%s)", page.url,
+                )
+                return True
+            # Periodic visibility into what URL we're sitting on
+            try:
+                cur_url = page.url
+                if cur_url != last_log_url:
+                    logger.debug("Dice login wait: still at %s", cur_url)
+                    last_log_url = cur_url
+            except Exception:
+                pass
+            await asyncio.sleep(2.0)
+
+        logger.warning("Dice: Manual login timed out after %ds", timeout)
+        return False
+
+    async def _dismiss_common_popups(self, page: Page) -> None:
+        """Best-effort dismissal of common popups that block apply flow.
+
+        Dice and the wider web throw a lot of overlays at logged-in
+        users — cookie banners, "tour the dashboard" walkthroughs,
+        notification permission requests. Any of these can intercept
+        clicks on the actual page below. We try a short list of
+        common close-button selectors and silently ignore failures —
+        a popup we can't close is one we report as a failure later.
+        """
+        dismiss_selectors = [
+            "button[aria-label='Close']",
+            "button[aria-label*='close' i]",
+            "button[aria-label*='dismiss' i]",
+            "button[data-cy*='close']",
+            "button[data-testid*='close']",
+            ".modal-close",
+            ".onetrust-close-btn-handler",  # Cookie banner close
+            "#onetrust-accept-btn-handler",  # Cookie accept
+            "button:has-text('Accept all')",
+            "button:has-text('No thanks')",
+            "button:has-text('Maybe later')",
+            "button:has-text('Got it')",
+            "button:has-text('Skip')",
+            "button:has-text('Dismiss')",
+        ]
+        for sel in dismiss_selectors:
+            try:
+                el = await page.query_selector(sel)
+                if el:
+                    try:
+                        if await el.is_visible():
+                            await el.click(timeout=1000)
+                            logger.debug("Dismissed popup via %s", sel)
+                            await asyncio.sleep(0.3)
+                    except Exception:
+                        continue
+            except Exception:
+                continue
 
     # ------------------------------------------------------------------
     # Job Search
@@ -758,10 +855,8 @@ class DicePlatform(JobPlatform):
                     "Dice: apply redirected to login — waiting for "
                     "manual login (timeout=180s)..."
                 )
-                logged_back = await self.wait_for_manual_login(
-                    page,
-                    check_selector=LOGGED_IN_SELECTORS,
-                    timeout=180,
+                logged_back = await self._wait_for_dice_login(
+                    page, timeout=180,
                 )
                 if not logged_back:
                     return ApplyResult(
@@ -835,6 +930,39 @@ class DicePlatform(JobPlatform):
                     pass
             return True
         return False
+
+    async def _wait_for_spinners_to_clear(
+        self, page: Page, timeout_ms: int = 3500,
+    ) -> None:
+        """Wait for loading spinners to disappear before clicking.
+
+        Dice renders a circular loading spinner SVG inside the
+        Continue / Submit buttons between modal steps. Playwright
+        retries clicks forever while the spinner animates because
+        its actionability check fails on "element-not-stable". This
+        helper proactively waits for the known spinner markers to
+        go away, with a short combined timeout so we don't block
+        when no spinner is present.
+
+        Silently returns on timeout — the click attempt will still
+        fire; this is a speedup, not a hard requirement.
+        """
+        # Combined single-selector wait with short timeout. The CSS
+        # comma-list matches ANY of the spinner markers; state=hidden
+        # resolves as soon as NONE are visible (or timeout fires).
+        # The inline-block h6/w6 SVG is the one observed intercepting
+        # clicks in prior runs. Others are generic fallbacks.
+        try:
+            await page.wait_for_selector(
+                "div.h6.w6 svg, [role='progressbar'], "
+                "svg[class*='animate-spin'], [class*='spinner']",
+                state="hidden",
+                timeout=timeout_ms,
+            )
+        except Exception:
+            # Timeout (spinner still visible) or no matches — either
+            # way, we've waited long enough, proceed with the click.
+            pass
 
     async def _looks_like_auth_page(self, page: Page) -> bool:
         """Detect signup / login / account-creation pages that were
@@ -949,6 +1077,15 @@ class DicePlatform(JobPlatform):
                     await self._close_modal(page)
                     return self._build_result(success=True, dry_run=True)
 
+                # Wait for any loading spinner to clear before clicking.
+                # Dice renders a circular SVG spinner inside the
+                # Continue/Submit button between modal steps; Playwright
+                # treats it as an "element not stable" condition and
+                # retries the click forever until its 30s default
+                # timeout. Giving the spinner a moment to resolve first
+                # unblocks every subsequent click.
+                await self._wait_for_spinners_to_clear(page)
+
                 # Submit the application
                 clicked = await self.safe_click(
                     page, MODAL_SUBMIT_SELECTORS, timeout=3000
@@ -977,6 +1114,10 @@ class DicePlatform(JobPlatform):
                     )
 
             else:
+                # Wait for loading spinner to clear before clicking Next
+                # (see comment above the Submit click for rationale).
+                await self._wait_for_spinners_to_clear(page)
+
                 # Click Next to advance to the next step
                 clicked = await self.safe_click(
                     page, MODAL_NEXT_SELECTORS, timeout=3000
