@@ -390,3 +390,129 @@ class TestLocationFields:
         should return empty, letting the priority chain fall through."""
         f = _filler()  # no personal_info at all
         assert f._match_personal_info("zip code") == ""
+
+
+# ---------------------------------------------------------------------------
+# Inline cover-letter detection during apply
+# ---------------------------------------------------------------------------
+
+
+class TestInlineCoverLetterDetection:
+    """When an apply form has a cover-letter textarea, fill_field
+    should route to _fill_cover_letter, which calls the cover-letter
+    writer and writes the result into the form. This integration was
+    code-complete but never observed firing during the 15+ dry-run
+    cycles because none of those jobs had cover-letter fields.
+    """
+
+    @staticmethod
+    def _make_filler_with_mocked_writer():
+        """Build a FormFiller whose CoverLetterWriter is a mock that
+        returns a deterministic cover-letter string."""
+        from unittest.mock import AsyncMock, MagicMock
+        f = FormFiller(
+            router=MagicMock(),
+            personal_info={"first_name": "Jordan", "last_name": "Testpilot"},
+            resume_text="6 years building dashboards in SQL.",
+            job_description="Looking for a data analyst with SQL.",
+            company_name="Acme",
+            job_title="Data Analyst",
+        )
+        f.cover_letter_writer = MagicMock()
+        f.cover_letter_writer.generate = AsyncMock(
+            return_value="A short, on-brand cover letter body."
+        )
+        # Stub _apply_answer so we don't need a real Page; capture
+        # the value the form_filler tried to write.
+        f._captured_apply = []
+        async def fake_apply(page, field, answer):
+            f._captured_apply.append((field.label, answer))
+            return True
+        f._apply_answer = fake_apply
+        return f
+
+    @pytest.mark.parametrize("label", [
+        "Cover Letter",
+        "Cover letter (optional)",
+        "Letter of Interest",
+        "cover note",
+        "Motivation Letter",
+    ])
+    def test_cover_letter_label_triggers_generation(self, label):
+        import asyncio
+        from unittest.mock import MagicMock
+        f = self._make_filler_with_mocked_writer()
+        field = FormField(
+            label=label,
+            element=MagicMock(),
+            field_type="textarea",
+        )
+        # Patch the visibility/pre-filled checks so fill_field reaches
+        # the cover-letter branch without needing a live DOM.
+        async def visible():
+            return True
+        field.element.is_visible = visible
+        async def get_attribute(_name):
+            return ""
+        field.element.get_attribute = get_attribute
+        f._field_already_has_value = lambda _f: False  # async-coerced below
+
+        async def run():
+            return await f.fill_field(MagicMock(), field, job_id="j1")
+
+        # _field_already_has_value is async; wrap our False with a
+        # coroutine-returning lambda.
+        async def already(_field):
+            return False
+        f._field_already_has_value = already
+
+        ok = asyncio.run(run())
+        assert ok is True
+        # The cover-letter writer must have been called once with
+        # resume + JD + company + title context.
+        f.cover_letter_writer.generate.assert_awaited_once()
+        kwargs = f.cover_letter_writer.generate.await_args.kwargs
+        assert kwargs["company_name"] == "Acme"
+        assert kwargs["job_title"] == "Data Analyst"
+        # The generated text must have been written into the form.
+        assert len(f._captured_apply) == 1
+        captured_label, captured_answer = f._captured_apply[0]
+        assert captured_label == label
+        assert "cover letter body" in captured_answer
+        # The cover_letter_generated flag must be set so applications.csv
+        # records it as cover-letter-generated.
+        assert f.cover_letter_generated is True
+
+    def test_non_cover_letter_label_does_not_trigger(self):
+        """A regular textarea (e.g. 'Tell us about yourself') should
+        NOT trigger cover-letter generation — that field goes through
+        the normal priority chain instead."""
+        import asyncio
+        from unittest.mock import MagicMock
+        f = self._make_filler_with_mocked_writer()
+        field = FormField(
+            label="Tell us about yourself",
+            element=MagicMock(),
+            field_type="textarea",
+        )
+        async def visible():
+            return True
+        field.element.is_visible = visible
+        async def get_attribute(_name):
+            return ""
+        field.element.get_attribute = get_attribute
+        async def already(_field):
+            return False
+        f._field_already_has_value = already
+
+        async def run():
+            return await f.fill_field(MagicMock(), field, job_id="j1")
+
+        # Don't care if it succeeds — only that the cover-letter
+        # writer was NOT called.
+        try:
+            asyncio.run(run())
+        except Exception:
+            pass
+        f.cover_letter_writer.generate.assert_not_awaited()
+        assert f.cover_letter_generated is False
