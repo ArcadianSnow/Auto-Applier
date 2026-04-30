@@ -188,9 +188,35 @@ class LLMSetupStep(ttk.Frame):
         )
         self._gemini_status_label.pack(side="left", padx=(4, 0))
 
-        # API key entry
+        # Step 1 — get a key
+        self._step_row(
+            gemini_card, "1.",
+            "Get a free Gemini API key (recommended, takes ~60 seconds)",
+            "Click the button to open Google AI Studio in your browser. "
+            "Sign in with any Google account, click 'Create API key' in "
+            "the top right, then 'Create API key in new project' if it "
+            "asks. Copy the long string that starts with 'AIzaSy...' and "
+            "paste it below. No credit card needed — the free tier is "
+            "1,500 requests per day.",
+            "Open Google AI Studio",
+            self._open_gemini_keypage,
+        )
+
+        # Step 2 — paste it in
+        paste_label = tk.Frame(gemini_card, bg=BG_CARD)
+        paste_label.pack(fill="x", pady=(8, 4))
+        tk.Label(
+            paste_label, text="2.", font=FONT_SUBHEADING,
+            fg=PRIMARY, bg=BG_CARD, width=3, anchor="w",
+        ).pack(side="left")
+        tk.Label(
+            paste_label, text="Paste your key here, then click 'Test API Key'",
+            font=FONT_BODY, fg=TEXT, bg=BG_CARD, anchor="w",
+        ).pack(side="left")
+
+        # API key entry (indented to match step layout)
         key_row = tk.Frame(gemini_card, bg=BG_CARD)
-        key_row.pack(fill="x", pady=(0, 8))
+        key_row.pack(fill="x", pady=(2, 8), padx=(24, 0))
 
         tk.Label(
             key_row, text="API Key:", font=FONT_BODY,
@@ -210,14 +236,15 @@ class LLMSetupStep(ttk.Frame):
         tk.Label(
             gemini_card,
             text=(
-                "Optional: You can skip this whole section. Gemini is a "
-                "free Google AI you can use as a backup if your local "
-                "Ollama ever has trouble. Get a free key at ai.google.dev "
-                "— no credit card needed."
+                "You can skip this whole section if you'd rather. Gemini "
+                "is a backup the app falls back to when Ollama has trouble "
+                "with a tricky question. Without it, the app still works — "
+                "those tricky questions just get logged as 'skill gaps' "
+                "for you to answer later."
             ),
             font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
             justify="left", wraplength=560,
-        ).pack(anchor="w")
+        ).pack(anchor="w", pady=(4, 0))
 
         # --- Status summary card ---
         summary_card = tk.Frame(
@@ -317,6 +344,15 @@ class LLMSetupStep(ttk.Frame):
             ),
             fg=TEXT_LIGHT,
         )
+
+    # ------------------------------------------------------------------
+    # Open Gemini API key page
+    # ------------------------------------------------------------------
+
+    def _open_gemini_keypage(self) -> None:
+        """Launch the default browser at Google AI Studio's key page."""
+        import webbrowser
+        webbrowser.open("https://aistudio.google.com/apikey", new=2)
 
     # ------------------------------------------------------------------
     # Ollama test

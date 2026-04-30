@@ -21,7 +21,25 @@ It will **never** automate your login. Whenever a platform asks you to sign in, 
 
 ## First-time setup
 
-You need **Python 3.11 or newer** and **Ollama** (free, local LLM — see https://ollama.com).
+You need **Python 3.11 or newer**. Everything else is handled by the setup wizard.
+
+### The easy way (Windows)
+
+1. **Download or clone this repo.**
+2. **Double-click `setup.bat`.**
+3. Follow the on-screen prompts. The wizard installs project dependencies, then opens a graphical setup screen that walks you through:
+   - Installing Ollama (free local AI)
+   - Pulling the AI model (~10 GB)
+   - Adding a free Gemini API key (recommended backup AI)
+   - Personal info (name, email, address, work auth, salary expectations)
+   - Resumes
+   - Preferences (which job boards, search keywords, location)
+   - Pre-baked Q&A for common screener questions
+4. **Daily use after that: double-click `run.bat`.**
+
+If Python isn't installed, `setup.bat` opens the download page for you and exits — install Python (check the "Add to PATH" box during install), then re-run `setup.bat`.
+
+### The manual way (any OS, or if you prefer the terminal)
 
 ```bash
 # 1. Install the app and its dependencies (one-time)
@@ -30,28 +48,27 @@ pip install -e .
 # 2. Install the browser engine (one-time)
 playwright install chromium
 
-# 3. Pull the LLM model (~10 GB download, one-time)
-ollama pull gemma4:e4b
+# 3. Run the setup wizard (handles Ollama, Gemini key, personal info, resumes, etc.)
+python -m auto_applier
 
-# 4. Copy the env template and add a Gemini API key (free, recommended)
-cp .env.example .env
-# then edit .env and put your key after GEMINI_API_KEY=
-# Get one free at: https://aistudio.google.com/apikey
-
-# 5. Verify everything is ready
+# 4. Verify everything is ready
 python -m auto_applier --cli doctor
 ```
 
 `doctor` runs 13 preflight checks. If they're all green, you're good to go. If anything is yellow or red, the message tells you how to fix it.
 
-> **Why a Gemini key?** Ollama is free and local but sometimes returns empty responses on long prompts. Gemini's free tier (1500 requests/day, no credit card) catches the gaps so the form filler doesn't dead-lock on a question Ollama choked on.
+> **Why a Gemini key?** Ollama is free and local but sometimes returns empty responses on long prompts. Gemini's free tier (1500 requests/day, no credit card) catches the gaps so the form filler doesn't dead-lock on a question Ollama choked on. The wizard has a one-click "Open Google AI Studio" button — you create the key, paste it in, click Test.
 
 ---
 
 ## Daily use
 
+**Easiest (Windows): double-click `run.bat`** — opens the dashboard.
+
+Or from the terminal:
+
 ```bash
-# Easiest: open the GUI wizard
+# Open the GUI dashboard
 python run.py
 
 # Or run from the CLI:
