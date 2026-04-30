@@ -194,8 +194,17 @@ class TestGenerateCoverLetter:
         assert "Dear Hiring Manager" in result.letter
         assert result.file_path is not None
         assert result.file_path.exists()
-        # Check file contents include header
-        content = result.file_path.read_text(encoding="utf-8")
+        # The returned file_path is the upload artifact (PDF when
+        # Playwright renders successfully, or the .md sidecar as a
+        # fallback). The metadata-bearing markdown is always written
+        # alongside as a sidecar — read THAT for content-shape checks.
+        md_sidecar = (
+            result.file_path
+            if result.file_path.suffix == ".md"
+            else result.file_path.with_suffix(".md")
+        )
+        assert md_sidecar.exists()
+        content = md_sidecar.read_text(encoding="utf-8")
         assert "# Cover Letter" in content
         assert "Data Analyst" in content
         assert "Acme" in content

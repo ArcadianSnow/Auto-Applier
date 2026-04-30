@@ -42,6 +42,69 @@ class CoverLetterResult:
     file_path: Path | None  # where we saved it, or None on failure
 
 
+_COVER_LETTER_HTML_TEMPLATE = """<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>Cover Letter</title>
+<style>
+  body {{
+    font-family: 'Calibri', 'Arial', sans-serif;
+    font-size: 11pt;
+    color: #111;
+    max-width: 720px;
+    margin: 48px auto;
+    line-height: 1.55;
+  }}
+  .name {{
+    font-size: 13pt;
+    font-weight: 600;
+    margin: 0 0 28pt 0;
+  }}
+  p {{
+    margin: 0 0 12pt 0;
+    text-align: left;
+  }}
+  .closing {{
+    margin-top: 18pt;
+  }}
+</style>
+</head>
+<body>
+{name_block}
+{paragraphs}
+<p class="closing">Sincerely,<br>{name_for_signature}</p>
+</body></html>
+"""
+
+
+def _render_cover_letter_html(letter_text: str, candidate_name: str) -> str:
+    """Wrap LLM-generated body text in a clean cover-letter HTML shell.
+
+    Rules the LLM was told to follow (see prompts.COVER_LETTER):
+    - body is plain prose, paragraph-separated
+    - no salutation, no signature — those are added here
+
+    Output looks like an MS Word cover letter export: candidate name
+    at top, paragraph body, "Sincerely, <name>" closing.
+    """
+    import html as _html
+
+    paragraphs_html = "\n".join(
+        f"<p>{_html.escape(p.strip())}</p>"
+        for p in letter_text.strip().split("\n\n")
+        if p.strip()
+    )
+    safe_name = _html.escape(candidate_name) if candidate_name else ""
+    name_block = (
+        f'<p class="name">{safe_name}</p>' if safe_name else ""
+    )
+    return _COVER_LETTER_HTML_TEMPLATE.format(
+        name_block=name_block,
+        paragraphs=paragraphs_html,
+        name_for_signature=safe_name or "",
+    )
+
+
 def _slugify(text: str, max_len: int = 40) -> str:
     """Filesystem-safe slug. Preserves rough readability."""
     text = text.strip().lower()
@@ -149,31 +212,65 @@ async def generate_cover_letter(
 
     file_path: Path | None = None
     if save_to_disk and letter:
-        # Layout: data/cover_letters/<job_id>/<First>_<Last>_Cover_Letter.md
-        # — same idea as the tailored-PDF rename. The job_id stays in
-        # the path (for lookups), the filename reads as if the user
-        # wrote it. If a cover letter ever gets converted to PDF and
-        # uploaded, the basename the server sees is organic.
-        from auto_applier.resume.tailor import _user_filename_prefix
+        # Layout: data/cover_letters/<job_id>/<First>_<Last>_Cover_Letter.pdf
+        # The PDF is the primary artifact (this is what gets attached
+        # to applications that ask for a cover letter file). We also
+        # save a .md sidecar with the metadata header so the user can
+        # read / edit the letter in any text editor — but the .md is
+        # NEVER what a job board sees.
+        from auto_applier.resume.tailor import _user_filename_prefix, render_pdf
         safe_job = "".join(
             c if c.isalnum() or c in "-_." else "_" for c in job_id
         )
         prefix = _user_filename_prefix()
-        filename = (
+        pdf_basename = (
+            f"{prefix}_Cover_Letter.pdf" if prefix else "Cover_Letter.pdf"
+        )
+        md_basename = (
             f"{prefix}_Cover_Letter.md" if prefix else "Cover_Letter.md"
         )
-        file_path = COVER_LETTERS_DIR / safe_job / filename
+        out_dir = COVER_LETTERS_DIR / safe_job
+        pdf_path = out_dir / pdf_basename
+        md_path = out_dir / md_basename
         try:
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            header = (
+            out_dir.mkdir(parents=True, exist_ok=True)
+            # 1. Sidecar markdown — has the metadata header for the
+            #    user's local reference. NOT for upload.
+            md_header = (
                 f"# Cover Letter — {job.title or 'Role'}\n\n"
                 f"**Company:** {job.company or '(unknown)'}\n"
                 f"**Resume used:** {resume_label}\n"
                 f"**Job ID:** {job.job_id}\n\n"
                 f"---\n\n"
             )
-            file_path.write_text(header + letter, encoding="utf-8")
-            logger.info("Saved cover letter to %s", file_path)
+            md_path.write_text(md_header + letter, encoding="utf-8")
+            # 2. PDF — letter body only, no metadata, no markdown.
+            #    This is the file users actually attach.
+            display_name = ""
+            try:
+                import json as _json
+                from auto_applier.config import USER_CONFIG_FILE
+                if USER_CONFIG_FILE.exists():
+                    cfg = _json.loads(USER_CONFIG_FILE.read_text(encoding="utf-8"))
+                    p = cfg.get("personal_info", {}) or {}
+                    display_name = (p.get("name") or "").strip()
+                    if not display_name:
+                        first = (p.get("first_name") or "").strip()
+                        last = (p.get("last_name") or "").strip()
+                        display_name = " ".join(x for x in (first, last) if x)
+            except Exception:
+                display_name = ""
+            html = _render_cover_letter_html(letter, display_name)
+            ok = await render_pdf(html, pdf_path)
+            if ok:
+                logger.info("Saved cover letter PDF to %s", pdf_path)
+                file_path = pdf_path
+            else:
+                logger.warning(
+                    "PDF render failed; falling back to markdown sidecar at %s",
+                    md_path,
+                )
+                file_path = md_path
         except OSError as exc:
             logger.warning("Could not save cover letter: %s", exc)
             file_path = None
