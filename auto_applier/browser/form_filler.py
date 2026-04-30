@@ -195,7 +195,7 @@ class FormFiller:
 
     Priority order:
     1. Personal info (name, email, phone, etc.)
-    2. answers.json (exact match, then fuzzy at 60% threshold)
+    2. answers.json (exact match, substring, fuzzy at 60% with length guard)
     3. LLM generation (resume + JD context)
     4. Record as skill gap (for resume improvement)
     """
@@ -509,8 +509,12 @@ class FormFiller:
         2. Substring containment in either direction — the field
            label contains the question, or vice versa. Handles
            forms that pad questions with extra boilerplate.
-        3. Fuzzy match (SequenceMatcher, 60% threshold) as a last
-           resort.
+        3. Fuzzy match (SequenceMatcher, 60% threshold) WITH a
+           length-ratio guard: shorter string must be at least 50%
+           the length of the longer one. Without the guard, short
+           labels like "Years" fuzzy-matched "Years of experience"
+           on raw character overlap and returned the wrong answer
+           (different question, same first word).
         """
         answers = self._load_answers()
         label_lower = label.lower().strip()
@@ -551,6 +555,14 @@ class FormFiller:
         for entry in answers:
             q = entry.get("question", "").lower()
             if not q:
+                continue
+            # Length-ratio guard: reject matches where one string is
+            # less than half the length of the other. SequenceMatcher
+            # gives 0.66 for "years" vs "years of experience" purely
+            # from the shared prefix — clearly different questions.
+            shorter = min(len(label_lower), len(q))
+            longer = max(len(label_lower), len(q))
+            if longer == 0 or shorter / longer < 0.5:
                 continue
             ratio = difflib.SequenceMatcher(None, label_lower, q).ratio()
             if ratio > best_ratio and ratio >= 0.6:
@@ -969,6 +981,86 @@ class FormFiller:
                 continue
 
         return fallback
+
+    # ------------------------------------------------------------------
+    # React State Commit
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    async def commit_react_state(page: Page, settle_seconds: float = 0.8) -> None:
+        """Force React's controlled-component state to commit our fills.
+
+        A plain Playwright `.check()` / `.fill()` updates the DOM but
+        React intercepts the native property setters; without going
+        through them, React's internal state stays "uncommitted" and
+        the host site's Continue button keeps seeing required fields
+        as empty. The well-known workaround below explicitly calls
+        HTMLInputElement / HTMLTextAreaElement / HTMLSelectElement
+        prototype setters with the element's *current* value, then
+        dispatches input/change/blur so React's synthetic-event system
+        picks up the change.
+
+        Platform-agnostic — Indeed, Dice, ZipRecruiter, and any future
+        React-based job-board form should call this after their fill
+        loop finishes and BEFORE clicking Continue. Cheap on non-React
+        pages (the dispatched events are no-ops there).
+
+        ``settle_seconds`` gives React time to re-render Continue from
+        disabled to enabled before the walker clicks it.
+        """
+        try:
+            await page.evaluate("""() => {
+                const inputProto = window.HTMLInputElement.prototype;
+                const checkedSetter = Object.getOwnPropertyDescriptor(
+                    inputProto, 'checked'
+                )?.set;
+                const valueSetter = Object.getOwnPropertyDescriptor(
+                    inputProto, 'value'
+                )?.set;
+                const textareaValueSetter = Object.getOwnPropertyDescriptor(
+                    window.HTMLTextAreaElement.prototype, 'value'
+                )?.set;
+                const selectValueSetter = Object.getOwnPropertyDescriptor(
+                    window.HTMLSelectElement.prototype, 'value'
+                )?.set;
+                const els = [...document.querySelectorAll(
+                    'input:not([type=hidden]), textarea, select'
+                )].filter(el => el.offsetParent !== null);
+                for (const el of els) {
+                    try {
+                        if (el.tagName === 'INPUT') {
+                            if (el.type === 'radio' || el.type === 'checkbox') {
+                                if (checkedSetter) {
+                                    checkedSetter.call(el, el.checked);
+                                }
+                            } else {
+                                if (valueSetter) {
+                                    valueSetter.call(el, el.value);
+                                }
+                            }
+                        } else if (el.tagName === 'TEXTAREA') {
+                            if (textareaValueSetter) {
+                                textareaValueSetter.call(el, el.value);
+                            }
+                        } else if (el.tagName === 'SELECT') {
+                            if (selectValueSetter) {
+                                selectValueSetter.call(el, el.value);
+                            }
+                        }
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                        el.dispatchEvent(new Event('blur', {bubbles: true}));
+                    } catch (_) {}
+                }
+                if (document.activeElement && document.activeElement.blur) {
+                    document.activeElement.blur();
+                }
+            }""")
+            if settle_seconds > 0:
+                import asyncio
+                await asyncio.sleep(settle_seconds)
+        except Exception as exc:
+            logger.debug("commit_react_state failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Answer-Fits-Field Pre-Check

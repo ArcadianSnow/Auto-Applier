@@ -1055,6 +1055,13 @@ class DicePlatform(JobPlatform):
                         page, field, job_id=job.job_id
                     )
                     await random_delay(0.5, 1.5)
+                # Dice's modal widgets are React-controlled — commit
+                # filled state through the React-aware setter so the
+                # Next/Submit button doesn't keep seeing required
+                # fields as empty (same root cause as Indeed's
+                # "form stuck — all fields filled" bug).
+                if fields:
+                    await self.form_filler.commit_react_state(page)
 
             await simulate_organic_behavior(page)
 

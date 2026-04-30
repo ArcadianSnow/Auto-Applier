@@ -221,6 +221,68 @@ def check_gemini_key() -> CheckResult:
     return CheckResult("Gemini fallback", PASS, "API key present")
 
 
+async def check_llm_smoke() -> CheckResult:
+    """Verify the active LLM backend produces non-empty output.
+
+    `is_available()` only checks that the model is registered with
+    Ollama / that the API key is configured — it does NOT check that
+    the model actually generates text. A broken Gemma installation
+    or a stuck model can pass `check_ollama()` and then return ""
+    for every prompt, dead-locking the form filler. This smoke test
+    sends a trivial prompt and confirms the backend speaks back.
+
+    Emits WARN (not FAIL) so a sluggish but warming model doesn't
+    block the run; the user gets a heads-up before applies start.
+    """
+    from auto_applier.llm.router import LLMRouter
+
+    router = LLMRouter()
+    try:
+        await router.initialize()
+    except Exception as exc:
+        return CheckResult(
+            "LLM smoke test", WARN,
+            f"could not initialize router: {exc}",
+            fix="Run --cli doctor again after fixing earlier checks",
+        )
+
+    active = router.active_backend
+    if active == "rule-based":
+        return CheckResult(
+            "LLM smoke test", WARN,
+            "only rule-based backend active (no LLM available)",
+            fix="Start Ollama or add GEMINI_API_KEY for richer answers",
+        )
+
+    try:
+        response = await router.complete(
+            prompt="Reply with just the word 'ok'.",
+            temperature=0.0,
+            max_tokens=8,
+            use_cache=False,
+        )
+    except Exception as exc:
+        return CheckResult(
+            "LLM smoke test", WARN,
+            f"{active} call raised: {exc}",
+            fix="Check Ollama server logs / Gemini quota",
+        )
+    text = (response.text or "").strip()
+    if not text:
+        return CheckResult(
+            "LLM smoke test", WARN,
+            f"{active} returned empty text on a trivial prompt",
+            fix=(
+                f"Model may be stuck. Try: ollama stop && ollama serve "
+                f"and retry. If repeats, switch OLLAMA_MODEL preset."
+            ),
+        )
+    return CheckResult(
+        "LLM smoke test", PASS,
+        f"{active} answered ({len(text)} chars)",
+    )
+
+
 def check_playwright() -> CheckResult:
     try:
         from playwright.async_api import async_playwright  # noqa: F401
@@ -319,8 +381,10 @@ async def _run_all() -> list[CheckResult]:
         check_screen_resolution,
     ]
     results = [fn() for fn in sync_checks]
-    # Ollama is the only async check.
+    # Async checks run sequentially — smoke test depends on Ollama
+    # being responsive, so order matters.
     results.append(await check_ollama())
+    results.append(await check_llm_smoke())
     return results
 
 

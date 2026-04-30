@@ -1025,6 +1025,10 @@ class ZipRecruiterPlatform(JobPlatform):
                 real_fields_on_step = len(real_fields)
                 if real_fields_on_step > 0:
                     any_real_fields_filled = True
+                    # ZipRecruiter's apply iframe is React-driven —
+                    # commit filled state through React's setter so
+                    # Submit/Continue actually sees the values.
+                    await self.form_filler.commit_react_state(page)
                 logger.debug(
                     "ZipRecruiter: step %d — %d real fields, %d chrome fields",
                     step + 1, real_fields_on_step,

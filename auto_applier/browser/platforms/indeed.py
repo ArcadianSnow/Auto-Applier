@@ -1253,74 +1253,10 @@ class IndeedPlatform(JobPlatform):
                     page, field, job_id=job.job_id,
                 )
                 await random_delay(0.5, 1.5)
-            # Indeed's questions widgets are React-controlled. A plain
-            # native click commits the DOM (.checked = true) but
-            # React's controlled-component model intercepts the
-            # property setter and only re-renders when the change
-            # event fires through React's synthetic event system.
-            # Without re-running the prototype value setter, React's
-            # internal state stays "uncommitted" — Continue still sees
-            # required fields as empty and silently rejects the form.
-            # The pattern below is the well-known workaround:
-            # explicitly call HTMLInputElement.prototype's value/
-            # checked setter, then dispatch the bubbling change event,
-            # which forces React to read the new state.
-            try:
-                await page.evaluate("""() => {
-                    const inputProto = window.HTMLInputElement.prototype;
-                    const checkedSetter = Object.getOwnPropertyDescriptor(
-                        inputProto, 'checked'
-                    )?.set;
-                    const valueSetter = Object.getOwnPropertyDescriptor(
-                        inputProto, 'value'
-                    )?.set;
-                    const textareaValueSetter = Object.getOwnPropertyDescriptor(
-                        window.HTMLTextAreaElement.prototype, 'value'
-                    )?.set;
-                    const selectValueSetter = Object.getOwnPropertyDescriptor(
-                        window.HTMLSelectElement.prototype, 'value'
-                    )?.set;
-                    const els = [...document.querySelectorAll(
-                        'input:not([type=hidden]), textarea, select'
-                    )].filter(el => el.offsetParent !== null);
-                    for (const el of els) {
-                        try {
-                            if (el.tagName === 'INPUT') {
-                                if (el.type === 'radio' || el.type === 'checkbox') {
-                                    // Re-apply current checked state through
-                                    // the React-aware setter so the synthetic
-                                    // event system picks it up.
-                                    if (checkedSetter) {
-                                        checkedSetter.call(el, el.checked);
-                                    }
-                                } else {
-                                    if (valueSetter) {
-                                        valueSetter.call(el, el.value);
-                                    }
-                                }
-                            } else if (el.tagName === 'TEXTAREA') {
-                                if (textareaValueSetter) {
-                                    textareaValueSetter.call(el, el.value);
-                                }
-                            } else if (el.tagName === 'SELECT') {
-                                if (selectValueSetter) {
-                                    selectValueSetter.call(el, el.value);
-                                }
-                            }
-                            el.dispatchEvent(new Event('input', {bubbles: true}));
-                            el.dispatchEvent(new Event('change', {bubbles: true}));
-                            el.dispatchEvent(new Event('blur', {bubbles: true}));
-                        } catch (_) {}
-                    }
-                    if (document.activeElement && document.activeElement.blur) {
-                        document.activeElement.blur();
-                    }
-                }""")
-                # Settle delay so React has time to re-render Continue
-                # from disabled to enabled before the walker clicks it.
-                await asyncio.sleep(0.8)
-            except Exception:
-                pass
+            # Indeed's questions widgets are React-controlled — defer
+            # to the shared FormFiller helper to commit state. See
+            # FormFiller.commit_react_state for the full rationale.
+            await self.form_filler.commit_react_state(page)
         return fields
 
     async def _handle_review(self, page: Page, job: Job) -> list:

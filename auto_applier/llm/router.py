@@ -127,6 +127,16 @@ class LLMRouter:
                             response.tokens_used,
                         )
                         return response
+                    # Empty-text response counts as a soft failure: the
+                    # backend is up but isn't producing usable output
+                    # (Gemma 4 sometimes returns "" on long prompts).
+                    # Bump the failure counter so a stuck backend gets
+                    # disabled after threshold instead of silently
+                    # falling through forever.
+                    self._record_failure(
+                        backend.name,
+                        RuntimeError("empty response"),
+                    )
                 except Exception as exc:
                     self._record_failure(backend.name, exc)
 
@@ -193,6 +203,16 @@ class LLMRouter:
                             "Backend %s returned JSON", backend.name
                         )
                         return result
+                    # Empty-dict / None response is a soft failure —
+                    # backend is up but the model couldn't produce
+                    # parseable JSON. Without bumping the counter,
+                    # Ollama returning {} forever just slows every
+                    # call by always trying it first.
+                    self._record_failure(
+                        backend.name,
+                        RuntimeError("empty JSON"),
+                        kind="JSON",
+                    )
                 except Exception as exc:
                     self._record_failure(backend.name, exc, kind="JSON")
 
