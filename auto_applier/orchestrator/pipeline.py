@@ -151,8 +151,18 @@ async def apply_to_job(
     personal_info: dict,
     router,
     dry_run: bool = False,
+    score: int = 0,
 ) -> Application:
-    """Apply to a single job and return the Application record."""
+    """Apply to a single job and return the Application record.
+
+    ``score`` is the resume-vs-JD score the engine already computed
+    before deciding to apply. It's persisted on the Application row
+    so post-hoc analyses (resume-suggestion, conversion patterns,
+    refine flow's archetype-mismatch detector) have a real signal
+    to read instead of zeros. Without this, every saved Application
+    had score=0 and check_resume_suggestion's `score <= 0` filter
+    silently dropped every row.
+    """
 
     # If a tailored resume PDF was generated ahead of time for this
     # job, use it for the upload instead of the original file. The
@@ -212,7 +222,7 @@ async def apply_to_job(
         status=status,
         source=platform.source_id,
         resume_used=resume_label,
-        score=0,
+        score=score,
         cover_letter_generated=result.cover_letter_generated,
         failure_reason=result.failure_reason,
         fields_filled=result.fields_filled,

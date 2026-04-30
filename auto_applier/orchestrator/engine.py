@@ -660,8 +660,8 @@ class ApplicationEngine:
                     personal_info=personal_info,
                     router=self.router,
                     dry_run=self.dry_run,
+                    score=job_score.score,
                 )
-                app.score = job_score.score
                 if app.status in ("applied", "dry_run"):
                     self.applied_count += 1
                 else:
@@ -1125,8 +1125,8 @@ class ApplicationEngine:
                     personal_info=personal_info,
                     router=self.router,
                     dry_run=self.dry_run,
+                    score=job_score.score,
                 )
-                app.score = job_score.score
                 if job_score.dimensions:
                     import json as _json
                     app.dimensions_json = _json.dumps([
