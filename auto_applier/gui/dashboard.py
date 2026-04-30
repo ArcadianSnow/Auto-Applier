@@ -746,23 +746,6 @@ class DashboardWindow(tk.Toplevel):
     # Review panel bridge
     # ------------------------------------------------------------------
 
-    def _open_review_panel(self, job, score) -> None:
-        """Open the job review panel and resolve the event with the decision.
-
-        NOTE: This method is kept for backward compatibility but is
-        no longer wired to USER_REVIEW_NEEDED. The engine queues
-        borderline jobs and opens _open_batch_review at the end of
-        the run instead.
-        """
-        from auto_applier.gui.panels.job_review import JobReviewPanel
-
-        def on_decision(decision: str):
-            if decision == "skip":
-                self._increment_skipped()
-            self.events.resolve_event(USER_REVIEW_NEEDED, decision)
-
-        JobReviewPanel(self, job, score, on_decision)
-
     def _open_batch_review(self, queue: list[dict]) -> None:
         """Walk the user through all queued review jobs in one sitting.
 

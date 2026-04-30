@@ -430,8 +430,12 @@ class JobPlatform(ABC):
             "a transient Cloudflare JS challenge...",
             self.display_name, retry_seconds,
         )
-        deadline = asyncio.get_event_loop().time() + retry_seconds
-        while asyncio.get_event_loop().time() < deadline:
+        # asyncio.get_event_loop() is deprecated in 3.12+ when called
+        # from inside a running coroutine — use get_running_loop() to
+        # get the loop we're already running on.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + retry_seconds
+        while loop.time() < deadline:
             await asyncio.sleep(2.0)
             if not await self.detect_captcha(page):
                 logger.info(
