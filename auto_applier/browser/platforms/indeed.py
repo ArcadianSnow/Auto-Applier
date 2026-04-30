@@ -992,13 +992,35 @@ class IndeedPlatform(JobPlatform):
                         'fieldset, [role=group], [role=radiogroup]'
                     );
                     for (const wrapper of wrappers) {
-                        const inp = wrapper.querySelector(
+                        // querySelectorAll, not querySelector — a single
+                        // question wrapper can hold multiple controls
+                        // (number input + unit dropdown, address line
+                        // 1 + line 2, salary range from + to). Picking
+                        // only the first input dropped the rest as
+                        // invisible-to-the-form-filler required fields.
+                        const inputs = wrapper.querySelectorAll(
                             'input:not([type=hidden]), textarea, select'
                         );
-                        if (!inp || inp.offsetParent === null) continue;
+                        if (inputs.length === 0) continue;
+                        // Pick the first VISIBLE input as the
+                        // representative for this wrapper's question
+                        // text; emit one result per name afterwards.
+                        let inp = null;
+                        for (const candidate of inputs) {
+                            if (candidate.offsetParent !== null) {
+                                inp = candidate;
+                                break;
+                            }
+                        }
+                        if (!inp) continue;
                         const name = inp.name || '';
+                        // Use this wrapper's first visible input only
+                        // to derive the question text; the per-input
+                        // emit loop below adds names to `seen`. If
+                        // the first input's name is already seen,
+                        // skip the entire wrapper to avoid re-deriving
+                        // text we'd never end up using.
                         if (!name || seen.has(name)) continue;
-                        seen.add(name);
                         // Extract question text: walk child elements
                         // and grab the first one with substantial text
                         // that isn't an option label (Yes/No/etc.)
@@ -1032,12 +1054,24 @@ class IndeedPlatform(JobPlatform):
                             'required fields are marked',
                         ];
                         if (headerPhrases.some(p => text.toLowerCase().includes(p))) continue;
-                        results.push({
-                            text: text.substring(0, 200),
-                            name: name,
-                            type: inp.type || inp.tagName.toLowerCase(),
-                            selector: '[name="' + name + '"]',
-                        });
+                        // Emit one entry per UNIQUE named visible input
+                        // inside this wrapper. A wrapper holding e.g.
+                        // a number input + a unit dropdown both keyed
+                        // off the same question gets two entries with
+                        // the same shared question text — both routed
+                        // through the form filler instead of just one.
+                        for (const candidate of inputs) {
+                            if (candidate.offsetParent === null) continue;
+                            const cName = candidate.name || '';
+                            if (!cName || seen.has(cName)) continue;
+                            seen.add(cName);
+                            results.push({
+                                text: text.substring(0, 200),
+                                name: cName,
+                                type: candidate.type || candidate.tagName.toLowerCase(),
+                                selector: '[name="' + cName + '"]',
+                            });
+                        }
                     }
                     return results;
                 }""")

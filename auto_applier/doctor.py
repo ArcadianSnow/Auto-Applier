@@ -132,7 +132,22 @@ def check_user_config() -> CheckResult:
             f"missing fields: {', '.join(missing)}",
             fix="Re-open the wizard and complete the Personal Info step",
         )
-    return CheckResult("user_config.json", PASS, "name + email present")
+    # Soft-check the recommended-but-not-required keys. The form filler
+    # falls back to LLM/answers.json when these are missing, but each
+    # missing key is one more LLM call per application + one more chance
+    # for the answer to drift from the user's actual info.
+    recommended = (
+        "phone", "first_name", "last_name", "city", "state",
+        "zip_code", "country",
+    )
+    soft_missing = [k for k in recommended if not personal.get(k)]
+    if soft_missing:
+        return CheckResult(
+            "user_config.json", WARN,
+            f"name + email OK, but missing recommended: {', '.join(soft_missing)}",
+            fix="Open Personal Info step in the wizard to fill the rest",
+        )
+    return CheckResult("user_config.json", PASS, "name + email + recommended fields")
 
 
 def check_resumes_loaded() -> CheckResult:
@@ -172,13 +187,51 @@ def check_answers_file() -> CheckResult:
             fix="Run the wizard's Answers step, or create an empty {} file",
         )
     try:
-        json.loads(ANSWERS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(ANSWERS_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return CheckResult(
             "answers.json", FAIL, "unreadable JSON",
             fix="Delete data/answers.json and re-run the wizard",
         )
-    return CheckResult("answers.json", PASS, "valid JSON")
+    # answers.json supports two on-disk shapes: a flat
+    # {question: answer} dict (current default) or a list of
+    # {question, answer, aliases?} entries (richer alias matching).
+    # Validate whichever is present so a half-filled or wrong-shape
+    # file fails preflight instead of silently producing zero matches
+    # at runtime.
+    bad_entries = 0
+    total = 0
+    if isinstance(data, dict):
+        total = len(data)
+        for k, v in data.items():
+            if not isinstance(k, str) or not isinstance(v, str):
+                bad_entries += 1
+            elif not k.strip() or not v.strip():
+                bad_entries += 1
+    elif isinstance(data, list):
+        total = len(data)
+        for entry in data:
+            if not isinstance(entry, dict):
+                bad_entries += 1
+                continue
+            q = entry.get("question") or ""
+            a = entry.get("answer") or ""
+            if not q.strip() or not a.strip():
+                bad_entries += 1
+    else:
+        return CheckResult(
+            "answers.json", FAIL, "must be a JSON object or list",
+            fix="Re-run the wizard's Answers step to regenerate the file",
+        )
+    if bad_entries:
+        return CheckResult(
+            "answers.json", WARN,
+            f"{bad_entries}/{total} entries missing question or answer",
+            fix="Open Answers step in the wizard and remove blanks",
+        )
+    return CheckResult(
+        "answers.json", PASS, f"{total} entries, valid",
+    )
 
 
 async def check_ollama() -> CheckResult:

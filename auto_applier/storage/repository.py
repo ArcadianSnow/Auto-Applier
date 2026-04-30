@@ -1,10 +1,29 @@
 """CSV-backed persistence layer with Excel compatibility."""
 import csv
 import os
+import threading
 from dataclasses import asdict, fields as dc_fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypeVar, Type
+
+# Per-path lock registry. Append-mode writes from concurrent callers
+# (continuous-mode cycle vs GUI save vs followup write) would
+# otherwise interleave mid-row and corrupt the CSV. The lock is
+# coarse-grained — one per file — but the contention window is tiny
+# (a single writer.writerow + flush) so the simple form wins.
+_FILE_LOCKS: dict[Path, threading.Lock] = {}
+_FILE_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(path: Path) -> threading.Lock:
+    """Return the (lazily-created) lock for a given CSV path."""
+    with _FILE_LOCKS_GUARD:
+        lock = _FILE_LOCKS.get(path)
+        if lock is None:
+            lock = threading.Lock()
+            _FILE_LOCKS[path] = lock
+        return lock
 
 
 def _atomic_rewrite(path: Path, headers: list[str], rows: list[dict]) -> None:
@@ -59,7 +78,12 @@ def _ensure_csv(path: Path, model_type: type) -> None:
 
 
 def save(record: T) -> None:
-    """Append a single record to its corresponding CSV file."""
+    """Append a single record to its corresponding CSV file.
+
+    Holds the per-path lock around the open + write so concurrent
+    callers (continuous-mode cycle, GUI save handler, followup
+    writer) serialize their appends instead of interleaving rows.
+    """
     model_type = type(record)
     path = _CSV_MAP[model_type]
     _ensure_csv(path, model_type)
@@ -70,9 +94,10 @@ def save(record: T) -> None:
             row[k] = str(v)
         elif isinstance(v, list):
             row[k] = str(v)
-    with open(path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=row.keys())
-        writer.writerow(row)
+    with _lock_for(path):
+        with open(path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=row.keys())
+            writer.writerow(row)
 
 
 def load_all(model_type: Type[T]) -> list[T]:
@@ -239,31 +264,35 @@ def update_followups_for_job(
     """
     path = _CSV_MAP[Followup]
     _ensure_csv(path, Followup)
-    followups = load_all(Followup)
-    updated = 0
-    for f in followups:
-        if f.status != "pending":
-            continue
-        if f.job_id != job_id:
-            continue
-        if source and f.source != source:
-            continue
-        f.status = new_status
-        updated += 1
-    # Rewrite the file atomically so a crash mid-write can't leave
-    # followups.csv truncated or half-written.
-    headers = [fld.name for fld in dc_fields(Followup)]
-    rows = []
-    for f in followups:
-        row = {k: v for k, v in asdict(f).items()}
-        for k, v in row.items():
-            if isinstance(v, bool):
-                row[k] = str(v)
-            elif isinstance(v, list):
-                row[k] = str(v)
-        rows.append(row)
-    _atomic_rewrite(path, headers, rows)
-    return updated
+    # Hold the lock for the whole load -> mutate -> rewrite cycle so
+    # a save() append from another thread can't slip between load_all
+    # and the atomic replace, where it would be silently overwritten.
+    with _lock_for(path):
+        followups = load_all(Followup)
+        updated = 0
+        for f in followups:
+            if f.status != "pending":
+                continue
+            if f.job_id != job_id:
+                continue
+            if source and f.source != source:
+                continue
+            f.status = new_status
+            updated += 1
+        # Rewrite the file atomically so a crash mid-write can't leave
+        # followups.csv truncated or half-written.
+        headers = [fld.name for fld in dc_fields(Followup)]
+        rows = []
+        for f in followups:
+            row = {k: v for k, v in asdict(f).items()}
+            for k, v in row.items():
+                if isinstance(v, bool):
+                    row[k] = str(v)
+                elif isinstance(v, list):
+                    row[k] = str(v)
+            rows.append(row)
+        _atomic_rewrite(path, headers, rows)
+        return updated
 
 
 def get_todays_application_count(

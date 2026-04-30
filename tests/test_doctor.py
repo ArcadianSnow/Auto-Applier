@@ -73,13 +73,38 @@ class TestUserConfig:
 
     def test_complete_passes(self, tmp_path, monkeypatch):
         f = tmp_path / "user_config.json"
+        # Include the recommended-but-not-required fields so the
+        # soft-check passes too. The bare-minimum (name + email only)
+        # case is now WARN — see test_minimal_warns.
+        f.write_text(json.dumps({
+            "personal_info": {
+                "name": "Jane",
+                "first_name": "Jane",
+                "last_name": "Doe",
+                "email": "j@x.com",
+                "phone": "+15555550100",
+                "city": "Seattle",
+                "state": "WA",
+                "zip_code": "98101",
+                "country": "United States",
+            }
+        }))
+        import auto_applier.config as cfg
+        monkeypatch.setattr(cfg, "USER_CONFIG_FILE", f)
+        r = doctor.check_user_config()
+        assert r.status == doctor.PASS
+
+    def test_minimal_warns(self, tmp_path, monkeypatch):
+        """Only name+email present — passes hard check, warns on soft."""
+        f = tmp_path / "user_config.json"
         f.write_text(json.dumps({
             "personal_info": {"name": "Jane", "email": "j@x.com"}
         }))
         import auto_applier.config as cfg
         monkeypatch.setattr(cfg, "USER_CONFIG_FILE", f)
         r = doctor.check_user_config()
-        assert r.status == doctor.PASS
+        assert r.status == doctor.WARN
+        assert "recommended" in r.message
 
 
 class TestResumesLoaded:
