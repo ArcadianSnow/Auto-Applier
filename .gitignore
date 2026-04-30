@@ -20,6 +20,13 @@ data/resumes/
 # CLI-generated export artifacts
 auto_applier_export.json
 
+# Local-state for the auto-updater (commit SHA the user is on)
+.version
+
+# update.bat / setup.bat verbose output (errors during install)
+update.log
+setup.log
+
 # PyInstaller
 dist/
 build/

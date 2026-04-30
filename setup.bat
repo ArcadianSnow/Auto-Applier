@@ -158,6 +158,15 @@ if errorlevel 1 (
     echo        Done.
 )
 
+REM ---- Record the version we just installed --------------------------
+REM update.bat compares this against the latest GitHub commit SHA
+REM to decide whether an update is available. Best-effort — if the
+REM API call fails (offline first-run, etc.) we just skip writing
+REM .version and update.bat will treat the install as "version
+REM unknown" and offer the next refresh.
+powershell -NoProfile -Command ^
+    "try { (Invoke-RestMethod -UseBasicParsing 'https://api.github.com/repos/ArcadianSnow/Auto-Applier/commits/master').sha | Out-File -FilePath '.version' -Encoding ASCII -NoNewline } catch {}" 2>nul
+
 REM ---- Step 4: Hand off to the GUI wizard -----------------------------
 echo.
 echo  [4/4] Launching the setup wizard...

@@ -66,6 +66,26 @@ python -m auto_applier --cli doctor
 
 ---
 
+## Getting updates
+
+Auto Applier is still being improved. To pull the latest version:
+
+**Easiest (Windows): double-click `update.bat`.**
+
+It will:
+1. Check GitHub for the latest version (silently, ~1 second).
+2. If there's nothing new, say "Already up to date" and close.
+3. If there's an update, show you the new version number and ask `Update? [Y/n]`.
+4. Download the new code, replace your source files, and re-install dependencies.
+
+Your `data/` folder, your `.env` file, and your saved resumes are **never touched** — only the program code itself gets refreshed. Your applications history, gap data, profile, and Q&A library all survive an update.
+
+No git installation required. No PowerShell knowledge required. Same one-click experience as `setup.bat`.
+
+If something goes wrong mid-update, just re-run `setup.bat` — it will repair anything that was half-installed.
+
+---
+
 ## Daily use
 
 **Easiest (Windows): double-click `run.bat`** — opens the dashboard.
