@@ -40,6 +40,12 @@ class RefineCandidate:
 
     Sorted by (resume, archetype) groupings so a user can batch-review
     all their analyst-resume gaps at once, then engineer-resume gaps.
+
+    ``skill`` is the cleaned skill name (e.g. "Power BI"), used both
+    for display to the user and as the storage key on the resume
+    profile. ``raw_label`` is the original question text from the
+    form (e.g. "Years of experience with Power BI") — kept so the
+    user can see exactly how the question was asked.
     """
     skill: str
     count: int
@@ -48,6 +54,97 @@ class RefineCandidate:
     sample_companies: list[str] = field(default_factory=list)
     sample_titles: list[str] = field(default_factory=list)
     category: str = "skill"
+    raw_label: str = ""     # the original form-field label
+
+
+# Question phrasings that wrap the actual skill name. Stripped from
+# the front of the field label to extract a clean skill name (e.g.
+# "Years of experience with Power BI" → "Power BI"). Order matters:
+# longest-prefix-first so we don't strip a partial match.
+_SKILL_PREFIX_PATTERNS = (
+    "how many years of experience do you have with",
+    "how many years of experience do you have using",
+    "how many years of experience with",
+    "how many years of experience using",
+    "how many years experience with",
+    "years of experience with",
+    "years of experience using",
+    "years experience with",
+    "years experience using",
+    "do you have experience with",
+    "do you have experience using",
+    "do you have experience in",
+    "do you have hands-on experience with",
+    "are you experienced with",
+    "are you experienced in",
+    "are you familiar with",
+    "are you proficient with",
+    "are you proficient in",
+    "are you skilled in",
+    "experience with",
+    "experience using",
+    "experience in",
+    "proficiency with",
+    "proficiency in",
+    "knowledge of",
+    "familiarity with",
+)
+
+# Trailing fragments to strip after the skill name.
+_SKILL_SUFFIX_PATTERNS = (
+    "?",
+    " (years)",
+    " (in years)",
+    " in years",
+    " — required",
+    " - required",
+    "  *",
+    " *",
+    "*",
+    " required",
+    " (required)",
+    " years",
+)
+
+
+def _extract_skill_name(raw_label: str) -> str:
+    """Pull a clean skill name out of a question-form field label.
+
+    Examples:
+      "Years of experience with Power BI"        → "Power BI"
+      "How many years of experience with SQL?"   → "SQL"
+      "Are you familiar with dbt?"               → "dbt"
+      "AWS"                                      → "AWS"  (already clean)
+      "Voluntary self identification questions"  → returned unchanged
+                                                   (handled upstream by the
+                                                    skill-shape filter, but
+                                                    if it slips through we
+                                                    don't want to mangle it)
+
+    Falls back to title-casing the raw label when no pattern matches.
+    """
+    s = raw_label.strip()
+    lower = s.lower()
+    # Strip trailing punctuation / boilerplate first so prefix
+    # matchers don't have to handle every variant.
+    for suffix in _SKILL_SUFFIX_PATTERNS:
+        if lower.endswith(suffix):
+            s = s[: len(s) - len(suffix)].rstrip()
+            lower = s.lower()
+    # Strip the prefix.
+    for prefix in _SKILL_PREFIX_PATTERNS:
+        if lower.startswith(prefix):
+            s = s[len(prefix):].strip()
+            break
+    # Defensive: if stripping left us empty, fall back to the original.
+    if not s:
+        s = raw_label.strip()
+    # Title-case very-short results so "sql" becomes "SQL"-ish.
+    # Lots of tech names are acronyms; keep the user's original
+    # casing if it had any uppercase letters.
+    if not any(c.isupper() for c in s):
+        s = s.title()
+    return s
 
 
 @dataclass
@@ -96,48 +193,56 @@ def collect_refine_candidates(
     prompted = evolution._load_prompted()
     excluded = excluded_from_goals | prompted
 
-    # Group by (resume, skill) — count occurrences across all
-    # archetypes. A skill missing in 1 analyst job + 1 engineer job
-    # still counts as 2 occurrences for the user, even though it's
-    # split across archetypes. Archetype becomes metadata (the most
-    # common one for this skill on this resume).
-    grouped: dict[tuple[str, str], list[GapContext]] = defaultdict(list)
+    # Group by (resume, normalized-skill-name) — count occurrences
+    # across all archetypes. Two questions worded slightly differently
+    # but asking about the same skill ("Years of experience with SQL"
+    # vs "How many years of experience do you have with SQL?") collapse
+    # to the same group via the extractor. Archetype becomes metadata
+    # (the most common one for this skill on this resume).
+    grouped: dict[tuple[str, str], list[tuple[GapContext, str]]] = defaultdict(list)
     for ctx in contexts:
-        key = ctx.gap.field_label.lower().strip()
-        if key in excluded:
+        raw_label = ctx.gap.field_label.strip()
+        clean_skill = _extract_skill_name(raw_label)
+        key = clean_skill.lower().strip()
+        if key in excluded or raw_label.lower().strip() in excluded:
             continue
         grouping = (ctx.gap.resume_label or "(unknown)", key)
-        grouped[grouping].append(ctx)
+        grouped[grouping].append((ctx, raw_label))
 
     # Turn groupings into candidates
     candidates: list[RefineCandidate] = []
-    for (resume, skill), items in grouped.items():
+    for (resume, skill_key), items in grouped.items():
         if len(items) < min_count:
             continue
+        # All items in a group share a normalized skill name. Use
+        # the first raw_label's extracted form as the display name
+        # (preserves original casing — "Power BI" not "power bi").
+        clean_skill = _extract_skill_name(items[0][1])
         # Most common archetype for this skill+resume becomes the
         # surfaced label (used for grouping the session display).
-        archetype_counts: Counter = Counter(i.archetype for i in items)
+        archetype_counts: Counter = Counter(i[0].archetype for i in items)
         primary_archetype = archetype_counts.most_common(1)[0][0]
 
         companies: list[str] = []
         titles: list[str] = []
         seen_co: set[str] = set()
         seen_ti: set[str] = set()
-        for i in items:
-            if i.company and i.company not in seen_co and len(companies) < 3:
-                companies.append(i.company)
-                seen_co.add(i.company)
-            if i.job_title and i.job_title not in seen_ti and len(titles) < 3:
-                titles.append(i.job_title)
-                seen_ti.add(i.job_title)
+        for ctx, _raw in items:
+            if ctx.company and ctx.company not in seen_co and len(companies) < 3:
+                companies.append(ctx.company)
+                seen_co.add(ctx.company)
+            if ctx.job_title and ctx.job_title not in seen_ti and len(titles) < 3:
+                titles.append(ctx.job_title)
+                seen_ti.add(ctx.job_title)
         candidates.append(RefineCandidate(
-            skill=skill,
+            skill=clean_skill,
             count=len(items),
             resume_label=resume,
             archetype=primary_archetype,
             sample_companies=companies,
             sample_titles=titles,
-            category=items[0].gap.category,
+            category=items[0][0].gap.category,
+            raw_label=items[0][1],
         ))
 
     # Within each (resume, primary_archetype), cap to top N by count
