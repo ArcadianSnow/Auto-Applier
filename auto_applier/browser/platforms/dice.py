@@ -851,17 +851,27 @@ class DicePlatform(JobPlatform):
             except Exception:
                 cur = ""
             if "/login" in cur or "/register" in cur:
-                logger.info(
-                    "Dice: apply redirected to login — waiting for "
-                    "manual login (timeout=180s)..."
+                logger.warning(
+                    "Dice: apply redirected to login — Dice is requiring "
+                    "re-authentication mid-apply (active bot-detection "
+                    "signal). Waiting for manual login (timeout=180s). "
+                    "If this keeps happening, the platform will be put "
+                    "in cooldown."
                 )
                 logged_back = await self._wait_for_dice_login(
                     page, timeout=180,
                 )
                 if not logged_back:
-                    return ApplyResult(
-                        success=False,
-                        failure_reason="apply login gate timed out — please log in to Dice",
+                    # Treat the timeout the same as a CAPTCHA — the user
+                    # didn't (or couldn't) re-auth, and continuing to
+                    # hammer Dice will only deepen the bot-detection
+                    # fingerprint. Raising CaptchaDetectedError routes
+                    # through the engine's pause logic so dice goes into
+                    # 4-hour cooldown automatically.
+                    raise CaptchaDetectedError(
+                        "Dice apply login gate timed out — Dice required "
+                        "re-authentication and the user did not complete "
+                        "it within 180s. Platform cooldown engaged."
                     )
                 logger.info("Dice: login completed, retrying apply")
                 # Re-navigate to the job and retry the apply click
@@ -1043,6 +1053,50 @@ class DicePlatform(JobPlatform):
             )
 
             await self.check_and_abort_on_captcha(page)
+
+            # Mid-walk login-gate detection. Dice's bot-detection
+            # bounces the user back to a login / register page mid-flow
+            # (often right before Submit). Detecting it inside the
+            # walker — not just at apply-click — so the user gets a
+            # chance to re-auth, and so a timeout escalates to a
+            # platform-wide cooldown via CaptchaDetectedError.
+            try:
+                cur_url = page.url
+            except Exception:
+                cur_url = ""
+            if "/login" in cur_url or "/register" in cur_url:
+                logger.warning(
+                    "Dice: modal step %d redirected to login page — "
+                    "Dice is requiring re-auth mid-apply. Waiting for "
+                    "manual login (timeout=180s).",
+                    step + 1,
+                )
+                logged_back = await self._wait_for_dice_login(
+                    page, timeout=180,
+                )
+                if not logged_back:
+                    raise CaptchaDetectedError(
+                        f"Dice modal step {step + 1} login gate timed "
+                        f"out — Dice required re-auth mid-apply and the "
+                        f"user did not complete it within 180s. Platform "
+                        f"cooldown engaged."
+                    )
+                logger.info(
+                    "Dice: re-login completed mid-modal, re-navigating "
+                    "to job and re-starting apply"
+                )
+                # Mid-modal re-login almost always loses the modal
+                # state. Bail this job — the engine will treat it as a
+                # failed apply, but the platform stays usable for the
+                # next job (the cookie is now fresh).
+                return self._build_result(
+                    success=False,
+                    failure_reason=(
+                        f"Dice required re-auth at modal step {step + 1}. "
+                        "Re-login completed; retrying this job in a future "
+                        "run."
+                    ),
+                )
 
             # Handle resume upload on this step
             await self._handle_resume_upload(page, resume_path)

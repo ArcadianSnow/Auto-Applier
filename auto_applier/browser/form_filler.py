@@ -908,10 +908,23 @@ class FormFiller:
                 # option regardless of the LLM's answer. Resolve the
                 # right sibling in the same group by matching the LLM's
                 # answer text against each radio's label, then click
-                # that one. Falls back to field.element if no match.
-                target = await self._resolve_radio_target(
-                    field, answer,
-                ) or field.element
+                # that one.
+                target = await self._resolve_radio_target(field, answer)
+                if target is None:
+                    # No confident match. The OLD behavior was to fall
+                    # back to field.element (the first radio in the
+                    # group) — which on Dice's work-auth question
+                    # silently committed "Prefer Not to Answer" for
+                    # users whose actual status was "US Citizen".
+                    # Better to return False here so the priority
+                    # chain falls through to the LLM with the radio's
+                    # actual options visible. Caller will retry.
+                    logger.debug(
+                        "  → radio resolver couldn't match %r; "
+                        "deferring to next priority",
+                        answer,
+                    )
+                    return False
                 try:
                     await target.check(timeout=4000)
                 except Exception as exc:
@@ -1140,8 +1153,33 @@ class FormFiller:
             return None
 
         answer_lower = (answer or "").strip().lower()
-        affirmative = answer_lower in {"yes", "true", "1", "y", "affirmative"}
-        negative = answer_lower in {"no", "false", "0", "n", "negative"}
+        # Work-authorization statuses that imply YES (legally able to
+        # work without sponsorship). When personal_info hands us
+        # "US Citizen" but the radio's options are bare Yes/No, the
+        # status string scores 0 against any option and we fall back
+        # to clicking the first radio — historically "Prefer Not to
+        # Answer" on Dice's work-auth question. Treat these as
+        # affirmative so a US citizen reliably gets "Yes" picked.
+        AUTH_AFFIRMATIVE = {
+            "us citizen", "u.s. citizen", "citizen",
+            "green card holder", "green card", "permanent resident",
+            "permanent resident card", "lpr",
+            "authorized", "yes, i am authorized",
+        }
+        # Statuses that imply NO (need sponsorship / not authorized).
+        AUTH_NEGATIVE = {
+            "need sponsorship", "require sponsorship",
+            "require visa sponsorship", "require a visa",
+            "i need a visa", "not authorized",
+        }
+        affirmative = (
+            answer_lower in {"yes", "true", "1", "y", "affirmative"}
+            or answer_lower in AUTH_AFFIRMATIVE
+        )
+        negative = (
+            answer_lower in {"no", "false", "0", "n", "negative"}
+            or answer_lower in AUTH_NEGATIVE
+        )
 
         # One JS call to enumerate every radio in this group with its
         # visible label text. Returning an array of {label} keeps the
