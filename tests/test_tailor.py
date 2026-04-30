@@ -13,19 +13,34 @@ from auto_applier.resume.tailor import (
 
 
 class TestTailoredPdfPath:
-    def test_sanitizes_slashes(self):
+    """job_id sanitization moved from filename to directory: the
+    PDF is named after the user (or 'Resume.pdf' fallback) so the
+    upload's basename doesn't betray the system. The job_id lives
+    in the parent directory."""
+
+    def test_sanitizes_slashes_in_job_dir(self):
         path = tailored_pdf_path("li/../etc/passwd")
-        # Slashes and dots become underscores
-        assert "/" not in path.name
+        # Slashes (the path-traversal vector) can't appear in the
+        # job_id segment of the path. Bare ".." inside a single
+        # segment is not a traversal — it's just two characters.
+        assert "/" not in path.parent.name
+        assert "\\" not in path.parent.name
         assert path.suffix == ".pdf"
 
-    def test_preserves_safe_chars(self):
+    def test_preserves_safe_chars_in_job_dir(self):
         path = tailored_pdf_path("li-12345_abc.def")
-        assert path.name == "li-12345_abc.def.pdf"
+        assert path.parent.name == "li-12345_abc.def"
 
-    def test_strips_spaces(self):
+    def test_strips_spaces_from_job_dir(self):
         path = tailored_pdf_path("job 1 2 3")
-        assert " " not in path.name
+        assert " " not in path.parent.name
+
+    def test_filename_does_not_contain_job_id(self):
+        """Critical: uploading a file named after the job_id would
+        be a dead giveaway that the resume is system-generated."""
+        path = tailored_pdf_path("ind-9934dbc8cae647b8")
+        assert "ind-9934" not in path.name
+        assert path.name.endswith("_Resume.pdf") or path.name == "Resume.pdf"
 
 
 class TestRenderHtml:

@@ -204,11 +204,57 @@ async def render_pdf(html_content: str, out_path: Path) -> bool:
         return False
 
 
+def _user_filename_prefix() -> str:
+    """Build a 'First_Last' or 'First' filename prefix from user_config.
+
+    The previous naming pattern was `<job_id>.pdf` (e.g.
+    `ind-9934dbc8cae647b8.pdf`) — uploading a file with that name
+    is a dead giveaway that the resume was system-generated. Using
+    the candidate's actual name reads as if they exported their own
+    resume from Word.
+
+    Falls back to "Resume" if user_config.json is missing or has no
+    name fields, so the filename is still organic-looking.
+    """
+    try:
+        import json
+        from auto_applier.config import USER_CONFIG_FILE
+        if USER_CONFIG_FILE.exists():
+            data = json.loads(USER_CONFIG_FILE.read_text(encoding="utf-8"))
+            personal = data.get("personal_info", {}) or {}
+            first = (personal.get("first_name") or "").strip()
+            last = (personal.get("last_name") or "").strip()
+            if first and last:
+                return f"{_clean_name(first)}_{_clean_name(last)}"
+            if first:
+                return _clean_name(first)
+            full = (personal.get("name") or "").strip()
+            if full:
+                return _clean_name(full).replace(" ", "_")
+    except Exception:
+        pass
+    return ""
+
+
+def _clean_name(name: str) -> str:
+    """Strip filesystem-unfriendly chars from a name."""
+    return "".join(c for c in name if c.isalnum() or c in "_- ").strip()
+
+
 def tailored_pdf_path(job_id: str) -> Path:
-    """Return the canonical path for a tailored PDF for a job."""
+    """Return the canonical path for a tailored PDF for a job.
+
+    Layout: ``<GENERATED_RESUMES_DIR>/<job_id>/<First>_<Last>_Resume.pdf``.
+    The job_id stays in the path (we need a stable lookup key) but
+    sits in the *directory* layer, not the filename — so the basename
+    that gets uploaded to a job board is ``Jordan_Testpilot_Resume.pdf``,
+    not ``ind-9934dbc8cae647b8.pdf``.
+    """
     # Sanitize job_id for filesystem safety
-    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in job_id)
-    return GENERATED_RESUMES_DIR / f"{safe}.pdf"
+    safe_job = "".join(c if c.isalnum() or c in "-_." else "_" for c in job_id)
+    prefix = _user_filename_prefix()
+    filename = f"{prefix}_Resume.pdf" if prefix else "Resume.pdf"
+    return GENERATED_RESUMES_DIR / safe_job / filename
 
 
 def save_tailored_json(tailored: TailoredResume) -> Path:

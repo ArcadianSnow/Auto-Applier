@@ -149,11 +149,20 @@ async def generate_cover_letter(
 
     file_path: Path | None = None
     if save_to_disk and letter:
-        company_slug = _slugify(job.company or "company")
-        title_slug = _slugify(job.title or "role")
-        short_id = job_id[-8:] if len(job_id) > 8 else job_id
-        filename = f"{company_slug}-{title_slug}-{short_id}.md"
-        file_path = COVER_LETTERS_DIR / filename
+        # Layout: data/cover_letters/<job_id>/<First>_<Last>_Cover_Letter.md
+        # — same idea as the tailored-PDF rename. The job_id stays in
+        # the path (for lookups), the filename reads as if the user
+        # wrote it. If a cover letter ever gets converted to PDF and
+        # uploaded, the basename the server sees is organic.
+        from auto_applier.resume.tailor import _user_filename_prefix
+        safe_job = "".join(
+            c if c.isalnum() or c in "-_." else "_" for c in job_id
+        )
+        prefix = _user_filename_prefix()
+        filename = (
+            f"{prefix}_Cover_Letter.md" if prefix else "Cover_Letter.md"
+        )
+        file_path = COVER_LETTERS_DIR / safe_job / filename
         try:
             file_path.parent.mkdir(parents=True, exist_ok=True)
             header = (
