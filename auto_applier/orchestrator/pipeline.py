@@ -113,6 +113,16 @@ async def fetch_description(platform, job: Job) -> Job:
     """
     if not job.description:
         job.description = await platform.get_job_description(job)
+        # Persist the JD onto the Job row so post-hoc commands like
+        # `cli cover`, `cli tailor`, `cli research` see real text
+        # instead of the empty stub that discovery wrote.
+        if job.description:
+            try:
+                repository.update_job_description(job.job_id, job.description)
+            except Exception as exc:
+                logger.debug(
+                    "Could not persist JD for %s: %s", job.job_id, exc,
+                )
     # Liveness inspection uses the page already loaded by
     # get_job_description — no second navigation.
     try:

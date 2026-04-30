@@ -118,7 +118,15 @@ async def generate_cover_letter(
     ``data/cover_letters/<company>-<title>-<short_id>.md``. Set
     False to just get the text back without persisting.
     """
-    jobs = {j.job_id: j for j in load_all(Job)}
+    # Multiple rows can exist for the same job_id (discovery appends
+    # a stub before the description fetch runs). Pick the row with
+    # the longest description so post-hoc commands work even before
+    # update_job_description has collapsed the duplicates.
+    jobs: dict[str, Job] = {}
+    for j in load_all(Job):
+        existing = jobs.get(j.job_id)
+        if existing is None or len(j.description or "") > len(existing.description or ""):
+            jobs[j.job_id] = j
     job = jobs.get(job_id)
     if job is None:
         logger.warning("No job found with id %s", job_id)

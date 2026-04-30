@@ -77,6 +77,60 @@ def _ensure_csv(path: Path, model_type: type) -> None:
     migrate_csv(path, model_type)
 
 
+def update_job_description(job_id: str, description: str) -> bool:
+    """Persist a freshly-fetched JD onto an existing Job row.
+
+    The discovery pipeline saves Jobs as stubs (title + company + url
+    only) BEFORE the per-job description fetch runs, so subsequent
+    post-hoc commands like `cli cover`, `cli tailor`, `cli research`
+    were operating on empty JDs. This helper rewrites jobs.csv in
+    place with the description filled in.
+
+    Discovery sometimes appends multiple rows for the same job_id
+    (one per re-encounter across runs / keywords). We collapse them
+    to a single row keyed by job_id during this write, keeping the
+    one with the most-complete data and applying the new description.
+
+    Returns True if a matching row was found and updated, else False.
+    """
+    path = _CSV_MAP[Job]
+    _ensure_csv(path, Job)
+    with _lock_for(path):
+        jobs = load_all(Job)
+        # Collapse duplicates: pick the row with the longest existing
+        # description as the survivor, then overlay the new description.
+        survivors_by_id: dict[str, Job] = {}
+        target_found = False
+        for j in jobs:
+            existing = survivors_by_id.get(j.job_id)
+            if existing is None:
+                survivors_by_id[j.job_id] = j
+            elif len(j.description or "") > len(existing.description or ""):
+                survivors_by_id[j.job_id] = j
+            if j.job_id == job_id:
+                target_found = True
+        if not target_found:
+            return False
+        # Apply the new description to the surviving row for this job_id.
+        target = survivors_by_id[job_id]
+        if target.description == description:
+            return True  # already current — still a successful update
+        target.description = description
+        # Re-write the whole CSV atomically with one row per job_id.
+        headers = [fld.name for fld in dc_fields(Job)]
+        rows = []
+        for j in survivors_by_id.values():
+            row = asdict(j)
+            for k, v in row.items():
+                if isinstance(v, bool):
+                    row[k] = str(v)
+                elif isinstance(v, list):
+                    row[k] = str(v)
+            rows.append(row)
+        _atomic_rewrite(path, headers, rows)
+        return True
+
+
 def save(record: T) -> None:
     """Append a single record to its corresponding CSV file.
 

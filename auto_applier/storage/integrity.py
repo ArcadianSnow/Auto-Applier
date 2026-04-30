@@ -233,17 +233,24 @@ def normalize() -> dict:
         "false_dry_runs_corrected": 0,
     }
 
-    # Step 1: dedup jobs
+    # Step 1: dedup jobs. When multiple rows exist for the same
+    # (job_id, source) — common when discovery saves a stub before
+    # the description fetch runs — keep the row with the longest
+    # description so post-hoc commands (cli cover, cli tailor,
+    # cli research) see real text instead of an empty stub.
     jobs = repository.load_all(Job)
-    seen: set[tuple[str, str]] = set()
-    kept: list[Job] = []
+    best_by_key: dict[tuple[str, str], Job] = {}
     for j in jobs:
         key = (j.job_id, j.source)
-        if key in seen:
+        existing = best_by_key.get(key)
+        if existing is None:
+            best_by_key[key] = j
+        elif len(j.description or "") > len(existing.description or ""):
+            best_by_key[key] = j
             changes["jobs_deduped"] += 1
-            continue
-        seen.add(key)
-        kept.append(j)
+        else:
+            changes["jobs_deduped"] += 1
+    kept: list[Job] = list(best_by_key.values())
 
     # Step 4 (piggybacks on the same Jobs rewrite)
     for j in kept:

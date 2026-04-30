@@ -1653,6 +1653,7 @@ def research(company: str, from_file: str, show: bool):
 
     async def _run():
         router = LLMRouter()
+        await router.initialize()
         researcher = CompanyResearcher(router)
         return await researcher.research(company, source_material)
 
@@ -1694,6 +1695,11 @@ def tailor(job_id: str, resume: str):
 
     async def _run():
         router = LLMRouter()
+        # initialize() probes each backend and populates the
+        # availability dict — without this, complete_json/complete
+        # see every backend as unavailable and immediately fall
+        # through to "All LLM backends failed for JSON prompt".
+        await router.initialize()
         mgr = ResumeManager(router)
         label = resume
         if not label:
@@ -1765,6 +1771,7 @@ def outreach(job_id: str, resume: str):
 
     async def _gen():
         router = LLMRouter()
+        await router.initialize()
         mgr = ResumeManager(router)
         label = resume
         if not label:
