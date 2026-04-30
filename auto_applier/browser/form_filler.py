@@ -1377,8 +1377,87 @@ class FormFiller:
     # Gap Recording
     # ------------------------------------------------------------------
 
+    # Field-label substrings that are NOT skill-shaped — recording
+    # them as "skill gaps" would surface EEO disclosures, demographic
+    # questions, and yes/no compliance prompts as "skills the user
+    # should add to their resume" in the refine flow. They're real
+    # unanswered fields (the LLM still gets them via _record_unanswered
+    # so the user can teach answers.json), but they don't belong in
+    # the skill-gap → resume-bullet pipeline.
+    _NON_SKILL_LABEL_FRAGMENTS = (
+        # EEO / demographics — never surface as skills
+        "voluntary self identif",
+        "self-identification",
+        "race", "ethnicity", "gender", "sex",
+        "veteran", "military",
+        "disability", "disabled",
+        "pronoun",
+        "lgbt",
+        "sexual orientation",
+        "marital status",
+        # Age compliance
+        "18 years of age",
+        "at least 18",
+        "minimum age",
+        # Address / contact (handled by personal_info)
+        "street address", "mailing address", "home address",
+        "city ", "city,", "city*", " city",
+        "zip code", "postal code",
+        "phone number", "mobile number",
+        # Authorization / sponsorship — handled by work_auth + answers.json
+        "work authorization",
+        "authorized to work",
+        "require sponsorship", "visa sponsorship",
+        # Salary / compensation — handled by smart_fallback
+        "desired salary", "expected salary",
+        "salary expectation",
+        "hourly rate",
+        # Compliance yes/no boilerplate
+        "background check",
+        "drug test",
+        "criminal", "felony", "convicted",
+        "non-compete", "ndas", "non-disclosure",
+        "debarred", "excluded",
+        "physical requirements",
+        "certify that the information",
+        # Communications opt-in
+        "text messages", "sms",
+        "receive emails", "email updates",
+        # Source attribution
+        "how did you hear",
+        "where did you hear",
+        "referred by",
+    )
+
+    @classmethod
+    def _is_skill_shaped(cls, label: str) -> bool:
+        """True if the field label looks like a skill / experience question.
+
+        Negative signal beats positive signal: anything matching the
+        EEO/demographic/compliance fragments above is not a skill,
+        no matter what other words appear.
+        """
+        lower = label.lower()
+        for frag in cls._NON_SKILL_LABEL_FRAGMENTS:
+            if frag in lower:
+                return False
+        return True
+
     def _record_gap(self, field: FormField, job_id: str) -> None:
-        """Record an unfilled field as a skill gap."""
+        """Record an unfilled field as a skill gap.
+
+        Filtered: EEO / demographic / compliance / boilerplate
+        questions are NOT recorded as skill gaps. They still flow
+        through ``_record_unanswered`` so the LLM and answers.json
+        layer eventually learn them; they just don't pollute the
+        refine-flow skill list.
+        """
+        if not self._is_skill_shaped(field.label):
+            logger.debug(
+                "Skipping non-skill gap: %r (boilerplate / demographic / compliance)",
+                field.label[:80],
+            )
+            return
         self.gaps.append(
             SkillGap(
                 job_id=job_id,

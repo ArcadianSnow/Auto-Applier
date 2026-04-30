@@ -231,6 +231,7 @@ def normalize() -> dict:
         "followup_statuses_fixed": 0,
         "companies_renormalized": 0,
         "false_dry_runs_corrected": 0,
+        "non_skill_gaps_removed": 0,
     }
 
     # Step 1: dedup jobs. When multiple rows exist for the same
@@ -299,6 +300,23 @@ def normalize() -> dict:
             fu_changed = True
     if fu_changed:
         _rewrite(Followup, followups)
+
+    # Step 5: drop non-skill-shaped gaps (EEO disclosures, demographic
+    # questions, yes/no compliance prompts, address fields, etc.).
+    # These were recorded as "skill gaps" by older builds of the
+    # form_filler and pollute the refine flow's candidate list. The
+    # form_filler now filters them at record-time; this normalize
+    # pass cleans up the historical pollution.
+    from auto_applier.browser.form_filler import FormFiller
+    gaps = repository.load_all(SkillGap)
+    keep_gaps: list[SkillGap] = []
+    for g in gaps:
+        if FormFiller._is_skill_shaped(g.field_label):
+            keep_gaps.append(g)
+        else:
+            changes["non_skill_gaps_removed"] += 1
+    if changes["non_skill_gaps_removed"]:
+        _rewrite(SkillGap, keep_gaps)
 
     changes["total"] = sum(v for k, v in changes.items() if k != "total")
     return changes
