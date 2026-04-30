@@ -1222,6 +1222,19 @@ class FormFiller:
         if not options:
             return None
 
+        # Substring keyword sets used to grade longer option labels
+        # like "Yes, I am authorized to work in the United States" or
+        # "No, I require sponsorship". A bucketed-affirmative answer
+        # like "US Citizen" wouldn't otherwise score against them.
+        AFFIRMATIVE_OPT_HINTS = (
+            "yes", "authorized", "able to work", "can legally work",
+            "i am authorized",
+        )
+        NEGATIVE_OPT_HINTS = (
+            "no", "sponsorship", "require visa", "not authorized",
+            "need a visa", "i need a visa",
+        )
+
         best_idx = -1
         best_score = 0.0
         for opt in options:
@@ -1238,6 +1251,10 @@ class FormFiller:
                 score = 0.95
             elif negative and text in {"no", "n", "false"}:
                 score = 0.95
+            elif affirmative and any(h in text for h in AFFIRMATIVE_OPT_HINTS):
+                score = 0.9
+            elif negative and any(h in text for h in NEGATIVE_OPT_HINTS):
+                score = 0.9
             else:
                 score = (
                     difflib.SequenceMatcher(None, answer_lower, text).ratio()
@@ -1248,11 +1265,56 @@ class FormFiller:
                 best_idx = opt["idx"]
 
         if best_idx < 0 or best_score < 0.5:
-            logger.debug(
-                "radio resolver: no match for answer=%r among %s",
-                answer, [o.get("label", "")[:30] for o in options],
+            # US-default safety net for work-authorization questions:
+            # this software is currently shipped to US-citizens applying
+            # to US jobs (see memory: project context). When the radio
+            # is clearly a work-auth question and we couldn't otherwise
+            # match, default to the "Yes / authorized" option. Tighten
+            # to per-user opt-in once the audience expands.
+            field_label_lower = ""
+            try:
+                # field.label isn't accessible from this static method,
+                # so probe the radio's own ancestry for the question
+                # text instead.
+                field_label_lower = (await field.element.evaluate(
+                    """el => {
+                        let cur = el.parentElement;
+                        for (let i = 0; i < 8 && cur; i++) {
+                            const t = (cur.innerText || '').trim().toLowerCase();
+                            if (t.length > 5 && t.length < 400) return t;
+                            cur = cur.parentElement;
+                        }
+                        return '';
+                    }"""
+                )) or ""
+            except Exception:
+                field_label_lower = ""
+            is_work_auth_q = any(
+                kw in field_label_lower
+                for kw in (
+                    "work authorization", "authorized to work",
+                    "legally authorized", "authorization status",
+                    "right to work",
+                )
             )
-            return None
+            if is_work_auth_q:
+                for opt in options:
+                    text = (opt.get("label") or opt.get("value") or "").strip().lower()
+                    if any(h in text for h in AFFIRMATIVE_OPT_HINTS):
+                        logger.warning(
+                            "radio resolver: work-auth fallback → "
+                            "%r (US-default: assume Yes for citizens)",
+                            opt.get("label", "")[:60],
+                        )
+                        best_idx = opt["idx"]
+                        best_score = 0.5  # accept
+                        break
+            if best_idx < 0 or best_score < 0.5:
+                logger.debug(
+                    "radio resolver: no match for answer=%r among %s",
+                    answer, [o.get("label", "")[:30] for o in options],
+                )
+                return None
 
         # Re-grab the matching radio as an ElementHandle.
         try:
