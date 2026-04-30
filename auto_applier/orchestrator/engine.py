@@ -284,6 +284,34 @@ class ApplicationEngine:
                 if not platform_cls:
                     continue
 
+                # Cooldown check — if a recent run tripped a CAPTCHA
+                # on this platform, skip it instead of digging the
+                # fingerprint hole deeper. Pause auto-clears after the
+                # cooldown elapses or via `cli unpause`.
+                from auto_applier.orchestrator import platform_pauses
+                pause_rec = platform_pauses.is_paused(platform_key)
+                if pause_rec is not None:
+                    remaining = platform_pauses.format_remaining(pause_rec)
+                    logger.warning(
+                        "%s in cooldown (%s remaining): %s — skipping",
+                        platform_key, remaining, pause_rec.reason,
+                    )
+                    self.events.emit(
+                        PLATFORM_STARTED, platform=platform_key,
+                    )
+                    self.events.emit(
+                        PLATFORM_ERROR,
+                        platform=platform_key,
+                        error=(
+                            f"in cooldown ({remaining} remaining): "
+                            f"{pause_rec.reason}"
+                        ),
+                    )
+                    self.events.emit(
+                        PLATFORM_FINISHED, platform=platform_key,
+                    )
+                    continue
+
                 self.events.emit(PLATFORM_STARTED, platform=platform_key)
 
                 captcha_hard_stop = False
@@ -301,7 +329,13 @@ class ApplicationEngine:
                     # platform in the same browser session just means
                     # we'll trip the SAME detection again and dig the
                     # fingerprint hole deeper. Flag the run to stop
-                    # after the finally block fires PLATFORM_FINISHED.
+                    # after the finally block fires PLATFORM_FINISHED,
+                    # and put the platform in cooldown so subsequent
+                    # cycles / runs don't immediately retry.
+                    platform_pauses.pause(
+                        platform_key,
+                        reason=f"CAPTCHA: {str(e)[:120]}",
+                    )
                     self.events.emit(
                         CAPTCHA_DETECTED, platform=platform_key, error=str(e)
                     )
@@ -729,6 +763,16 @@ class ApplicationEngine:
         self.events.emit(PLATFORM_LOGIN_NEEDED, platform=platform_key)
         logged_in = await platform.ensure_logged_in()
         if not logged_in:
+            # Login timeout almost always means the platform showed a
+            # verification gate the user couldn't (or didn't) solve in
+            # time. Treat the same as a CAPTCHA — pause the platform
+            # so the next continuous-run cycle doesn't immediately
+            # retry into the same wall.
+            from auto_applier.orchestrator import platform_pauses
+            platform_pauses.pause(
+                platform_key,
+                reason="login timeout — user did not complete manual verification",
+            )
             self.events.emit(PLATFORM_LOGIN_FAILED, platform=platform_key)
             return
 

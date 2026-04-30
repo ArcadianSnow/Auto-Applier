@@ -39,12 +39,25 @@ def _on_platform_started(**kw):
 
 def _on_platform_login_needed(**kw):
     name = kw.get("platform", "").title()
-    click.echo(f"Please log in to {name} in the browser window...")
+    click.echo(
+        f"\n  ┌─ ACTION NEEDED ───────────────────────────────────\n"
+        f"  │  Please log in to {name} in the open browser.\n"
+        f"  │  If you see a CAPTCHA / verification challenge,\n"
+        f"  │  solve it manually — the run resumes automatically\n"
+        f"  │  once the login is detected.\n"
+        f"  └───────────────────────────────────────────────────"
+    )
 
 
 def _on_platform_login_failed(**kw):
     name = kw.get("platform", "").title()
-    click.echo(f"Login failed for {name} -- skipping.", err=True)
+    click.echo(
+        f"\n  Login failed for {name}. The platform has been put in "
+        f"a 4-hour cooldown to avoid digging the bot-detection hole "
+        f"deeper. Clear it sooner with: --cli unpause "
+        f"{kw.get('platform', '')}",
+        err=True,
+    )
 
 
 def _on_jobs_found(**kw):
@@ -82,7 +95,22 @@ def _on_platform_error(**kw):
 
 def _on_captcha_detected(**kw):
     name = kw.get("platform", "")
-    click.echo(f"  CAPTCHA detected on {name} -- stopping this platform")
+    click.echo(
+        f"\n  ┌─ CAPTCHA DETECTED ───────────────────────────────\n"
+        f"  │  {name.title()} flagged this session as automation.\n"
+        f"  │  The platform has been put in a 4-hour cooldown\n"
+        f"  │  so the bot-detection fingerprint can cool off.\n"
+        f"  │\n"
+        f"  │  What you can do:\n"
+        f"  │   1. Solve the verification in the open browser\n"
+        f"  │      window (this re-warms the cookie).\n"
+        f"  │   2. Run dry-run dice + ziprecruiter in the\n"
+        f"  │      meantime — they have separate fingerprints.\n"
+        f"  │   3. Clear the cooldown sooner with:\n"
+        f"  │        python -m auto_applier --cli unpause {name}\n"
+        f"  └───────────────────────────────────────────────────",
+        err=True,
+    )
 
 
 def _on_evolution_triggers(**kw):
@@ -1343,6 +1371,43 @@ def doctor():
     from auto_applier import doctor as doctor_module
     import sys as _sys
     _sys.exit(doctor_module.run())
+
+
+@cli.command()
+def pauses():
+    """List active platform cooldowns (set after CAPTCHA / login failure)."""
+    from auto_applier.orchestrator import platform_pauses
+
+    active = platform_pauses.list_active()
+    if not active:
+        click.echo("No platforms are currently paused.")
+        return
+    click.echo(f"Active platform cooldowns ({len(active)}):")
+    for rec in active:
+        remaining = platform_pauses.format_remaining(rec)
+        click.echo(
+            f"  {rec.platform:14s}  {remaining:>8s} remaining  "
+            f"— {rec.reason[:80]}"
+        )
+    click.echo(
+        "\nClear with: --cli unpause <platform>  (or 'all' to clear every pause)"
+    )
+
+
+@cli.command()
+@click.argument("platform")
+def unpause(platform: str):
+    """Manually clear a platform cooldown. Pass 'all' to clear every pause."""
+    from auto_applier.orchestrator import platform_pauses
+
+    if platform.lower() == "all":
+        count = platform_pauses.unpause_all()
+        click.echo(f"Cleared {count} pause(s).")
+        return
+    if platform_pauses.unpause(platform):
+        click.echo(f"Unpaused {platform}.")
+    else:
+        click.echo(f"No active pause for '{platform}'.")
 
 
 @cli.command()

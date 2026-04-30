@@ -962,6 +962,12 @@ class IndeedPlatform(JobPlatform):
             )
         except Exception:
             pass
+        # Commit React state — the radio click DOM-set the picker but
+        # React's controlled component won't see it until the prototype
+        # setter fires through the synthetic event system. Same fix as
+        # the questions module, just applied here too.
+        if self.form_filler:
+            await self.form_filler.commit_react_state(page, settle_seconds=0.4)
         return []
 
     async def _handle_questions(self, page: Page, job: Job) -> list:

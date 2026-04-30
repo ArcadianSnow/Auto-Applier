@@ -336,8 +336,36 @@ class DashboardWindow(tk.Toplevel):
 
     def _on_platform_login_failed(self, **kw):
         key = kw.get("platform", "")
+        name = key.title()
         self.after(0, lambda: self._update_platform(key, "Login failed", STATUS_ERROR))
-        self.after(0, lambda: self.log(f"[{key.title()}] Login failed -- skipping.", "error"))
+        self.after(0, lambda: self.log(
+            f"[{name}] Login failed — platform put in 4-hour cooldown. "
+            f"Clear with: python -m auto_applier --cli unpause {key}",
+            "error",
+        ))
+        # Pop a clear modal so the user understands what happened
+        # without having to read the log feed.
+        self.after(0, lambda: self._show_login_failed_dialog(name, key))
+
+    def _show_login_failed_dialog(self, name: str, key: str) -> None:
+        """Pop a tkinter modal explaining the cooldown + how to clear."""
+        try:
+            from tkinter import messagebox
+            messagebox.showwarning(
+                title=f"{name} login failed",
+                message=(
+                    f"{name} did not detect a successful login within "
+                    f"the timeout window.\n\n"
+                    f"The platform has been put in a 4-hour cooldown so "
+                    f"continuous-run cycles don't trip the same wall.\n\n"
+                    f"To clear it sooner, run:\n"
+                    f"    python -m auto_applier --cli unpause {key}\n\n"
+                    f"To check active cooldowns:\n"
+                    f"    python -m auto_applier --cli pauses"
+                ),
+            )
+        except Exception:
+            pass  # Best-effort — never break the run on UI issues
 
     def _on_search_started(self, **kw):
         key = kw.get("platform", "")
