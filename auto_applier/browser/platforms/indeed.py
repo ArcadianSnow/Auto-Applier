@@ -1062,6 +1062,167 @@ class IndeedPlatform(JobPlatform):
             except Exception as e:
                 logger.debug("questions handler broader detection failed: %s", e)
 
+        # Sweep for any remaining required inputs the broader detection
+        # missed. Indeed sometimes splits questions across pages whose
+        # text inputs sit OUTSIDE the [class*=question] wrappers — the
+        # walker would then click Continue while those fields are still
+        # empty, hit "form stuck — required field unfilled", and bail.
+        # This sweep grabs anything still missing by [required] /
+        # aria-required, classifies it via the standard pipeline, and
+        # appends to the fields list so the regular form_filler pass
+        # can answer it.
+        try:
+            already_named: set[str] = set()
+            for f in fields:
+                try:
+                    n = await f.element.get_attribute("name")
+                    if n:
+                        already_named.add(n)
+                except Exception:
+                    pass
+            missing = await page.evaluate("""(seen) => {
+                const seenSet = new Set(seen);
+                const els = [...document.querySelectorAll(
+                    'input:not([type=hidden]):not([type=button]):not([type=submit]),'
+                    + 'textarea, select'
+                )].filter(el => el.offsetParent !== null);
+
+                // Pre-compute which radio groups have at least one
+                // checked option. Indeed's React validation treats
+                // *every* radio group as effectively required: a group
+                // with no checked option blocks Continue even when no
+                // individual radio carries `required=true`. Treat such
+                // groups as missing so the sweep picks them up too.
+                const radioGroupChecked = new Map();
+                for (const el of els) {
+                    if (el.type !== 'radio') continue;
+                    const name = el.name || '';
+                    if (!name) continue;
+                    if (!radioGroupChecked.has(name)) {
+                        radioGroupChecked.set(name, false);
+                    }
+                    if (el.checked) radioGroupChecked.set(name, true);
+                }
+
+                const out = [];
+                const emittedRadioGroups = new Set();
+                for (const el of els) {
+                    const required = el.required ||
+                        el.getAttribute('aria-required') === 'true';
+                    const isUnansweredRadio = el.type === 'radio'
+                        && !radioGroupChecked.get(el.name || '');
+                    if (!required && !isUnansweredRadio) continue;
+                    const elName = el.name || '';
+                    const elId = el.id || '';
+                    // Dedup key: prefer name, fall back to id. Keep
+                    // them distinct in the output so Python builds the
+                    // right kind of selector.
+                    const dedup = elName || elId;
+                    if (!dedup || seenSet.has(dedup)) continue;
+                    // For radio groups, only emit ONE entry per group.
+                    if (el.type === 'radio') {
+                        if (emittedRadioGroups.has(elName)) continue;
+                        emittedRadioGroups.add(elName);
+                    }
+                    // Only sweep empty fields — already-filled ones
+                    // would be no-ops and would re-trigger LLM costs.
+                    if (el.type === 'radio' || el.type === 'checkbox') {
+                        if (el.checked) continue;
+                    } else if ((el.value || '').length > 0) {
+                        continue;
+                    }
+                    // Walk up the DOM looking for a label/legend/heading
+                    // that names this field — same logic as the questions
+                    // extractor, just less restrictive about wrapper class.
+                    let label = '';
+                    if (el.id) {
+                        const lbl = el.ownerDocument.querySelector(
+                            'label[for="' + el.id.replace(/"/g, '\\\\"') + '"]'
+                        );
+                        if (lbl) label = (lbl.innerText || '').trim();
+                    }
+                    if (!label) {
+                        const wrap = el.closest('label');
+                        if (wrap) label = (wrap.innerText || '').trim();
+                    }
+                    if (!label) {
+                        // Climb until we hit a substantive text node.
+                        let parent = el.parentElement;
+                        for (let i = 0; i < 6 && parent && !label; i++) {
+                            const t = (parent.innerText || '').trim();
+                            if (t && t.length >= 5 && t.length <= 300) {
+                                label = t.split('\\n')[0];
+                            }
+                            parent = parent.parentElement;
+                        }
+                    }
+                    if (!label) label = elName || elId;
+                    out.push({
+                        name: elName,
+                        id: elId,
+                        label: label.substring(0, 200),
+                    });
+                }
+                return out;
+            }""", list(already_named))
+            logger.info(
+                "Indeed: questions sweep — %d already-named, %d missing-required candidate(s)",
+                len(already_named), len(missing or []),
+            )
+            from auto_applier.browser.selector_utils import _classify_element
+            for q in (missing or []):
+                # Prefer the name attribute — Indeed's React-generated
+                # IDs use unescaped colons (e.g., #number-input-:r1h:)
+                # that break CSS parsing. Names use safe q_<hash> form.
+                sel = ""
+                if q.get("name"):
+                    safe = q["name"].replace('"', '\\"')
+                    sel = f'[name="{safe}"]'
+                elif q.get("id"):
+                    # CSS.escape ID — colons + dots in React IDs need it.
+                    safe_id = await page.evaluate(
+                        "id => CSS.escape(id)", q["id"],
+                    )
+                    sel = f"#{safe_id}"
+                if not sel:
+                    logger.info(
+                        "  sweep: no selector for q=%s", q,
+                    )
+                    continue
+                try:
+                    inp = await page.query_selector(sel)
+                    if not inp:
+                        logger.info(
+                            "  sweep: query_selector(%s) returned None", sel,
+                        )
+                        continue
+                    f = await _classify_element(inp, q["label"], page)
+                    if f is None:
+                        logger.info(
+                            "  sweep: _classify_element returned None for "
+                            "label=%r selector=%s",
+                            q["label"][:60], sel,
+                        )
+                        continue
+                    if f.label.lower() in {ff.label.lower() for ff in fields}:
+                        logger.info(
+                            "  sweep: dropped duplicate label=%r",
+                            q["label"][:60],
+                        )
+                        continue
+                    fields.append(f)
+                    logger.info(
+                        "  sweep: added missed field label=%r name=%s type=%s",
+                        q["label"][:60], q.get("name", "?"), f.field_type,
+                    )
+                except Exception as exc:
+                    logger.info(
+                        "  sweep: classify failed for %s: %s", sel, exc,
+                    )
+                    continue
+        except Exception as exc:
+            logger.info("questions sweep failed: %s", exc)
+
         if not fields:
             # Diagnostic dump — log what the questions page looks like
             try:
@@ -1092,6 +1253,74 @@ class IndeedPlatform(JobPlatform):
                     page, field, job_id=job.job_id,
                 )
                 await random_delay(0.5, 1.5)
+            # Indeed's questions widgets are React-controlled. A plain
+            # native click commits the DOM (.checked = true) but
+            # React's controlled-component model intercepts the
+            # property setter and only re-renders when the change
+            # event fires through React's synthetic event system.
+            # Without re-running the prototype value setter, React's
+            # internal state stays "uncommitted" — Continue still sees
+            # required fields as empty and silently rejects the form.
+            # The pattern below is the well-known workaround:
+            # explicitly call HTMLInputElement.prototype's value/
+            # checked setter, then dispatch the bubbling change event,
+            # which forces React to read the new state.
+            try:
+                await page.evaluate("""() => {
+                    const inputProto = window.HTMLInputElement.prototype;
+                    const checkedSetter = Object.getOwnPropertyDescriptor(
+                        inputProto, 'checked'
+                    )?.set;
+                    const valueSetter = Object.getOwnPropertyDescriptor(
+                        inputProto, 'value'
+                    )?.set;
+                    const textareaValueSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLTextAreaElement.prototype, 'value'
+                    )?.set;
+                    const selectValueSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLSelectElement.prototype, 'value'
+                    )?.set;
+                    const els = [...document.querySelectorAll(
+                        'input:not([type=hidden]), textarea, select'
+                    )].filter(el => el.offsetParent !== null);
+                    for (const el of els) {
+                        try {
+                            if (el.tagName === 'INPUT') {
+                                if (el.type === 'radio' || el.type === 'checkbox') {
+                                    // Re-apply current checked state through
+                                    // the React-aware setter so the synthetic
+                                    // event system picks it up.
+                                    if (checkedSetter) {
+                                        checkedSetter.call(el, el.checked);
+                                    }
+                                } else {
+                                    if (valueSetter) {
+                                        valueSetter.call(el, el.value);
+                                    }
+                                }
+                            } else if (el.tagName === 'TEXTAREA') {
+                                if (textareaValueSetter) {
+                                    textareaValueSetter.call(el, el.value);
+                                }
+                            } else if (el.tagName === 'SELECT') {
+                                if (selectValueSetter) {
+                                    selectValueSetter.call(el, el.value);
+                                }
+                            }
+                            el.dispatchEvent(new Event('input', {bubbles: true}));
+                            el.dispatchEvent(new Event('change', {bubbles: true}));
+                            el.dispatchEvent(new Event('blur', {bubbles: true}));
+                        } catch (_) {}
+                    }
+                    if (document.activeElement && document.activeElement.blur) {
+                        document.activeElement.blur();
+                    }
+                }""")
+                # Settle delay so React has time to re-render Continue
+                # from disabled to enabled before the walker clicks it.
+                await asyncio.sleep(0.8)
+            except Exception:
+                pass
         return fields
 
     async def _handle_review(self, page: Page, job: Job) -> list:
@@ -1139,7 +1368,7 @@ class IndeedPlatform(JobPlatform):
         return "generic", await self._handle_generic(page, job)
 
     async def _click_continue_and_wait(
-        self, page: Page, start_url: str, timeout: int = 4000,
+        self, page: Page, start_url: str, timeout: int = 8000,
     ) -> tuple[bool, str]:
         """Click Continue and wait for the page to actually advance.
 
@@ -1216,6 +1445,106 @@ class IndeedPlatform(JobPlatform):
                 lambda u: u != start_url, timeout=timeout,
             )
             return True, ""
+        except Exception:
+            pass
+
+        # URL didn't change despite a successful click — dump the
+        # visible buttons so the log shows what we actually hit.
+        # Without this we can't tell whether Continue was clicked but
+        # silently rejected (validation), or whether we hit the wrong
+        # element entirely (label vs underlying button).
+        try:
+            btns = await page.evaluate("""() => {
+                return [...document.querySelectorAll('button, a[role=button], [role=button]')]
+                    .filter(el => el.offsetParent !== null)
+                    .slice(0, 8)
+                    .map(el => ({
+                        text: el.innerText?.trim().substring(0, 50),
+                        disabled: el.disabled || el.getAttribute('aria-disabled') === 'true',
+                        testid: el.getAttribute('data-testid') || '',
+                    }));
+            }""")
+            import json as _json
+            logger.info(
+                "Indeed: clicked but no URL change — visible buttons: %s",
+                _json.dumps(btns)[:800],
+            )
+        except Exception:
+            pass
+
+        # Also dump every visible REQUIRED form field with its current
+        # value/checked state. If the form's silently rejecting
+        # Continue, the cause is almost always a required field whose
+        # state we believe is committed but the form's React state
+        # disagrees. Seeing the actual DOM state side-by-side with our
+        # logs makes the mismatch obvious.
+        try:
+            inputs = await page.evaluate("""() => {
+                const els = [...document.querySelectorAll(
+                    'input:not([type=hidden]):not([type=button]):not([type=submit]),'
+                    + 'textarea, select'
+                )].filter(el => el.offsetParent !== null);
+                return els.slice(0, 25).map(el => {
+                    const required = el.required ||
+                        el.getAttribute('aria-required') === 'true';
+                    const summary = {
+                        tag: el.tagName,
+                        type: el.type || '',
+                        name: (el.name || '').substring(0, 40),
+                        required,
+                    };
+                    if (el.type === 'radio' || el.type === 'checkbox') {
+                        summary.checked = !!el.checked;
+                    } else {
+                        const v = el.value || '';
+                        summary.empty = v.length === 0;
+                        summary.len = v.length;
+                    }
+                    return summary;
+                });
+            }""")
+            import json as _json
+            unfilled = [
+                i for i in inputs
+                if i.get("required") and (
+                    (i.get("type") in ("radio", "checkbox") and not i.get("checked"))
+                    or (i.get("type") not in ("radio", "checkbox") and i.get("empty"))
+                )
+            ]
+            # Also check for radio GROUPS where no option is checked.
+            # Indeed marks the group as answered when any one radio in
+            # the group is :checked, regardless of `required`. So if a
+            # group has zero checked radios, that's effectively unanswered.
+            groups: dict[str, dict] = {}
+            for i in inputs:
+                if i.get("type") != "radio":
+                    continue
+                name = i.get("name", "")
+                if not name:
+                    continue
+                g = groups.setdefault(name, {"any_checked": False})
+                if i.get("checked"):
+                    g["any_checked"] = True
+            unanswered_radio_groups = [
+                name for name, g in groups.items() if not g["any_checked"]
+            ]
+            if unfilled:
+                logger.info(
+                    "Indeed: STUCK — %d required field(s) unfilled: %s",
+                    len(unfilled), _json.dumps(unfilled),
+                )
+            elif unanswered_radio_groups:
+                logger.info(
+                    "Indeed: STUCK — %d radio group(s) with no checked option: %s",
+                    len(unanswered_radio_groups),
+                    _json.dumps(unanswered_radio_groups),
+                )
+            else:
+                logger.info(
+                    "Indeed: STUCK with all required fields filled — "
+                    "full form state: %s",
+                    _json.dumps(inputs),
+                )
         except Exception:
             pass
 
@@ -1557,9 +1886,46 @@ class IndeedPlatform(JobPlatform):
                 "match" if best else "fallback",
             )
             await random_delay(0.5, 1.5)
-            return True
         except Exception:
             return False
+
+        # Verify the click actually committed a radio selection. The
+        # match path's label-click sometimes lands on the wrapper div
+        # without firing React's onChange — visually highlighted, but
+        # form state empty, so Continue won't advance. If no radio is
+        # :checked after the click, force a JS-dispatched change event
+        # on the first non-decoy radio so the form's internal state
+        # actually updates.
+        try:
+            checked = await page.evaluate(
+                "() => !!document.querySelector("
+                "'input[type=radio]:checked, [role=radio][aria-checked=true]')"
+            )
+        except Exception:
+            checked = True  # benefit of the doubt
+        if not checked:
+            logger.info(
+                "Indeed: resume-selection radio not committed after click — "
+                "forcing JS change event"
+            )
+            try:
+                await page.evaluate("""() => {
+                    const radios = [...document.querySelectorAll('input[type=radio]')]
+                        .filter(r => r.offsetParent !== null);
+                    for (const r of radios) {
+                        const lbl = (r.closest('label')?.innerText || '').toLowerCase();
+                        if (lbl.includes('build an indeed resume') || lbl.includes('create')) continue;
+                        r.checked = true;
+                        r.dispatchEvent(new Event('input', {bubbles: true}));
+                        r.dispatchEvent(new Event('change', {bubbles: true}));
+                        return true;
+                    }
+                    return false;
+                }""")
+                await random_delay(0.4, 0.8)
+            except Exception:
+                pass
+        return True
 
     def _build_result(
         self,

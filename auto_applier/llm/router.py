@@ -41,7 +41,16 @@ class LLMRouter:
         ]
         self.cache = cache or ResponseCache()
         self._availability: dict[str, bool] = {}
+        self._consecutive_failures: dict[str, int] = {}
         self._lock = asyncio.Lock()
+
+    # Disable a backend only after this many *consecutive* failures.
+    # A single transient httpx blip or Ollama warmup timeout used to
+    # poison the backend for the rest of the run, leaving rule-based
+    # as the only option (which returns "" for anything not in
+    # answers.json) and producing the misleading "All LLM backends
+    # failed" cascade. Reset on the next success.
+    _FAILURE_DISABLE_THRESHOLD = 3
 
     # ------------------------------------------------------------------
     # Initialization
@@ -110,6 +119,7 @@ class LLMRouter:
                     if response.text:
                         if use_cache:
                             self.cache.put(system_prompt, prompt, response)
+                        self._consecutive_failures[backend.name] = 0
                         logger.debug(
                             "Backend %s answered (%.0fms, %d tokens)",
                             backend.name,
@@ -118,11 +128,7 @@ class LLMRouter:
                         )
                         return response
                 except Exception as exc:
-                    logger.warning(
-                        "Backend %s failed: %s", backend.name, exc
-                    )
-                    # Mark as unavailable so subsequent calls skip it
-                    self._availability[backend.name] = False
+                    self._record_failure(backend.name, exc)
 
             # All backends failed -- return empty response
             logger.error("All LLM backends failed for prompt")
@@ -182,18 +188,39 @@ class LLMRouter:
                             self.cache.put(
                                 system_prompt, prompt, cache_resp
                             )
+                        self._consecutive_failures[backend.name] = 0
                         logger.debug(
                             "Backend %s returned JSON", backend.name
                         )
                         return result
                 except Exception as exc:
-                    logger.warning(
-                        "Backend %s JSON failed: %s", backend.name, exc
-                    )
-                    self._availability[backend.name] = False
+                    self._record_failure(backend.name, exc, kind="JSON")
 
             logger.error("All LLM backends failed for JSON prompt")
             return {}
+
+    # ------------------------------------------------------------------
+    # Failure tracking
+    # ------------------------------------------------------------------
+
+    def _record_failure(
+        self, backend_name: str, exc: Exception, kind: str = "",
+    ) -> None:
+        """Bump consecutive-failure count; disable only past threshold."""
+        count = self._consecutive_failures.get(backend_name, 0) + 1
+        self._consecutive_failures[backend_name] = count
+        suffix = f" {kind}" if kind else ""
+        logger.warning(
+            "Backend %s%s failed (%d/%d): %s",
+            backend_name, suffix, count,
+            self._FAILURE_DISABLE_THRESHOLD, exc,
+        )
+        if count >= self._FAILURE_DISABLE_THRESHOLD:
+            self._availability[backend_name] = False
+            logger.warning(
+                "Backend %s disabled after %d consecutive failures",
+                backend_name, count,
+            )
 
     # ------------------------------------------------------------------
     # Maintenance

@@ -26,6 +26,8 @@ python -m auto_applier --cli run
 python -m auto_applier --cli run --dry-run
 python -m auto_applier --cli run --platform linkedin
 python -m auto_applier --cli run --limit 5
+python -m auto_applier --cli run --continuous --active-hours 09:00-22:00  # loop indefinitely
+python -m auto_applier --cli run --continuous --max-cycles 5              # bounded loop
 python -m auto_applier --cli doctor     # preflight checks
 python -m auto_applier --cli status
 python -m auto_applier --cli gaps
@@ -64,7 +66,7 @@ python -m auto_applier --cli learn dismiss Rust   # never suggest again
 python -m auto_applier --cli learn list           # all tracked skills
 python -m auto_applier --cli refine               # interactive resume improvement chat
 
-# Tests (asyncio_mode = "auto" in pyproject.toml)
+# Tests (pytest-asyncio installed via [dev])
 pip install -e ".[dev]"
 pytest
 pytest tests/test_scoring.py
@@ -114,6 +116,10 @@ Users load multiple resumes (e.g., "Data Analyst", "Data Engineer"). Each gets a
 - **`platforms/`** — One module per site, each subclassing `JobPlatform`.
 - **`platforms/__init__.py`** — `PLATFORM_REGISTRY` dict.
 - **`form_filler.py`** — Shared AI form filling: personal info -> answers.json -> LLM -> record gap. Handles cover letters and resume uploads.
+- **`anti_detect.py`** — Bezier mouse paths, typing jitter, randomized delays.
+- **`session.py`** — Browser context lifecycle (patchright -> Playwright fallback, persistent profile, headed mode).
+- **`liveness.py`** — Health checks for the browser context across long-running continuous cycles.
+- **`selector_utils.py`** — Multi-fallback `safe_query`/`safe_click` helpers shared across platform adapters.
 
 Adding a new job site: create `browser/platforms/newsite.py` subclassing `JobPlatform`, register in `PLATFORM_REGISTRY`.
 
@@ -126,6 +132,14 @@ Pipeline: discover -> fetch description -> score (all resumes) -> decide -> fill
 **Event names** (defined in `orchestrator/events.py`): `run_started`, `resume_parsed`, `platform_started`, `platform_login_needed`, `platform_login_failed`, `search_started`, `jobs_found`, `job_scored`, `user_review_needed`, `application_started`, `application_complete`, `platform_error`, `platform_finished`, `evolution_triggers`, `run_finished`, `captcha_detected`. Most are fire-and-forget via `emit()`. User-blocking events (e.g. `user_review_needed`) use `emit_and_wait()` — the GUI handler must call `resolve_event(name, result)` to unblock the pipeline (5-minute default timeout).
 
 **Registered platforms** (`browser/platforms/__init__.py`): `linkedin`, `indeed`, `dice`, `ziprecruiter`.
+
+**LinkedIn is discovery-only.** `linkedin.py` scans + scores listings but never submits. LinkedIn defeats patchright via TLS fingerprinting; treat any apply path as broken and route real applications to other platforms. Re-evaluate when Camoufox/Nodriver are tried.
+
+### Continuous Run Mode (`orchestrator/engine.py:run_continuous`, `orchestrator/active_hours.py`)
+
+`--continuous` (or `continuous_mode: true` in `user_config.json`) loops `run()` cycles with a randomized delay (`continuous_cycle_delay_min/max`). Each cycle re-discovers jobs, so dedup must key off PROCESSED state (see `dedup.py` notes) — otherwise cycle 2 sees zero "new" jobs.
+
+`--active-hours HH:MM-HH:MM` (parsed by `active_hours.py`) gates the apply loop to a local-time window. Outside the window the engine flips into **refinement-only mode**: it still fires resume-refinement prompts and follow-up reminders, but skips browser sessions until the window reopens. Browser is kept warm across cycles via `_keep_browser_alive` for fingerprint stability; `request_continuous_stop()` finishes the current cycle cleanly before exiting.
 
 ### Cross-Source Deduplication (`storage/dedup.py`)
 

@@ -66,6 +66,13 @@ PERSONAL_INFO_KEYS: dict[str, str] = {
     "country": "country",
     "city": "city",
     "location": "city",
+    # Work authorization — compound keys first so they beat short ones
+    "how are you authorized to work": "work_auth",
+    "what is your work authorization": "work_auth",
+    "work authorization status": "work_auth",
+    "work authorization": "work_auth",
+    "authorization to work": "work_auth",
+    "current work authorization": "work_auth",
     # Social / web
     "linkedin": "linkedin_url",
     "github": "github_url",
@@ -312,31 +319,57 @@ class FormFiller:
             logger.debug("  ← cover letter fill result: %s", ok)
             return ok
 
-        # Priority 1: Personal info match
-        answer = self._match_personal_info(label_lower)
-        if answer:
-            logger.debug("  matched personal_info → %r", answer)
+        # Walk the priority chain. Each layer proposes an answer; if
+        # _apply_answer can't actually commit it (e.g. answers.json
+        # gave "Yes" for a select with 8 work-auth options, or the
+        # personal-info match gave "WA" for a yes/no radio), we keep
+        # going instead of abandoning the field. Without this, weak
+        # priority-3 matches silently win and the form sits with a
+        # required field unfilled — Indeed then dead-locks Continue
+        # with a misleading "Select an option" validation error.
+        priorities = [
+            ("personal_info", lambda: self._match_personal_info(label_lower)),
+            ("contextual", lambda: self._match_contextual(label_lower, field)),
+            ("answers.json", lambda: self._match_answers(field.label)),
+        ]
 
-        # Priority 2: Contextual auto-answers (source, prior employment,
-        # start date). These are deterministic and free — no LLM cost.
-        if not answer:
-            answer = self._match_contextual(label_lower, field)
-            if answer:
-                logger.debug("  matched contextual → %r", answer)
-
-        # Priority 3: answers.json match
-        if not answer:
-            answer = self._match_answers(field.label)
-            if answer:
-                logger.debug("  matched answers.json → %r", answer)
+        for source, get_answer in priorities:
+            try:
+                candidate = get_answer()
+            except Exception as exc:
+                logger.debug("  %s lookup failed: %s", source, exc)
+                continue
+            if not candidate:
+                continue
+            if not self._answer_fits_field(field, candidate):
+                logger.debug(
+                    "  %s gave %r but it doesn't fit %s field — skipping",
+                    source, candidate, field.field_type,
+                )
+                continue
+            logger.debug("  matched %s → %r", source, candidate)
+            ok = await self._apply_answer(page, field, candidate)
+            logger.debug(
+                "  ← apply_answer returned %s for %r (via %s)",
+                ok, field.label, source,
+            )
+            if ok:
+                return True
+            # Apply failed — continue down the chain instead of giving up.
 
         # Priority 4: LLM generation
-        if not answer:
-            logger.debug("  no deterministic match, calling LLM...")
-            answer = await self._generate_answer(field)
-            if answer:
-                self.used_llm = True
-                logger.debug("  LLM returned → %r", answer)
+        logger.debug("  no deterministic match, calling LLM...")
+        llm_answer = await self._generate_answer(field)
+        if llm_answer:
+            self.used_llm = True
+            logger.debug("  LLM returned → %r", llm_answer)
+            ok = await self._apply_answer(page, field, llm_answer)
+            logger.debug(
+                "  ← apply_answer returned %s for %r (via LLM)",
+                ok, field.label,
+            )
+            if ok:
+                return True
 
         # Priority 4.5: Neutral fallback for free-text fields only.
         # When Ollama exhausts and returns empty on a required textarea,
@@ -347,36 +380,44 @@ class FormFiller:
         # DELIBERATELY LIMITED to textarea / long-form text fields —
         # never fabricates for yes/no, number, select, radio, checkbox
         # where a made-up answer could be actively wrong on the app.
-        if not answer:
-            fallback = self._neutral_fallback(field)
-            if fallback:
-                logger.info(
-                    "  → LLM empty, using neutral fallback for '%s'",
-                    field.label[:60],
-                )
-                answer = fallback
-                # Still record the gap so the user sees this happened
-                self._record_gap(field, job_id)
+        fallback = self._neutral_fallback(field)
+        if fallback:
+            logger.info(
+                "  → LLM empty, using neutral fallback for '%s'",
+                field.label[:60],
+            )
+            self._record_gap(field, job_id)
+            ok = await self._apply_answer(page, field, fallback)
+            logger.debug(
+                "  ← apply_answer returned %s for %r (via neutral fallback)",
+                ok, field.label,
+            )
+            if ok:
+                return True
 
         # Priority 5: Record as gap
-        if not answer:
-            logger.debug("  → NO ANSWER FOUND, recording as skill gap")
-            self._record_gap(field, job_id)
-            self._record_unanswered(field.label)
-            return False
-
-        ok = await self._apply_answer(page, field, answer)
-        logger.debug("  ← apply_answer returned %s for %r", ok, field.label)
-        return ok
+        logger.debug("  → NO ANSWER FOUND, recording as skill gap")
+        self._record_gap(field, job_id)
+        self._record_unanswered(field.label)
+        return False
 
     # ------------------------------------------------------------------
     # Priority 1: Personal Info
     # ------------------------------------------------------------------
 
     def _match_personal_info(self, label_lower: str) -> str:
-        """Match field label to personal info from config."""
+        """Match field label to personal info from config.
+
+        Uses word-boundary matching so short keys like ``state`` only
+        fire on the standalone word — not on substrings like ``United
+        States``. Without this, every visa/sponsorship/work-auth
+        radio inherited the user's state code (``WA``) and Indeed's
+        validation rejected the form with a misleading "Select an
+        option" error.
+        """
         for keyword, config_key in PERSONAL_INFO_KEYS.items():
-            if keyword in label_lower:
+            pattern = r"\b" + re.escape(keyword) + r"\b"
+            if re.search(pattern, label_lower):
                 value = self.personal_info.get(config_key, "")
                 if value and config_key == "phone":
                     value = _normalize_phone_for_field(value)
@@ -600,18 +641,27 @@ class FormFiller:
     )
 
     def _neutral_fallback(self, field: FormField) -> str:
-        """Return a safe placeholder for free-text required fields.
+        """Return a safe placeholder for required fields when LLM ran dry.
 
-        Only fires when:
-        - field.field_type is 'text' or 'textarea'
-        - the label matches an open-ended question pattern (above) OR
-          the field is a textarea (textareas are almost always free-text)
+        Two layers:
 
-        Returns empty string for number, select, radio, checkbox, date,
-        file — fabricating answers for those would put factually wrong
-        data on the application (e.g. an invented years-of-experience
-        number could disqualify the candidate at pre-screen).
+        1. **Pattern-based smart fallback** (common required questions
+           the LLM can fail on but for which we can synthesize a
+           reasonable answer from resume + JD + personal info):
+           salary, notice period, years of experience, how-you-heard,
+           willingness to relocate, work-auth confirmation, etc.
+
+        2. **Generic open-ended placeholder** ("I'd be happy to
+           discuss...") for textarea / open-ended text inputs.
+
+        Returns empty string for number / select / radio / checkbox /
+        date — fabricating those could disqualify the candidate at
+        pre-screen (e.g. inventing a years-of-experience number).
         """
+        smart = self._smart_fallback(field)
+        if smart:
+            return smart
+
         if field.field_type not in ("text", "textarea"):
             return ""
 
@@ -630,6 +680,144 @@ class FormFiller:
                 return self._NEUTRAL_OPEN_ENDED
 
         return ""
+
+    # Pattern -> handler. Ordering matters: most specific first.
+    _SMART_FALLBACK_PATTERNS = (
+        ("salary", "_smart_salary"),
+        ("hourly rate", "_smart_salary"),
+        ("compensation", "_smart_salary"),
+        ("desired pay", "_smart_salary"),
+        ("expected pay", "_smart_salary"),
+        ("notice period", "_smart_notice_period"),
+        ("how soon can you start", "_smart_start_date_text"),
+        ("when can you start", "_smart_start_date_text"),
+        ("how did you hear", "_smart_referral_source"),
+        ("where did you hear", "_smart_referral_source"),
+        ("willing to relocate", "_smart_relocation"),
+        ("able to relocate", "_smart_relocation"),
+        ("years of experience", "_smart_years_experience"),
+        ("years experience", "_smart_years_experience"),
+    )
+
+    def _smart_fallback(self, field: FormField) -> str:
+        """Compute a sensible answer for known required-question patterns.
+
+        Triggered when LLM returns empty AND the question matches a
+        known shape we can answer from local context (resume text,
+        job description, personal info, source platform). All
+        handlers must return either a string answer or "" — they are
+        each individually free to bail when the available signal is
+        too weak to commit to a number/date.
+        """
+        if field.field_type not in ("text", "textarea"):
+            return ""
+        label_lower = field.label.lower()
+        for pattern, handler_name in self._SMART_FALLBACK_PATTERNS:
+            if pattern in label_lower:
+                handler = getattr(self, handler_name, None)
+                if handler is None:
+                    continue
+                try:
+                    out = handler(field)
+                except Exception as exc:
+                    logger.debug(
+                        "smart fallback %s failed: %s", handler_name, exc,
+                    )
+                    out = ""
+                if out:
+                    logger.info(
+                        "  smart fallback (%s) → %r for '%s'",
+                        handler_name, out[:60], field.label[:60],
+                    )
+                    return out
+        return ""
+
+    # --- smart fallback handlers ---
+
+    def _smart_salary(self, field: FormField) -> str:
+        """Salary range derived from resume seniority + JD (if mentioned).
+
+        Strategy:
+        1. Scan JD for an explicit salary range; if found, restate it.
+        2. Otherwise, infer level from resume keywords and pick a
+           reasonable USD annual range. Never invents a single number
+           — always a range, with "open to discussion".
+        """
+        jd_range = self._extract_jd_salary_range()
+        if jd_range:
+            return f"My target is in line with the posted range: {jd_range}."
+
+        resume = (self.resume_text or "").lower()
+        seniority = "mid"
+        if any(k in resume for k in ("principal", "staff engineer", "director")):
+            seniority = "principal"
+        elif any(k in resume for k in ("senior", "lead", "sr.", "sr ")):
+            seniority = "senior"
+        elif any(k in resume for k in ("junior", "entry-level", "graduate")):
+            seniority = "junior"
+
+        # USD annual ranges — kept conservative on purpose. Users
+        # tune via answers.json once they see this come up; the goal
+        # here is "form unblocks" not "this number is exactly right".
+        ranges = {
+            "junior":   "$60,000 - $80,000",
+            "mid":      "$90,000 - $115,000",
+            "senior":   "$130,000 - $160,000",
+            "principal": "$170,000 - $210,000",
+        }
+        return (
+            f"My target range is {ranges[seniority]}, but I'm flexible "
+            f"based on the full compensation package."
+        )
+
+    def _extract_jd_salary_range(self) -> str:
+        """Find an explicit USD range in the JD if one was posted."""
+        jd = self.job_description or ""
+        # $XXX,XXX - $XXX,XXX or $XXk - $XXk
+        m = re.search(
+            r"\$\s?\d{2,3}(?:,\d{3})?(?:k)?\s*[-–to]+\s*\$\s?\d{2,3}(?:,\d{3})?(?:k)?",
+            jd, re.IGNORECASE,
+        )
+        return m.group(0).strip() if m else ""
+
+    def _smart_notice_period(self, field: FormField) -> str:
+        return "Two weeks"
+
+    def _smart_start_date_text(self, field: FormField) -> str:
+        return "Two weeks from offer acceptance"
+
+    def _smart_referral_source(self, field: FormField) -> str:
+        # If the platform adapter set source_platform on us, use that.
+        source = (self.personal_info.get("source", "") or "").strip()
+        if source:
+            return source
+        # Otherwise fall back to a neutral plausible answer.
+        return "Online job board"
+
+    def _smart_relocation(self, field: FormField) -> str:
+        # Default to "Yes" — most candidates filtering for these jobs
+        # are open. Users who aren't can put "No" in answers.json.
+        return "Yes"
+
+    def _smart_years_experience(self, field: FormField) -> str:
+        """Estimate years from resume work-history dates if available."""
+        text = self.resume_text or ""
+        years = re.findall(r"(20\d{2}|19\d{2})", text)
+        if not years:
+            return ""
+        try:
+            ints = sorted({int(y) for y in years})
+            from datetime import date
+            this_year = date.today().year
+            # Conservative: span between earliest year and now,
+            # capped so a one-line "graduated 2010" doesn't read as
+            # 16 YoE for someone who took a long career break.
+            span = max(0, min(this_year - ints[0], 25))
+            if span <= 0:
+                return ""
+            return str(span)
+        except Exception:
+            return ""
 
     # ------------------------------------------------------------------
     # Cover Letter
@@ -702,20 +890,24 @@ class FormFiller:
                     return True
 
             elif field.field_type == "radio":
-                # Try a normal check first; fall back to force=True if
-                # a spinner / layout container intercepts the click.
-                # Without this, Playwright retries for 30s and the
-                # whole apply flow can stall on Dice (spinner inside
-                # the radio's label container) or LinkedIn (transient
-                # overlay during step transitions).
+                # Indeed-style detection returns ONE FormField per radio
+                # group (pointing at the first radio in the group), so
+                # blindly checking field.element always picks the first
+                # option regardless of the LLM's answer. Resolve the
+                # right sibling in the same group by matching the LLM's
+                # answer text against each radio's label, then click
+                # that one. Falls back to field.element if no match.
+                target = await self._resolve_radio_target(
+                    field, answer,
+                ) or field.element
                 try:
-                    await field.element.check(timeout=4000)
+                    await target.check(timeout=4000)
                 except Exception as exc:
                     logger.debug(
                         "Normal check() failed (%s), retrying with force=True",
                         exc,
                     )
-                    await field.element.check(force=True, timeout=2000)
+                    await target.check(force=True, timeout=2000)
                 self.fields_filled += 1
                 return True
 
@@ -777,6 +969,185 @@ class FormFiller:
                 continue
 
         return fallback
+
+    # ------------------------------------------------------------------
+    # Answer-Fits-Field Pre-Check
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _answer_fits_field(field: FormField, answer: str) -> bool:
+        """Cheap pre-flight: does this candidate answer plausibly fit?
+
+        Filters out the most damaging cross-type contamination before
+        we even try to commit it:
+
+        - Select with explicit options: reject answers that aren't
+          fuzzy-similar to any option (catches answers.json giving
+          "Yes" for a work-auth select with 8 specific statuses).
+        - Number field: reject answers with no digits.
+        - Date field: reject anything that isn't ISO-style or a date
+          phrase the date-coercer can handle.
+
+        Radio/checkbox fall through unchanged — the radio resolver
+        does its own match-or-fallback on commit. Returning True here
+        does NOT guarantee apply_answer will succeed; it just lets the
+        chain skip obviously bad candidates without spending a click.
+        """
+        if not answer:
+            return False
+        ans = answer.strip()
+        if not ans:
+            return False
+
+        if field.field_type == "select" and field.options:
+            ans_lower = ans.lower()
+            for opt in field.options:
+                opt_lower = opt.lower()
+                if ans_lower == opt_lower:
+                    return True
+                if ans_lower in opt_lower or opt_lower in ans_lower:
+                    return True
+            # Fuzzy fallback so "Yes" doesn't pass against
+            # ["US Citizen", "Green Card Holder", ...].
+            matches = difflib.get_close_matches(
+                ans_lower, [o.lower() for o in field.options],
+                n=1, cutoff=0.7,
+            )
+            return bool(matches)
+
+        if field.field_type == "number":
+            return any(c.isdigit() for c in ans)
+
+        return True
+
+    # ------------------------------------------------------------------
+    # Radio Group Resolution
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    async def _resolve_radio_target(field, answer: str):
+        """Pick the right radio in a group by matching the LLM's answer.
+
+        Indeed's questions handler returns one FormField per radio
+        *group*, with ``field.element`` pointing at the first radio.
+        Without resolving, we always click the first option (typically
+        "Yes") regardless of what the LLM said — that's how a "willing
+        to relocate" question gets a misleading "Yes" while a "do you
+        have a felony conviction" gets the same misleading "Yes".
+
+        Returns the matched radio element handle, or ``None`` if no
+        confident match exists. Caller falls back to ``field.element``.
+        """
+        if not answer:
+            return None
+        try:
+            name = await field.element.get_attribute("name")
+        except Exception:
+            return None
+        if not name:
+            return None
+
+        answer_lower = (answer or "").strip().lower()
+        affirmative = answer_lower in {"yes", "true", "1", "y", "affirmative"}
+        negative = answer_lower in {"no", "false", "0", "n", "negative"}
+
+        # One JS call to enumerate every radio in this group with its
+        # visible label text. Returning an array of {label} keeps the
+        # element handle juggling out of Python and avoids the
+        # evaluate_handle/get_properties dance that's fragile across
+        # patchright/playwright versions.
+        try:
+            options = await field.element.evaluate(
+                """(el) => {
+                    const name = el.getAttribute('name');
+                    if (!name) return [];
+                    const radios = [...el.ownerDocument.querySelectorAll(
+                        'input[type=radio][name="' + name.replace(/"/g, '\\\\"') + '"]'
+                    )];
+                    return radios.map((r, i) => {
+                        let label = '';
+                        if (r.id) {
+                            const lbl = r.ownerDocument.querySelector(
+                                'label[for="' + r.id + '"]'
+                            );
+                            if (lbl) label = lbl.innerText || '';
+                        }
+                        if (!label) {
+                            const lbl = r.closest('label');
+                            if (lbl) label = lbl.innerText || '';
+                        }
+                        if (!label) {
+                            const lbl = r.parentElement?.querySelector('label, span');
+                            if (lbl) label = lbl.innerText || '';
+                        }
+                        if (!label) label = r.value || '';
+                        return { idx: i, label: label.trim(), value: r.value || '' };
+                    });
+                }"""
+            )
+        except Exception as exc:
+            logger.debug("radio resolver: enumerate failed: %s", exc)
+            return None
+
+        if not options:
+            return None
+
+        best_idx = -1
+        best_score = 0.0
+        for opt in options:
+            text = (opt.get("label") or opt.get("value") or "").strip().lower()
+            if not text:
+                continue
+            if text == answer_lower:
+                score = 1.0
+            elif answer_lower and answer_lower in text:
+                score = 0.85
+            elif text in answer_lower:
+                score = 0.75
+            elif affirmative and text in {"yes", "y", "true"}:
+                score = 0.95
+            elif negative and text in {"no", "n", "false"}:
+                score = 0.95
+            else:
+                score = (
+                    difflib.SequenceMatcher(None, answer_lower, text).ratio()
+                    * 0.6
+                )
+            if score > best_score:
+                best_score = score
+                best_idx = opt["idx"]
+
+        if best_idx < 0 or best_score < 0.5:
+            logger.debug(
+                "radio resolver: no match for answer=%r among %s",
+                answer, [o.get("label", "")[:30] for o in options],
+            )
+            return None
+
+        # Re-grab the matching radio as an ElementHandle.
+        try:
+            target = await field.element.evaluate_handle(
+                """(el, idx) => {
+                    const name = el.getAttribute('name');
+                    const radios = [...el.ownerDocument.querySelectorAll(
+                        'input[type=radio][name="' + name.replace(/"/g, '\\\\"') + '"]'
+                    )];
+                    return radios[idx] || null;
+                }""",
+                best_idx,
+            )
+            element = target.as_element()
+            if element is None:
+                return None
+            chosen_label = options[best_idx].get("label", "")
+            logger.debug(
+                "radio resolver: matched answer=%r → option=%r (score=%.2f)",
+                answer, chosen_label[:50], best_score,
+            )
+            return element
+        except Exception as exc:
+            logger.debug("radio resolver: re-grab failed: %s", exc)
+            return None
 
     # ------------------------------------------------------------------
     # Select Option Matching

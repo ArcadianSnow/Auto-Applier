@@ -104,25 +104,40 @@ class TestNeutralFallbackRefusesFabrication:
 
 
 class TestNeutralFallbackShortTextFields:
-    """Short text fields that aren't open-ended questions should NOT
-    get a neutral fallback — they usually want specific factual data
-    (name, years, address, etc.) that a placeholder would corrupt."""
+    """Short text fields that want a unique-to-user identifier should
+    NEVER be fabricated (a placeholder would corrupt the application).
+    Common required-question patterns (salary, years, notice period,
+    referral source, relocation) DO get a synthesized answer derived
+    from resume + JD + personal info, so the form doesn't dead-lock
+    when the LLM returns empty."""
 
     @pytest.mark.parametrize("label", [
         "Phone number",
         "Zip code",
         "LinkedIn URL",
-        "Years of experience",
-        "Expected salary",
         "Current company",
-        "When can you start?",
-        "How did you hear about us?",
     ])
-    def test_factual_text_fields_get_no_fallback(self, label):
+    def test_identifier_fields_get_no_fallback(self, label):
         f = _filler()
         result = f._neutral_fallback(_field(label, "text"))
         assert result == "", (
-            f"Factual text field '{label}' should NOT get fabricated answer"
+            f"Identifier field '{label}' should NOT get fabricated answer"
+        )
+
+    @pytest.mark.parametrize("label", [
+        "Years of experience",
+        "Expected salary",
+        "When can you start?",
+        "How did you hear about us?",
+    ])
+    def test_smart_fallback_fills_required_questions(self, label):
+        f = _filler()
+        # Provide a minimal resume so years-of-experience has signal.
+        f.resume_text = "Software Engineer at Acme 2018-present, 2014-2018."
+        result = f._neutral_fallback(_field(label, "text"))
+        assert result, (
+            f"Required question '{label}' should now get a smart fallback "
+            f"so the form doesn't dead-lock when the LLM is empty"
         )
 
 
