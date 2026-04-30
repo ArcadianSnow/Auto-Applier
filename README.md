@@ -21,23 +21,28 @@ It will **never** automate your login. Whenever a platform asks you to sign in, 
 
 ## First-time setup
 
-You need **Python 3.11 or newer**. Everything else is handled by the setup wizard.
+Everything is handled by `setup.bat`. You don't need to install Python yourself if you're on Windows 10 (1909+) or Windows 11 — `setup.bat` will install it silently in the background using the built-in `winget` package manager.
 
 ### The easy way (Windows)
 
 1. **Download or clone this repo.**
 2. **Double-click `setup.bat`.**
-3. Follow the on-screen prompts. The wizard installs project dependencies, then opens a graphical setup screen that walks you through:
+3. Follow the on-screen prompts. The script:
+   - Detects Python; if missing, installs Python 3.12 silently via `winget` (~2 minutes).
+   - Installs project dependencies (~30 seconds).
+   - Installs the browser engine (~1 minute).
+   - Opens the graphical setup wizard.
+4. The wizard walks you visually through:
    - Installing Ollama (free local AI)
-   - Pulling the AI model (~10 GB)
-   - Adding a free Gemini API key (recommended backup AI)
+   - Pulling the AI model (~10 GB, one time)
+   - Adding a free Gemini API key (recommended backup AI — one-click "Open AI Studio" button)
    - Personal info (name, email, address, work auth, salary expectations)
    - Resumes
    - Preferences (which job boards, search keywords, location)
    - Pre-baked Q&A for common screener questions
-4. **Daily use after that: double-click `run.bat`.**
+5. **Daily use after that: double-click `run.bat`.**
 
-If Python isn't installed, `setup.bat` opens the download page for you and exits — install Python (check the "Add to PATH" box during install), then re-run `setup.bat`.
+If your Windows is too old for `winget`, the script opens python.org for you with a clear "install Python with the PATH box checked, then re-run setup.bat" message.
 
 ### The manual way (any OS, or if you prefer the terminal)
 

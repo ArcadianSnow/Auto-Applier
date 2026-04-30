@@ -5,12 +5,15 @@ title Auto Applier - First-Time Setup
 REM ===================================================================
 REM Auto Applier setup launcher (Windows)
 REM
-REM Detects Python, installs project deps, installs the Playwright
-REM browser engine, then hands off to the GUI wizard for everything
-REM else (LLM setup, personal info, resumes, preferences, answers).
+REM Detects Python; if missing, tries `winget` for a silent
+REM background install (no User-clicks-checkbox failure mode).
+REM Falls back to opening python.org if winget isn't available.
+REM Then installs project deps, Playwright, and hands off to the
+REM GUI wizard for everything else (LLM, personal info, resumes,
+REM preferences, answers).
 REM
 REM Output piped to setup.log so a Defender false-positive scroll
-REM can't drown out useful errors. The user sees a tidy summary.
+REM can't drown out useful errors.
 REM ===================================================================
 
 color 0B
@@ -24,40 +27,96 @@ echo   This will install everything Auto Applier needs to run.
 echo   It only needs to run once. Subsequent launches use run.bat.
 echo.
 
-REM ---- Step 1: Python detection ---------------------------------------
-echo  [1/4] Checking for Python 3.11+...
+REM ---- Resolve a Python interpreter -----------------------------------
+REM
+REM PY_CMD ends up holding the command we'll use the rest of the
+REM script. Order:
+REM   1. python on PATH (most installs)
+REM   2. py launcher on PATH (Windows official installer ships it)
+REM   3. winget silent-install Python 3.12, then probe known paths
+REM   4. fall back to opening python.org and asking for a re-run
+REM
+echo  [1/4] Looking for Python 3.11 or newer...
+set "PY_CMD="
+
 where python >nul 2>nul
-if errorlevel 1 (
+if not errorlevel 1 (
+    set "PY_CMD=python"
+)
+
+if "!PY_CMD!"=="" (
+    where py >nul 2>nul
+    if not errorlevel 1 (
+        set "PY_CMD=py -3"
+    )
+)
+
+REM ---- If still no Python, try winget for a silent install -----------
+if "!PY_CMD!"=="" (
+    echo        Python isn't installed. Trying winget for a silent install...
+    where winget >nul 2>nul
+    if not errorlevel 1 (
+        echo        Installing Python 3.12 via winget. This can take 1-3 minutes.
+        echo        ^(detailed output in setup.log^)
+        winget install --id Python.Python.3.12 -e --silent ^
+            --accept-source-agreements --accept-package-agreements ^
+            --override "/quiet PrependPath=1 InstallAllUsers=0" ^
+            > setup.log 2>&1
+
+        REM PATH in the CURRENT cmd doesn't reflect the just-installed
+        REM Python — the install updated the registry, not this shell's
+        REM env block. Probe the known install locations directly so we
+        REM don't have to ask the user to relaunch the script.
+        for %%P in (
+            "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+            "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+            "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+            "%ProgramFiles%\Python313\python.exe"
+            "%ProgramFiles%\Python312\python.exe"
+            "%ProgramFiles%\Python311\python.exe"
+        ) do (
+            if exist "%%~P" (
+                set "PY_CMD=%%~P"
+                echo        Found Python at %%~P
+                goto :have_python
+            )
+        )
+    ) else (
+        echo        winget isn't available on this Windows version.
+    )
+)
+
+:have_python
+
+REM ---- If still no Python, manual fallback ----------------------------
+if "!PY_CMD!"=="" (
     echo.
     color 0C
-    echo   ERROR: Python is not installed or not on your PATH.
+    echo   Python could not be installed automatically.
     echo.
-    echo   Auto Applier needs Python 3.11 or newer. The Microsoft
-    echo   Store version works, or download the official installer.
+    echo   Opening the Python download page in your browser. When the
+    echo   installer runs, MAKE SURE to check the box that says
+    echo   "Add python.exe to PATH" before clicking Install.
     echo.
-    echo   Opening the Python download page in your browser now.
-    echo   When the installer runs, MAKE SURE to check the box
-    echo   that says "Add Python to PATH" — without it the next
-    echo   run of setup.bat won't find Python.
-    echo.
-    echo   After Python is installed, double-click setup.bat again.
+    echo   After it finishes, double-click setup.bat again.
     echo.
     start "" "https://www.python.org/downloads/"
     pause
     exit /b 1
 )
 
-for /f "tokens=2" %%v in ('python --version 2^>^&1') do set PYVER=%%v
-echo        Found Python !PYVER!.
+REM ---- Validate version ----------------------------------------------
+for /f "tokens=2" %%v in ('!PY_CMD! --version 2^>^&1') do set PYVER=%%v
+echo        Using Python !PYVER!.
 
-REM Verify >= 3.11. python -c exits non-zero if check fails.
-python -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>nul
+!PY_CMD! -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>nul
 if errorlevel 1 (
     echo.
     color 0C
     echo   ERROR: Python !PYVER! is too old. Need 3.11 or newer.
     echo.
-    echo   Please install Python 3.11+ from python.org.
+    echo   Please uninstall the old Python and install 3.11+ from python.org,
+    echo   then double-click setup.bat again.
     echo.
     start "" "https://www.python.org/downloads/"
     pause
@@ -68,16 +127,15 @@ REM ---- Step 2: Project deps -------------------------------------------
 echo.
 echo  [2/4] Installing Auto Applier dependencies...
 echo        ^(detailed output in setup.log^)
-python -m pip install --upgrade pip > setup.log 2>&1
-python -m pip install -e . >> setup.log 2>&1
+!PY_CMD! -m pip install --upgrade pip >> setup.log 2>&1
+!PY_CMD! -m pip install -e . >> setup.log 2>&1
 if errorlevel 1 (
     echo.
     color 0C
     echo   ERROR: pip install failed. See setup.log for details.
     echo.
-    echo   Most common cause: no internet connection, or your
-    echo   antivirus is blocking pip. Check both, then re-run
-    echo   setup.bat.
+    echo   Most common cause: no internet connection, or your antivirus
+    echo   is blocking pip. Check both, then re-run setup.bat.
     echo.
     pause
     exit /b 1
@@ -88,7 +146,7 @@ REM ---- Step 3: Playwright browser engine ------------------------------
 echo.
 echo  [3/4] Installing the browser engine ^(~150 MB download^)...
 echo        ^(detailed output in setup.log^)
-python -m playwright install chromium >> setup.log 2>&1
+!PY_CMD! -m playwright install chromium >> setup.log 2>&1
 if errorlevel 1 (
     echo.
     color 0E
@@ -104,15 +162,29 @@ REM ---- Step 4: Hand off to the GUI wizard -----------------------------
 echo.
 echo  [4/4] Launching the setup wizard...
 echo.
-echo        From here on, everything happens in a window — close
-echo        this black box once the wizard window opens.
+echo        From here on, everything happens in a window — close this
+echo        black box once the wizard window opens.
 echo.
 
-start "" pythonw -m auto_applier
-REM ^ pythonw (no console window) so the wizard owns the screen.
-REM   If pythonw isn't available (rare), fall back to python.
-if errorlevel 1 (
-    start "" python -m auto_applier
+REM Prefer pythonw (no console) for a clean handoff. If we resolved
+REM Python via an absolute path, derive pythonw.exe from it.
+set "PYW_CMD="
+if "!PY_CMD!"=="python" (
+    where pythonw >nul 2>nul
+    if not errorlevel 1 set "PYW_CMD=pythonw"
+) else if "!PY_CMD!"=="py -3" (
+    where pythonw >nul 2>nul
+    if not errorlevel 1 set "PYW_CMD=pythonw"
+) else (
+    REM PY_CMD is an absolute path to python.exe — swap to pythonw.exe.
+    set "PYW_CMD=!PY_CMD:python.exe=pythonw.exe!"
+    if not exist "!PYW_CMD!" set "PYW_CMD="
+)
+
+if not "!PYW_CMD!"=="" (
+    start "" "!PYW_CMD!" -m auto_applier
+) else (
+    start "" !PY_CMD! -m auto_applier
 )
 
 REM Give the wizard a moment to claim the screen before this window closes.
