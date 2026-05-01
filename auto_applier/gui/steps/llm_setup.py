@@ -46,11 +46,26 @@ class LLMSetupStep(ttk.Frame):
         wizard before reaching Ready would lose the key — and the
         runtime reads GEMINI_API_KEY from .env, not user_config.json,
         so it'd never see it anyway.
+
+        Save errors are surfaced to the user (via messagebox) instead
+        of silently swallowed — a key that doesn't reach .env would
+        leave doctor reporting "no API key configured" with no clue
+        why, which is what the friend hit on the first try.
         """
         try:
             self.wizard.save_llm_setup_only()
-        except Exception:
-            pass
+        except Exception as exc:
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "Couldn't save LLM settings",
+                (
+                    "The Gemini API key couldn't be written to .env. "
+                    "Doctor will keep saying it's not configured until "
+                    "this is resolved.\n\n"
+                    f"Details: {exc}"
+                ),
+                parent=self.wizard,
+            )
         return True
 
     def _build(self) -> None:

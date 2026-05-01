@@ -140,6 +140,70 @@ class ResumesStep(ttk.Frame):
         self.wizard.resume_list.append((label_key, path))
         self._refresh_list()
 
+        # Eagerly copy the file into data/resumes/ + write a minimal
+        # profile JSON so `cli doctor` sees the resume as loaded
+        # immediately, without the user having to click through to
+        # Ready first. The dashboard's add_resume() call later does
+        # the LLM-powered skill extraction (idempotent — the manager
+        # detects the file's already in place and skips the copy).
+        self._materialize_resume(path, label_key)
+
+    def _materialize_resume(self, source_path: str, label: str) -> None:
+        """Copy the user's resume file into data/resumes/ and write a
+        minimal profile JSON. Skill extraction (LLM) happens later
+        when the dashboard runs ResumeManager.add_resume — this just
+        makes the file visible to doctor / fsck right away.
+        """
+        import shutil
+        import json
+        from datetime import datetime, timezone
+        from auto_applier.config import RESUMES_DIR, PROFILES_DIR
+        from auto_applier.resume.parser import parse_resume
+
+        source = Path(source_path).resolve()
+        if not source.exists():
+            return
+
+        try:
+            RESUMES_DIR.mkdir(parents=True, exist_ok=True)
+            PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+            dest = RESUMES_DIR / f"{label}{source.suffix}"
+            if not dest.exists() or dest.resolve() != source:
+                try:
+                    shutil.copy2(source, dest)
+                except (OSError, shutil.SameFileError):
+                    # Already in place or unreadable — give up the
+                    # eager copy; dashboard's add_resume will retry
+                    # with proper error surfacing.
+                    pass
+
+            profile_path = PROFILES_DIR / f"{label}.json"
+            if profile_path.exists():
+                return  # don't clobber an existing parsed profile
+
+            try:
+                raw_text = parse_resume(str(dest))
+            except Exception:
+                raw_text = ""
+
+            profile = {
+                "label": label,
+                "source_file": dest.name,
+                "parsed_at": datetime.now(timezone.utc).isoformat(),
+                "raw_text": raw_text,
+                "summary": "",
+                "skills": [],            # filled in on first dashboard run
+                "confirmed_skills": [],  # populated by `cli refine`
+            }
+            profile_path.write_text(
+                json.dumps(profile, indent=2), encoding="utf-8",
+            )
+        except Exception:
+            # Eager materialization is a UX nicety; failures shouldn't
+            # block adding the resume to the wizard list. The dashboard
+            # path will surface a real error if something is wrong.
+            pass
+
     def _remove_resume(self) -> None:
         """Remove the selected resume from the list."""
         selection = self.listbox.curselection()
