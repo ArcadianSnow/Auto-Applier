@@ -79,6 +79,22 @@ PERSONAL_INFO_KEYS: dict[str, str] = {
     "portfolio": "portfolio_url",
     "website": "portfolio_url",
     "personal site": "portfolio_url",
+    # Salary / compensation — long compound keys first so they beat
+    # plain "salary". Without these, an LLM call composed prose like
+    # "I am seeking a salary in the range of $100k-$120k" into a
+    # text input that wanted a single number, and the form rejected
+    # it on validation. Map them all to desired_salary.
+    "desired hourly rate": "desired_salary",
+    "hourly rate of pay": "desired_salary",
+    "rate of pay": "desired_salary",
+    "hourly rate": "desired_salary",
+    "expected salary": "desired_salary",
+    "desired salary": "desired_salary",
+    "salary expectation": "desired_salary",
+    "salary expectations": "desired_salary",
+    "compensation expectation": "desired_salary",
+    "annual salary": "desired_salary",
+    "salary": "desired_salary",
 }
 
 def _normalize_phone_for_field(raw: str) -> str:
@@ -267,13 +283,35 @@ class FormFiller:
 
         Every step of the priority chain emits a DEBUG log line so
         run-log files capture exactly how each field was resolved
-        (or why it wasn't). When something goes wrong mid-form-fill,
-        the log shows the label, the field type, the options list,
-        which layer matched, what value was returned, and whether
-        the apply step actually wrote to the DOM.
+        (or why it wasn't). On every return path we ALSO emit one
+        INFO-level FIELD_RESULT line in a fixed format that the
+        scripts/audit_qa.py parser can ingest without losing fields
+        to mid-flow log gaps.
         """
         self.fields_total += 1
         label_lower = field.label.lower()
+
+        # Mutable closure over result state so the FIELD_RESULT line
+        # can be emitted from any of the (many) early-return paths
+        # without a try/finally that would also catch genuine errors.
+        result: dict[str, object] = {
+            "applied": False,
+            "source": "",
+            "answer": "",
+        }
+
+        def _log_result() -> None:
+            try:
+                logger.info(
+                    "FIELD_RESULT label=%r type=%s applied=%s "
+                    "source=%s answer=%r",
+                    field.label, field.field_type,
+                    bool(result["applied"]),
+                    result["source"] or "none",
+                    result["answer"],
+                )
+            except Exception:
+                pass
 
         logger.debug(
             "fill_field: label=%r type=%s options=%s",
@@ -288,6 +326,8 @@ class FormFiller:
         # forms rarely use for text inputs).
         if any(kw in label_lower for kw in HONEYPOT_KEYWORDS):
             logger.debug("  → honeypot field by label, skipping")
+            result["source"] = "honeypot"
+            _log_result()
             return False
         try:
             is_visible = await field.element.is_visible()
@@ -295,6 +335,8 @@ class FormFiller:
             is_visible = True  # assume visible if the check itself fails
         if not is_visible:
             logger.debug("  → hidden field, skipping (likely honeypot)")
+            result["source"] = "hidden"
+            _log_result()
             return False
 
         # Pre-fill check — if the site already populated this field
@@ -303,6 +345,9 @@ class FormFiller:
         # input and zip validation in the last three runs.
         if await self._field_already_has_value(field):
             logger.debug("  → already pre-filled, skipping")
+            result["applied"] = True
+            result["source"] = "pre-filled"
+            _log_result()
             return True
 
         # File upload fields are handled by the platform adapter
@@ -310,6 +355,8 @@ class FormFiller:
             kw in label_lower for kw in RESUME_UPLOAD_KEYWORDS
         ):
             logger.debug("  → file upload, deferring to platform")
+            result["source"] = "platform-upload"
+            _log_result()
             return False
 
         # Cover letter fields get special treatment
@@ -317,6 +364,10 @@ class FormFiller:
             logger.debug("  → cover letter field, generating")
             ok = await self._fill_cover_letter(page, field)
             logger.debug("  ← cover letter fill result: %s", ok)
+            result["applied"] = ok
+            result["source"] = "cover_letter"
+            result["answer"] = "(generated cover letter)" if ok else ""
+            _log_result()
             return ok
 
         # Walk the priority chain. Each layer proposes an answer; if
@@ -354,6 +405,10 @@ class FormFiller:
                 ok, field.label, source,
             )
             if ok:
+                result["applied"] = True
+                result["source"] = source
+                result["answer"] = candidate
+                _log_result()
                 return True
             # Apply failed — continue down the chain instead of giving up.
 
@@ -369,6 +424,10 @@ class FormFiller:
                 ok, field.label,
             )
             if ok:
+                result["applied"] = True
+                result["source"] = "LLM"
+                result["answer"] = llm_answer
+                _log_result()
                 return True
 
         # Priority 4.5: Neutral fallback for free-text fields only.
@@ -393,12 +452,19 @@ class FormFiller:
                 ok, field.label,
             )
             if ok:
+                result["applied"] = True
+                result["source"] = "neutral-fallback"
+                result["answer"] = fallback
+                _log_result()
                 return True
 
         # Priority 5: Record as gap
         logger.debug("  → NO ANSWER FOUND, recording as skill gap")
         self._record_gap(field, job_id)
         self._record_unanswered(field.label)
+        result["source"] = "GAP"
+        result["answer"] = ""
+        _log_result()
         return False
 
     # ------------------------------------------------------------------
@@ -1026,6 +1092,97 @@ class FormFiller:
         return "unknown"
 
     @staticmethod
+    async def pick_resume_input(page, platform_name: str = "form"):
+        """Find the file input on the current page that wants the resume.
+
+        Shared by every platform's ``_handle_resume_upload`` so a fix
+        to the picker logic lands in one place. Returns the element
+        handle to upload to, or ``None`` if nothing safe was found.
+
+        Selection rules, in order:
+          1. First visible input classified as ``resume`` wins.
+          2. Else first visible ``unknown`` input wins, with a WARN
+             log so misclassifications stay visible in run logs.
+          3. Else, if there is exactly one visible file input on the
+             page (any classification — including ``cover_letter``),
+             upload to it with a stronger WARN. Rationale: when the
+             page only has one slot, the heading text near it might
+             be misleading ("Submit your application" classified as
+             nothing, "Add a cover letter or resume" misclassified
+             as cover_letter), and dead-locking on a stuck upload is
+             worse than uploading to a single visible slot.
+          4. Else return ``None``.
+
+        Always logs every classified input it saw at debug level so
+        we can diagnose stuck-upload reports without re-running.
+        """
+        try:
+            inputs = await page.query_selector_all("input[type='file']")
+        except Exception:
+            inputs = []
+        if not inputs:
+            return None
+
+        # Classify every input and remember which were visible.
+        seen: list[tuple[object, str, bool]] = []
+        for inp in inputs:
+            try:
+                visible = await inp.is_visible()
+            except Exception:
+                visible = True
+            try:
+                kind = await FormFiller.classify_file_input(inp)
+            except Exception:
+                kind = "unknown"
+            seen.append((inp, kind, visible))
+
+        for i, (_, kind, visible) in enumerate(seen):
+            logger.debug(
+                "%s: file input[%d] kind=%s visible=%s",
+                platform_name, i, kind, visible,
+            )
+
+        visible_inputs = [
+            (inp, kind) for inp, kind, vis in seen if vis
+        ]
+
+        # Rule 1: resume-classified wins.
+        for inp, kind in visible_inputs:
+            if kind == "resume":
+                return inp
+
+        # Rule 2: unknown.
+        for inp, kind in visible_inputs:
+            if kind == "unknown":
+                logger.warning(
+                    "%s: no input classified as 'resume'; falling back "
+                    "to first 'unknown' input — verify the right slot "
+                    "got the resume.", platform_name,
+                )
+                return inp
+
+        # Rule 3: single visible file input regardless of class.
+        if len(visible_inputs) == 1:
+            inp, kind = visible_inputs[0]
+            logger.warning(
+                "%s: only one visible file input on this page (kind="
+                "%s). Uploading resume there to avoid dead-lock — if "
+                "this looks wrong in the screenshot, the classifier "
+                "needs another keyword.", platform_name, kind,
+            )
+            return inp
+
+        # Rule 4: nothing safe — bail.
+        if visible_inputs:
+            kinds = ", ".join(k for _, k in visible_inputs)
+            logger.warning(
+                "%s: %d visible file input(s) but none claim resume "
+                "(kinds: %s). Skipping upload.",
+                platform_name, len(visible_inputs), kinds,
+            )
+        return None
+
+    @staticmethod
     async def wait_for_upload_complete(
         page, expected_name: str = "", timeout: float = 15.0,
     ) -> bool:
@@ -1196,9 +1353,76 @@ class FormFiller:
                         answer,
                     )
                     return False
+                # Capture the group name BEFORE the click — if the
+                # element handle goes stale on .check(), we need this
+                # to re-resolve the target from the live DOM.
+                radio_group_name = ""
+                try:
+                    radio_group_name = (
+                        await target.get_attribute("name")
+                    ) or ""
+                except Exception:
+                    pass
                 try:
                     await target.check(timeout=4000)
                 except Exception as exc:
+                    msg = str(exc).lower()
+                    is_stale = (
+                        "not attached" in msg
+                        or "detached" in msg
+                        or "no node found" in msg
+                    )
+                    if is_stale and radio_group_name:
+                        # Indeed re-renders questions modules between
+                        # detection and click; the original handle
+                        # then points at a node that's no longer in
+                        # the DOM. Re-find any radio in the same
+                        # group, hand it to the resolver, and retry.
+                        logger.debug(
+                            "  → radio target detached, re-resolving "
+                            "from live DOM (group=%s)",
+                            radio_group_name,
+                        )
+                        try:
+                            anchor = await page.query_selector(
+                                "input[type=radio][name='"
+                                + radio_group_name.replace("'", "\\'")
+                                + "']"
+                            )
+                        except Exception:
+                            anchor = None
+                        if anchor is not None:
+                            from dataclasses import replace
+                            try:
+                                fresh_field = replace(
+                                    field, element=anchor
+                                )
+                            except Exception:
+                                fresh_field = field
+                            new_target = await self._resolve_radio_target(
+                                fresh_field, answer,
+                            )
+                            if new_target is not None:
+                                try:
+                                    await new_target.check(timeout=4000)
+                                    self.fields_filled += 1
+                                    return True
+                                except Exception as retry_exc:
+                                    msg2 = str(retry_exc).lower()
+                                    if (
+                                        "not attached" in msg2
+                                        or "detached" in msg2
+                                    ):
+                                        logger.warning(
+                                            "Radio still detached "
+                                            "after re-resolve for "
+                                            "%r — giving up; "
+                                            "field will be skipped",
+                                            field.label[:60],
+                                        )
+                                        return False
+                                    # Fall through to force=True path.
+                                    exc = retry_exc
                     logger.debug(
                         "Normal check() failed (%s), retrying with force=True",
                         exc,

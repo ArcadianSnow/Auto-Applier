@@ -1861,37 +1861,19 @@ class IndeedPlatform(JobPlatform):
             return
 
         from auto_applier.browser.form_filler import FormFiller
+        from auto_applier.resume.pdf_converter import ensure_pdf
 
+        # Indeed shows an explicit "PDF recommended" hint and downgrades
+        # match scores for non-PDF uploads. Convert .docx / .txt up
+        # front; PDFs pass through unchanged.
         try:
-            inputs = await page.query_selector_all("input[type='file']")
-        except Exception:
-            inputs = []
-        if not inputs:
-            return
-
-        resume_input = None
-        unknown_input = None
-        for inp in inputs:
-            try:
-                if not await inp.is_visible():
-                    continue
-            except Exception:
-                pass
-            kind = await FormFiller.classify_file_input(inp)
-            if kind == "resume":
-                resume_input = inp
-                break
-            if kind == "unknown" and unknown_input is None:
-                unknown_input = inp
-
-        target = resume_input
-        if target is None and unknown_input is not None:
+            resume_path = str(await ensure_pdf(resume_path))
+        except Exception as exc:
             logger.warning(
-                "Indeed: no file input classified as 'resume' on this "
-                "step; falling back to first 'unknown' input — "
-                "verify the right slot got the resume."
+                "Indeed: ensure_pdf failed (%s); using original file.", exc,
             )
-            target = unknown_input
+
+        target = await FormFiller.pick_resume_input(page, "Indeed")
         if target is None:
             return
 
