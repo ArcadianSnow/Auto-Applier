@@ -1123,6 +1123,32 @@ class FormFiller:
         if field.field_type == "number":
             return any(c.isdigit() for c in ans)
 
+        if field.field_type in ("radio", "checkbox"):
+            # Reject obvious cross-type contamination: a candidate
+            # that's clearly a phone number, email, URL, address,
+            # or postal code shouldn't be applied to a yes/no radio.
+            # Real-world bug: the keyword "mobile" in a personal_info
+            # PERSONAL_INFO_KEYS map matched against an apply form
+            # asking "Do you consent to SMS at the mobile number..."
+            # → returned the user's phone digits → resolver tried to
+            # match "15550100" against "Yes"/"No". Doomed.
+            stripped = ans
+            for ch in (" ", "-", "+", "(", ")", "."):
+                stripped = stripped.replace(ch, "")
+            # Phone-shaped: 7+ digits and ONLY digits after stripping.
+            if stripped.isdigit() and len(stripped) >= 7:
+                return False
+            # Email
+            if "@" in ans and "." in ans:
+                return False
+            # URL
+            if ans.startswith(("http://", "https://", "www.")):
+                return False
+            # Long free-text (anything > 60 chars is almost certainly
+            # not a radio/checkbox label).
+            if len(ans) > 60:
+                return False
+
         return True
 
     # ------------------------------------------------------------------
@@ -1235,6 +1261,20 @@ class FormFiller:
             "need a visa", "i need a visa",
         )
 
+        # Word-boundary helper: "no" matches "no, i don't have one"
+        # but NOT "Latino" (where "no" is mid-word). Bare-substring
+        # matching produced real-world false positives where the LLM
+        # said "No" to an ethnicity question and the resolver picked
+        # "Hispanic or Latino" because "no" appears at the end of
+        # "Latino". Likewise "No" was matching "I do not consent"
+        # via "n-o-t". Word boundaries kill that whole class of bug.
+        def _wb_in(needle: str, haystack: str) -> bool:
+            if not needle:
+                return False
+            return bool(re.search(
+                r"\b" + re.escape(needle) + r"\b", haystack,
+            ))
+
         best_idx = -1
         best_score = 0.0
         for opt in options:
@@ -1243,17 +1283,17 @@ class FormFiller:
                 continue
             if text == answer_lower:
                 score = 1.0
-            elif answer_lower and answer_lower in text:
+            elif answer_lower and _wb_in(answer_lower, text):
                 score = 0.85
-            elif text in answer_lower:
+            elif _wb_in(text, answer_lower):
                 score = 0.75
             elif affirmative and text in {"yes", "y", "true"}:
                 score = 0.95
             elif negative and text in {"no", "n", "false"}:
                 score = 0.95
-            elif affirmative and any(h in text for h in AFFIRMATIVE_OPT_HINTS):
+            elif affirmative and any(_wb_in(h, text) for h in AFFIRMATIVE_OPT_HINTS):
                 score = 0.9
-            elif negative and any(h in text for h in NEGATIVE_OPT_HINTS):
+            elif negative and any(_wb_in(h, text) for h in NEGATIVE_OPT_HINTS):
                 score = 0.9
             else:
                 score = (

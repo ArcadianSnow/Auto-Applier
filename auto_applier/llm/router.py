@@ -41,7 +41,18 @@ class LLMRouter:
         ]
         self.cache = cache or ResponseCache()
         self._availability: dict[str, bool] = {}
-        self._consecutive_failures: dict[str, int] = {}
+        # Per-method consecutive-failure tracking. A backend that's
+        # great at plain text but garbage at structured JSON used to
+        # get disabled for EVERYTHING after 3 JSON failures, breaking
+        # text-only callers downstream. Tracking by method means
+        # Ollama can keep serving complete() requests even after its
+        # complete_json() ran into a schema it couldn't produce.
+        self._consecutive_failures: dict[tuple[str, str], int] = {}
+        # Per-method disabled flags. Replaces the old per-backend
+        # _availability flag for failure-tracking purposes (initial
+        # availability probe still uses _availability for is_available
+        # checks).
+        self._method_disabled: dict[tuple[str, str], bool] = {}
         self._lock = asyncio.Lock()
 
     # Disable a backend only after this many *consecutive* failures.
@@ -109,6 +120,8 @@ class LLMRouter:
             for backend in self.backends:
                 if not self._availability.get(backend.name, False):
                     continue
+                if self._method_disabled.get((backend.name, "complete"), False):
+                    continue
                 try:
                     response = await backend.complete(
                         prompt,
@@ -119,7 +132,7 @@ class LLMRouter:
                     if response.text:
                         if use_cache:
                             self.cache.put(system_prompt, prompt, response)
-                        self._consecutive_failures[backend.name] = 0
+                        self._consecutive_failures[(backend.name, "complete")] = 0
                         logger.debug(
                             "Backend %s answered (%.0fms, %d tokens)",
                             backend.name,
@@ -136,9 +149,10 @@ class LLMRouter:
                     self._record_failure(
                         backend.name,
                         RuntimeError("empty response"),
+                        method="complete",
                     )
                 except Exception as exc:
-                    self._record_failure(backend.name, exc)
+                    self._record_failure(backend.name, exc, method="complete")
 
             # All backends failed -- return empty response
             logger.error("All LLM backends failed for prompt")
@@ -177,6 +191,10 @@ class LLMRouter:
             for backend in self.backends:
                 if not self._availability.get(backend.name, False):
                     continue
+                if self._method_disabled.get(
+                    (backend.name, "complete_json"), False,
+                ):
+                    continue
                 try:
                     result = await backend.complete_json(
                         prompt,
@@ -198,7 +216,9 @@ class LLMRouter:
                             self.cache.put(
                                 system_prompt, prompt, cache_resp
                             )
-                        self._consecutive_failures[backend.name] = 0
+                        self._consecutive_failures[
+                            (backend.name, "complete_json")
+                        ] = 0
                         logger.debug(
                             "Backend %s returned JSON", backend.name
                         )
@@ -211,10 +231,12 @@ class LLMRouter:
                     self._record_failure(
                         backend.name,
                         RuntimeError("empty JSON"),
-                        kind="JSON",
+                        method="complete_json",
                     )
                 except Exception as exc:
-                    self._record_failure(backend.name, exc, kind="JSON")
+                    self._record_failure(
+                        backend.name, exc, method="complete_json",
+                    )
 
             logger.error("All LLM backends failed for JSON prompt")
             return {}
@@ -224,22 +246,36 @@ class LLMRouter:
     # ------------------------------------------------------------------
 
     def _record_failure(
-        self, backend_name: str, exc: Exception, kind: str = "",
+        self,
+        backend_name: str,
+        exc: Exception,
+        method: str = "complete",
+        kind: str = "",
     ) -> None:
-        """Bump consecutive-failure count; disable only past threshold."""
-        count = self._consecutive_failures.get(backend_name, 0) + 1
-        self._consecutive_failures[backend_name] = count
-        suffix = f" {kind}" if kind else ""
+        """Bump per-method consecutive-failure count and disable past threshold.
+
+        Per-method tracking ensures a backend that's bad at JSON but
+        fine at text doesn't lose its text-completion ability when
+        ``complete_json()`` repeatedly fails (which used to break
+        every text-mode caller after one stuck JSON prompt).
+        """
+        key = (backend_name, method)
+        count = self._consecutive_failures.get(key, 0) + 1
+        self._consecutive_failures[key] = count
+        suffix = f" {kind}" if kind else f" {method}"
         logger.warning(
             "Backend %s%s failed (%d/%d): %s",
             backend_name, suffix, count,
             self._FAILURE_DISABLE_THRESHOLD, exc,
         )
         if count >= self._FAILURE_DISABLE_THRESHOLD:
-            self._availability[backend_name] = False
+            # Per-method disable — the backend stays available for
+            # other methods so a bad-JSON Ollama can still serve
+            # text completions.
+            self._method_disabled[key] = True
             logger.warning(
-                "Backend %s disabled after %d consecutive failures",
-                backend_name, count,
+                "Backend %s disabled for %s after %d consecutive failures",
+                backend_name, method, count,
             )
 
     # ------------------------------------------------------------------

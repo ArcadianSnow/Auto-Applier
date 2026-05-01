@@ -1171,11 +1171,74 @@ class IndeedPlatform(JobPlatform):
                     } else if ((el.value || '').length > 0) {
                         continue;
                     }
-                    // Walk up the DOM looking for a label/legend/heading
-                    // that names this field — same logic as the questions
-                    // extractor, just less restrictive about wrapper class.
+                    // Find the QUESTION text (not the OPTION text).
+                    // For radios specifically, the immediate <label> is
+                    // the option (e.g., "Yes" / "Hispanic or Latino" /
+                    // "Upload a file"). The actual question lives on a
+                    // legend / heading / wrapper above the radio group.
+                    //
+                    // Strategy:
+                    //   1. For radios, walk UP looking for a fieldset
+                    //      legend, h1-h6, or div whose text is
+                    //      sentence-shaped (multi-word, ends with ?
+                    //      or has > 20 chars). Skip option-shaped text.
+                    //   2. For other inputs, fall back to the standard
+                    //      label[for=id] / wrap-label / climb pattern.
                     let label = '';
-                    if (el.id) {
+                    const isRadio = el.type === 'radio';
+
+                    if (isRadio) {
+                        // Walk up looking for fieldset/legend/heading
+                        // or a div with sentence-shaped text.
+                        let parent = el.parentElement;
+                        for (let i = 0; i < 12 && parent && !label; i++) {
+                            // 1. fieldset > legend
+                            if (parent.tagName === 'FIELDSET') {
+                                const lg = parent.querySelector(':scope > legend');
+                                if (lg) {
+                                    const t = (lg.innerText || '').trim();
+                                    if (t && t.length >= 10) {
+                                        label = t.split('\\n')[0];
+                                        break;
+                                    }
+                                }
+                            }
+                            // 2. heading inside this ancestor
+                            const heading = parent.querySelector(':scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6, :scope > legend');
+                            if (heading) {
+                                const t = (heading.innerText || '').trim();
+                                if (t && t.length >= 10) {
+                                    label = t.split('\\n')[0];
+                                    break;
+                                }
+                            }
+                            // 3. text node directly inside this ancestor
+                            //    BEFORE the radio inputs — common pattern:
+                            //    <div>Question text<br><label>Yes</label><label>No</label></div>
+                            const ownText = (parent.innerText || '').trim();
+                            if (ownText && ownText.length >= 15 && ownText.length <= 300) {
+                                // Take the first line; check it's
+                                // sentence-shaped (multi-word) and not
+                                // just an option label.
+                                const firstLine = ownText.split('\\n')[0].trim();
+                                const wordCount = firstLine.split(/\\s+/).length;
+                                const looksLikeOption = (
+                                    firstLine.length < 25 &&
+                                    wordCount <= 3 &&
+                                    !firstLine.includes('?')
+                                );
+                                if (!looksLikeOption && wordCount >= 4) {
+                                    label = firstLine;
+                                    break;
+                                }
+                            }
+                            parent = parent.parentElement;
+                        }
+                    }
+
+                    // Fallback: standard label resolution (covers
+                    // text/select/checkbox/non-radio inputs).
+                    if (!label && el.id) {
                         const lbl = el.ownerDocument.querySelector(
                             'label[for="' + el.id.replace(/"/g, '\\\\"') + '"]'
                         );
@@ -1185,8 +1248,9 @@ class IndeedPlatform(JobPlatform):
                         const wrap = el.closest('label');
                         if (wrap) label = (wrap.innerText || '').trim();
                     }
-                    if (!label) {
-                        // Climb until we hit a substantive text node.
+                    if (!label && !isRadio) {
+                        // Generic climb for non-radio fields only —
+                        // for radios this would land on option text.
                         let parent = el.parentElement;
                         for (let i = 0; i < 6 && parent && !label; i++) {
                             const t = (parent.innerText || '').trim();

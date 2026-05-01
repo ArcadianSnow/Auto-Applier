@@ -445,7 +445,7 @@ class ResumeManager:
                 resume.label, exc,
             )
 
-        # Fall back to legacy single-score prompt
+        # Fall back to legacy single-score JSON prompt
         try:
             result = await self.router.complete_json(
                 prompt=RESUME_SELECT.format(
@@ -455,13 +455,107 @@ class ResumeManager:
                 ),
                 system_prompt=RESUME_SELECT.system,
             )
-            legacy_score = min(10, max(1, int(result.get("score", 5))))
+            if result:
+                legacy_score = min(10, max(1, int(result.get("score", 5))))
+                return ResumeScore(
+                    resume=resume,
+                    dimensions=legacy_dimensions_from_score(legacy_score),
+                    explanation=result.get("explanation", ""),
+                    matched_skills=result.get("matched_skills", []),
+                    missing_skills=result.get("missing_skills", []),
+                )
+        except Exception as exc:
+            logger.debug(
+                "Legacy JSON scoring failed for '%s': %s", resume.label, exc,
+            )
+
+        # Plain-text final fallback: when both JSON paths exhaust,
+        # ask the LLM via complete() (text mode) for a single number
+        # 1-10 and a short explanation. complete() uses different
+        # per-method failure tracking from complete_json so a backend
+        # that's bad at structured output but good at text still
+        # works here. Without this, a JSON-allergic Ollama caused
+        # every Dice + ZipRecruiter job to fall back to score 5.0
+        # with no explanation, queueing 30+ jobs into user_review.
+        try:
+            text_response = await self.router.complete(
+                prompt=(
+                    f"Resume:\n{resume_text[:3000]}\n\n"
+                    f"Job Description:\n{job_description[:2000]}\n\n"
+                    "On a scale of 1-10, how well does this resume "
+                    "match the job (judging by skills and experience, "
+                    "not job title)? Respond with the integer FIRST, "
+                    "then a one-sentence reason. Example: '7. Strong "
+                    "Python and SQL match but lacks AWS.'"
+                ),
+                system_prompt=(
+                    "Output: <integer 1-10>. <one sentence reason>. "
+                    "Nothing else."
+                ),
+                temperature=0.2,
+                max_tokens=120,
+            )
+            text = (text_response.text or "").strip()
+            if text:
+                # Pull the first integer out of the response.
+                import re
+                m = re.search(r"\b(10|[1-9])\b", text)
+                if m:
+                    score_int = int(m.group(1))
+                    # Reason = whatever follows, trimmed.
+                    reason = text[m.end():].lstrip(" .:-").strip()
+                    return ResumeScore(
+                        resume=resume,
+                        dimensions=legacy_dimensions_from_score(score_int),
+                        explanation=reason or "Text-mode scoring fallback",
+                        matched_skills=[],
+                        missing_skills=[],
+                    )
+        except Exception as exc:
+            logger.warning(
+                "Text-mode scoring fallback failed for '%s': %s",
+                resume.label, exc,
+            )
+
+        # Absolute last resort: rule-based skill overlap. Counts the
+        # intersection of the resume's confirmed skills with words in
+        # the JD. Crude but bounded — better than dumping every job
+        # into user_review with score 5.0.
+        try:
+            jd_lower = job_description.lower()
+            profile = self.get_profile(resume.label)
+            resume_skills = []
+            if profile:
+                for s in profile.get("skills", []) or []:
+                    if isinstance(s, dict):
+                        nm = (s.get("name") or "").lower()
+                        if nm:
+                            resume_skills.append(nm)
+                    elif isinstance(s, str):
+                        resume_skills.append(s.lower())
+                for s in profile.get("confirmed_skills", []) or []:
+                    if isinstance(s, dict):
+                        nm = (s.get("name") or "").lower()
+                        if nm and nm not in resume_skills:
+                            resume_skills.append(nm)
+            matched = [s for s in resume_skills if s in jd_lower]
+            # Map intersection count to a 1-10 score: 0=2, 5+=8, capped.
+            count = len(matched)
+            if count == 0:
+                rule_score = 2
+            elif count >= 8:
+                rule_score = 8
+            else:
+                rule_score = max(3, min(8, 3 + count))
             return ResumeScore(
                 resume=resume,
-                dimensions=legacy_dimensions_from_score(legacy_score),
-                explanation=result.get("explanation", ""),
-                matched_skills=result.get("matched_skills", []),
-                missing_skills=result.get("missing_skills", []),
+                dimensions=legacy_dimensions_from_score(rule_score),
+                explanation=(
+                    f"Rule-based fallback: {count} resume skills "
+                    f"appear in the JD."
+                ),
+                matched_skills=matched[:10],
+                missing_skills=[],
             )
         except Exception as exc:
             logger.warning("Resume scoring failed for '%s': %s", resume.label, exc)
