@@ -142,22 +142,42 @@ class JobReviewPanel(tk.Toplevel):
                 font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG,
             ).pack(side="right", pady=8)
 
-        # Explanation
+        # AI Assessment — render UNCONDITIONALLY. If the LLM produced
+        # an explanation we show it; if not (router cascade, fallback
+        # score 5.0, etc.) we show a clear "couldn't assess — read
+        # the JD yourself" message so the user isn't left guessing.
+        # Previously the whole card was hidden when explanation was
+        # empty; users hitting the JSON cascade saw zero context for
+        # 30+ queued jobs in a row.
+        exp_card = tk.Frame(
+            body, bg=BG_CARD, highlightbackground=BORDER,
+            highlightthickness=1, padx=16, pady=12,
+        )
+        exp_card.pack(fill="x", padx=PAD_X, pady=(0, 8))
+
+        tk.Label(
+            exp_card, text="AI Assessment", font=FONT_SUBHEADING,
+            fg=PRIMARY, bg=BG_CARD,
+        ).pack(anchor="w", pady=(0, 4))
+
         if explanation:
-            exp_card = tk.Frame(
-                body, bg=BG_CARD, highlightbackground=BORDER,
-                highlightthickness=1, padx=16, pady=12,
-            )
-            exp_card.pack(fill="x", padx=PAD_X, pady=(0, 8))
-
-            tk.Label(
-                exp_card, text="AI Assessment", font=FONT_SUBHEADING,
-                fg=PRIMARY, bg=BG_CARD,
-            ).pack(anchor="w", pady=(0, 4))
-
             tk.Label(
                 exp_card, text=explanation, font=FONT_BODY,
                 fg=TEXT, bg=BG_CARD, wraplength=520, justify="left",
+            ).pack(anchor="w")
+        else:
+            tk.Label(
+                exp_card,
+                text=(
+                    "The AI couldn't generate an assessment for this "
+                    "job — most often because the local model timed "
+                    "out or the JSON-formatted scoring prompt failed "
+                    "across all backends. The default score of 5.0 "
+                    "is a placeholder; please skim the job description "
+                    "below and decide."
+                ),
+                font=FONT_BODY, fg=TEXT_LIGHT, bg=BG_CARD,
+                wraplength=520, justify="left",
             ).pack(anchor="w")
 
         # Dimension breakdown (multi-dimensional scoring)
@@ -307,14 +327,41 @@ class JobReviewPanel(tk.Toplevel):
 
     def _apply(self) -> None:
         """User chose to apply."""
-        if not self._decision_made:
-            self._decision_made = True
-            self._on_decision("apply")
+        if self._decision_made:
+            return
+        self._decision_made = True
+        # Order matters: release the modal grab and destroy THIS
+        # panel before scheduling the next one. Otherwise the
+        # parent's batch-review show_next() fires while this panel
+        # is still tearing down — two Toplevels exist briefly,
+        # only one holds the grab, the user sees a "stuck" window.
+        try:
+            self.grab_release()
+        except Exception:
+            pass
         self.destroy()
+        # Flush the destroy through the event queue so the next
+        # panel's grab_set sees a clean state.
+        try:
+            if self.master is not None:
+                self.master.update_idletasks()
+        except Exception:
+            pass
+        self._on_decision("apply")
 
     def _skip(self) -> None:
         """User chose to skip."""
-        if not self._decision_made:
-            self._decision_made = True
-            self._on_decision("skip")
+        if self._decision_made:
+            return
+        self._decision_made = True
+        try:
+            self.grab_release()
+        except Exception:
+            pass
         self.destroy()
+        try:
+            if self.master is not None:
+                self.master.update_idletasks()
+        except Exception:
+            pass
+        self._on_decision("skip")
