@@ -103,10 +103,49 @@ class ResumesStep(ttk.Frame):
             self,
             text=f"Files saved to: {RESUMES_DIR}",
             style="Small.TLabel",
-        ).pack(anchor="w", padx=PAD_X, pady=(0, PAD_Y))
+        ).pack(anchor="w", padx=PAD_X, pady=(0, 4))
+
+        # Persistent status line — every Add / Reprocess / Remove writes
+        # here so the user always sees what happened, even if a modal
+        # popup gets dismissed too quickly. Stays visible until the
+        # next action overrides it.
+        self._status_var = tk.StringVar(value="")
+        self._status_label = ttk.Label(
+            self,
+            textvariable=self._status_var,
+            style="Small.TLabel",
+            wraplength=720,
+            justify="left",
+        )
+        self._status_label.pack(anchor="w", padx=PAD_X, pady=(0, PAD_Y))
 
         # Populate from saved state
         self._refresh_list()
+
+    def _set_status(self, message: str, ok: bool = True) -> None:
+        """Update the persistent status line below the table.
+
+        Called by every action (add / reprocess / remove / open folder)
+        so a user always has on-screen confirmation of what just
+        happened — modal popups can be dismissed too fast to read,
+        and pythonw under run.bat eats stderr, so a label is the
+        only reliable feedback channel.
+        """
+        from auto_applier.gui.styles import ACCENT, DANGER
+        # Tkinter ttk.Label foreground via style override:
+        try:
+            self._status_label.configure(
+                foreground=ACCENT if ok else DANGER,
+            )
+        except Exception:
+            pass
+        self._status_var.set(message)
+        # Force the UI to render before we move on (the worker may
+        # immediately do more work that blocks the main thread).
+        try:
+            self.update_idletasks()
+        except Exception:
+            pass
 
     def on_show(self) -> None:
         """Refresh list when step is shown (may have changed externally)."""
@@ -201,11 +240,40 @@ class ResumesStep(ttk.Frame):
 
         # Eagerly copy the file into data/resumes/ + write a minimal
         # profile JSON so `cli doctor` sees the resume as loaded
-        # immediately, without the user having to click through to
-        # Ready first. The dashboard's add_resume() call later does
+        # immediately. The dashboard's add_resume() call later does
         # the LLM-powered skill extraction (idempotent — the manager
         # detects the file's already in place and skips the copy).
-        self._materialize_resume(path, label_key)
+        self._set_status(f"Saving '{label_key}'...", ok=True)
+        try:
+            ok = self._materialize_resume(path, label_key, verbose=True)
+        except Exception as exc:
+            import traceback
+            tb = traceback.format_exc()
+            self._set_status(
+                f"Save crashed for '{label_key}': {exc}", ok=False,
+            )
+            messagebox.showerror(
+                "Save crashed",
+                (
+                    f"Resume: {label_key}\n"
+                    f"Path: {path}\n\n"
+                    f"Exception: {exc}\n\n"
+                    f"Full traceback:\n{tb}"
+                ),
+                parent=self.wizard,
+            )
+            self._refresh_list()
+            return
+        self._refresh_list()
+        if ok:
+            self._set_status(
+                f"'{label_key}' is saved and ready.", ok=True,
+            )
+        else:
+            self._set_status(
+                f"'{label_key}' couldn't be fully saved — see the popup.",
+                ok=False,
+            )
 
     def _materialize_resume(
         self,
@@ -227,7 +295,7 @@ class ResumesStep(ttk.Frame):
         import json
         from datetime import datetime, timezone
         from auto_applier.config import RESUMES_DIR, PROFILES_DIR
-        from auto_applier.resume.parser import parse_resume
+        from auto_applier.resume.parser import extract_text
 
         source = Path(source_path).resolve()
         if not source.exists():
@@ -307,7 +375,7 @@ class ResumesStep(ttk.Frame):
             return True  # already parsed; nothing more to do
 
         try:
-            raw_text = parse_resume(str(dest))
+            raw_text = extract_text(str(dest))
         except Exception as exc:
             # Profile gets written with empty raw_text — better than
             # nothing; dashboard's later add_resume will retry the parse.
@@ -357,28 +425,60 @@ class ResumesStep(ttk.Frame):
     def _reprocess_resume(self) -> None:
         """Retry materialize on the highlighted row.
 
-        If the user sees ✗ on a row, this is the first thing to try.
-        Surfaces the underlying error if there is one.
+        Surrounded by a top-level try/except so an unhandled exception
+        (like the time my code imported a function that didn't exist)
+        produces a visible error in the status line + a popup, instead
+        of silently doing nothing because tk + pythonw swallowed it.
         """
         idx = self._selected_index()
         if idx is None:
-            messagebox.showinfo(
-                "No Selection",
-                "Click a resume in the list first, then 'Reprocess Selected'.",
-                parent=self.wizard,
+            self._set_status(
+                "Click a resume row first, then 'Reprocess Selected'.",
+                ok=False,
             )
             return
         try:
             label, path = self.wizard.resume_list[idx]
         except IndexError:
+            self._set_status(
+                "Selection lost — try clicking the row again.", ok=False,
+            )
             return
-        ok = self._materialize_resume(path, label, verbose=True)
+
+        self._set_status(f"Reprocessing '{label}'...", ok=True)
+        try:
+            ok = self._materialize_resume(path, label, verbose=True)
+        except Exception as exc:
+            import traceback
+            tb = traceback.format_exc()
+            self._set_status(
+                f"Reprocess crashed for '{label}': {exc}", ok=False,
+            )
+            messagebox.showerror(
+                "Reprocess crashed",
+                (
+                    f"Resume: {label}\n"
+                    f"Path: {path}\n\n"
+                    f"Exception: {exc}\n\n"
+                    f"Full traceback:\n{tb}\n\n"
+                    "Please send this to whoever maintains the app."
+                ),
+                parent=self.wizard,
+            )
+            self._refresh_list()
+            return
+
         self._refresh_list()
         if ok:
-            messagebox.showinfo(
-                "Reprocessed",
-                f"'{label}' is now saved and ready.",
-                parent=self.wizard,
+            self._set_status(
+                f"'{label}' is saved and ready.", ok=True,
+            )
+        else:
+            # Specific failure already showed a messagebox from inside
+            # _materialize_resume; status line just summarizes.
+            self._set_status(
+                f"Reprocess of '{label}' didn't complete — see the popup.",
+                ok=False,
             )
 
     def _open_resumes_folder(self) -> None:

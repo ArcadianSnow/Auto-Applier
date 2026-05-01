@@ -1,6 +1,7 @@
 """Main wizard controller -- 8-step setup flow for Auto Applier v2."""
 import json
 import tkinter as tk
+from pathlib import Path
 from tkinter import ttk, messagebox
 
 from auto_applier.config import USER_CONFIG_FILE, DATA_DIR
@@ -523,34 +524,65 @@ class WizardApp(tk.Tk):
     def _materialize_pending_resumes(self) -> None:
         """For every (label, source_path) in resume_list, make sure
         the file is present in data/resumes/ and a profile JSON is
-        present in data/profiles/. Idempotent — skips files already
-        in place. Error-tolerant — failures don't block navigation.
+        present in data/profiles/.
+
+        Idempotent — skips files already in place. Errors are LOGGED
+        (no longer silently swallowed by `except: pass continue`).
+        Returns the count of resumes successfully materialized so
+        callers / tests can verify behaviour. The previous silent
+        version made debugging the parse_resume → extract_text rename
+        bug nearly impossible.
         """
         import shutil
+        import logging
         from datetime import datetime, timezone
         from auto_applier.config import RESUMES_DIR, PROFILES_DIR
-        from auto_applier.resume.parser import parse_resume
+        from auto_applier.resume.parser import extract_text
+
+        log = logging.getLogger(__name__)
 
         for label, source_path in self.resume_list:
+            source = Path(source_path).resolve()
+            if not source.exists():
+                log.warning(
+                    "materialize: source %s for label '%s' missing — skipping",
+                    source, label,
+                )
+                continue
             try:
-                source = Path(source_path).resolve()
-                if not source.exists():
-                    continue
                 RESUMES_DIR.mkdir(parents=True, exist_ok=True)
                 PROFILES_DIR.mkdir(parents=True, exist_ok=True)
-                dest = RESUMES_DIR / f"{label}{source.suffix}"
-                if not dest.exists():
-                    try:
-                        shutil.copy2(source, dest)
-                    except (OSError, shutil.SameFileError):
-                        pass
-                profile_path = PROFILES_DIR / f"{label}.json"
-                if profile_path.exists():
-                    continue
+            except OSError as exc:
+                log.warning("materialize: mkdir failed: %s", exc)
+                continue
+
+            dest = RESUMES_DIR / f"{label}{source.suffix}"
+            if not dest.exists():
                 try:
-                    raw_text = parse_resume(str(dest)) if dest.exists() else ""
-                except Exception:
-                    raw_text = ""
+                    shutil.copy2(source, dest)
+                except shutil.SameFileError:
+                    pass
+                except OSError as exc:
+                    log.warning(
+                        "materialize: copy %s -> %s failed: %s",
+                        source, dest, exc,
+                    )
+                    continue
+
+            profile_path = PROFILES_DIR / f"{label}.json"
+            if profile_path.exists():
+                continue
+
+            try:
+                raw_text = extract_text(str(dest)) if dest.exists() else ""
+            except Exception as exc:
+                log.warning(
+                    "materialize: extract_text failed for %s: %s",
+                    dest, exc,
+                )
+                raw_text = ""
+
+            try:
                 profile_path.write_text(
                     json.dumps({
                         "label": label,
@@ -563,8 +595,11 @@ class WizardApp(tk.Tk):
                     }, indent=2),
                     encoding="utf-8",
                 )
-            except Exception:
-                continue
+            except OSError as exc:
+                log.warning(
+                    "materialize: profile write %s failed: %s",
+                    profile_path, exc,
+                )
 
     def save_llm_setup_only(self) -> None:
         """Persist the llm section AND write GEMINI_API_KEY to .env.
