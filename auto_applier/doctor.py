@@ -205,7 +205,12 @@ def check_answers_file() -> CheckResult:
     if not ANSWERS_FILE.exists():
         return CheckResult(
             "answers.json", WARN, "missing (LLM will answer from scratch)",
-            fix="Run the wizard's Answers step, or create an empty {} file",
+            fix=(
+                "Open the GUI wizard (run.bat) and click 'Next' past the "
+                "'Answers' step at least once — the file is created on "
+                "advance. Empty / partial answers are fine; this just "
+                "creates the file so the LLM has a baseline to consult."
+            ),
         )
     try:
         data = json.loads(ANSWERS_FILE.read_text(encoding="utf-8"))

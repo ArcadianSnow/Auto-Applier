@@ -163,7 +163,12 @@ class ResumesStep(ttk.Frame):
             self._refresh_list()
 
     def validate(self) -> bool:
-        """At least one resume is required."""
+        """At least one resume is required.
+
+        Persists the resume list on advance so users who add resumes
+        and then close the wizard (e.g. to verify with `cli doctor`)
+        don't lose what they uploaded.
+        """
         if not self.wizard.resume_list:
             messagebox.showwarning(
                 "No Resumes",
@@ -171,4 +176,8 @@ class ResumesStep(ttk.Frame):
                 parent=self.wizard,
             )
             return False
+        try:
+            self.wizard.save_resumes_only()
+        except Exception:
+            pass  # Final Ready step will surface a writable error.
         return True

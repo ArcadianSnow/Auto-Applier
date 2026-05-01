@@ -39,6 +39,20 @@ class LLMSetupStep(ttk.Frame):
         self._auto_checked = True
         self._test_ollama()
 
+    def validate(self) -> bool:
+        """No hard requirements (Ollama is recommended but not required),
+        but trigger the save side-effect so the Gemini key the user
+        pasted goes into .env immediately. Without this, leaving the
+        wizard before reaching Ready would lose the key — and the
+        runtime reads GEMINI_API_KEY from .env, not user_config.json,
+        so it'd never see it anyway.
+        """
+        try:
+            self.wizard.save_llm_setup_only()
+        except Exception:
+            pass
+        return True
+
     def _build(self) -> None:
         # Heading
         ttk.Label(

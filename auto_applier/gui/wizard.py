@@ -505,16 +505,38 @@ class WizardApp(tk.Tk):
             json.dump(config, f, indent=2)
 
     def save_personal_info_only(self) -> None:
-        """Persist just the personal_info section without touching other keys.
+        """Persist just the personal_info section without touching other keys."""
+        self._save_partial(("personal_info",))
 
-        Called from PersonalStep.validate so users who fill the
-        Personal page and then jump straight to `cli doctor` (or
-        otherwise close the wizard before reaching the Ready step)
-        still get their address / contact fields saved to disk.
+    def save_resumes_only(self) -> None:
+        """Persist just the resumes section without touching other keys."""
+        self._save_partial(("resumes",))
+
+    def save_llm_setup_only(self) -> None:
+        """Persist the llm section AND write GEMINI_API_KEY to .env.
+
+        The LLM router reads GEMINI_API_KEY via dotenv from .env, NOT
+        from user_config.json — so the wizard form's gemini_api_key
+        field has to make it into the .env file or the rest of the
+        app will never see it. We write both: user_config.json so
+        the wizard remembers it next session, .env so the runtime
+        actually uses it.
+        """
+        self._save_partial(("llm",))
+        # Mirror to .env so the runtime can pick it up.
+        gemini = self.data["gemini_api_key"].get().strip()
+        if gemini:
+            self._write_gemini_to_env(gemini)
+
+    def _save_partial(self, sections: tuple[str, ...]) -> None:
+        """Write only the named top-level keys of get_config() to disk.
+
+        Reads the existing user_config.json so unrelated sections
+        (preferences, platform toggles, search keywords, etc.) keep
+        the values they already had — partial saves never wipe
+        anything the user already configured.
         """
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        # Read existing config (if any) so we only mutate
-        # personal_info — preferences, platform toggles, etc. stay.
         existing: dict = {}
         if USER_CONFIG_FILE.exists():
             try:
@@ -522,13 +544,47 @@ class WizardApp(tk.Tk):
                     existing = json.load(f) or {}
             except (json.JSONDecodeError, OSError):
                 existing = {}
-
-        # Pull personal_info shape from get_config (so we get the
-        # derived fields: name, postal_code, city_state, address).
         full_config = self.get_config()
-        existing["personal_info"] = full_config.get("personal_info", {})
+        for section in sections:
+            if section in full_config:
+                existing[section] = full_config[section]
         with open(USER_CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(existing, f, indent=2)
+
+    @staticmethod
+    def _write_gemini_to_env(api_key: str) -> None:
+        """Write or replace the GEMINI_API_KEY line in .env.
+
+        - If .env exists with a GEMINI_API_KEY line, replace just that line.
+        - If .env exists without one, append a new line.
+        - If .env doesn't exist, create it with just this single line.
+
+        Other lines in .env (LinkedIn creds, etc.) are preserved.
+        """
+        from auto_applier.config import PROJECT_ROOT
+        env_path = PROJECT_ROOT / ".env"
+        existing_lines: list[str] = []
+        replaced = False
+        if env_path.exists():
+            try:
+                existing_lines = env_path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                existing_lines = []
+        new_lines: list[str] = []
+        for line in existing_lines:
+            stripped = line.lstrip()
+            if stripped.startswith("GEMINI_API_KEY=") or stripped.startswith("GEMINI_API_KEY ="):
+                new_lines.append(f"GEMINI_API_KEY={api_key}")
+                replaced = True
+            else:
+                new_lines.append(line)
+        if not replaced:
+            new_lines.append(f"GEMINI_API_KEY={api_key}")
+        # Trailing newline is standard for .env files.
+        env_path.write_text(
+            "\n".join(new_lines).rstrip() + "\n",
+            encoding="utf-8",
+        )
 
     def save_answers(self) -> None:
         """Write collected answers to answers.json.

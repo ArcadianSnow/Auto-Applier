@@ -50,6 +50,18 @@ class AnswersStep(ttk.Frame):
         self.wizard = wizard
         self._build()
 
+    def validate(self) -> bool:
+        """No required answers — every question is optional. But
+        persist what's been entered on advance so users who fill
+        some answers and bail don't lose them, and so doctor
+        stops complaining that answers.json is missing.
+        """
+        try:
+            self.wizard.save_answers()
+        except Exception:
+            pass
+        return True
+
     def _build(self) -> None:
         # Heading
         ttk.Label(
