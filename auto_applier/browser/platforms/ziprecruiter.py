@@ -1202,22 +1202,66 @@ class ZipRecruiterPlatform(JobPlatform):
         return False
 
     async def _handle_resume_upload(self, page: Page, resume_path: str) -> None:
-        """Upload resume if a file input is present on the current form step."""
+        """Upload the resume to the RESUME slot specifically.
+
+        Same rationale as Dice / Indeed: a generic ``input[type='file']``
+        selector can grab the cover-letter or transcript slot when
+        multiple file inputs share the same step. We classify each
+        visible file input via ``FormFiller.classify_file_input`` and
+        prefer the one tagged ``resume``; fall back to ``unknown`` with
+        a warning so misclassifications stay visible in logs.
+        """
         if not resume_path:
             return
 
-        for sel in RESUME_UPLOAD_SELECTORS:
+        from auto_applier.browser.form_filler import FormFiller
+
+        try:
+            inputs = await page.query_selector_all("input[type='file']")
+        except Exception:
+            inputs = []
+        if not inputs:
+            return
+
+        resume_input = None
+        unknown_input = None
+        for inp in inputs:
             try:
-                file_input = await page.query_selector(sel)
-                if file_input:
-                    await file_input.set_input_files(resume_path)
-                    logger.info(
-                        "ZipRecruiter: Uploaded resume from %s", resume_path
-                    )
-                    await random_delay(1.0, 2.0)
-                    return
+                if not await inp.is_visible():
+                    continue
             except Exception:
-                continue
+                pass
+            kind = await FormFiller.classify_file_input(inp)
+            if kind == "resume":
+                resume_input = inp
+                break
+            if kind == "unknown" and unknown_input is None:
+                unknown_input = inp
+
+        target = resume_input
+        if target is None and unknown_input is not None:
+            logger.warning(
+                "ZipRecruiter: no file input classified as 'resume' on "
+                "this step; falling back to first 'unknown' input — "
+                "verify the right slot got the resume."
+            )
+            target = unknown_input
+        if target is None:
+            return
+
+        try:
+            await target.set_input_files(resume_path)
+            await FormFiller.wait_for_upload_complete(
+                page, expected_name=resume_path, timeout=15.0,
+            )
+            logger.info(
+                "ZipRecruiter: Uploaded resume from %s", resume_path
+            )
+            await random_delay(1.0, 2.0)
+        except Exception as exc:
+            logger.warning(
+                "ZipRecruiter: resume upload failed: %s", exc
+            )
 
     async def _scan_validation_errors(self, page: Page) -> str:
         """Scan for visible validation error messages on the current page.

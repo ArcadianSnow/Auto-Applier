@@ -836,16 +836,287 @@ class FormFiller:
     # ------------------------------------------------------------------
 
     async def _fill_cover_letter(self, page: Page, field: FormField) -> bool:
-        """Generate and fill a cover letter field."""
+        """Generate and fill a cover letter field.
+
+        Branches on field type — textareas/text get the LLM-generated
+        text directly; FILE inputs get a PDF rendered from that text
+        via the same render pipeline used by `cli cover`. The previous
+        version only handled textareas, so on Dice (which uses a file
+        input for cover letter) the generated text dropped on the
+        floor and the user's resume PDF ended up in the cover letter
+        slot via the platform's blind upload path.
+        """
         letter = await self.cover_letter_writer.generate(
             resume_text=self.resume_text[:3000],
             job_description=self.job_description[:2000],
             company_name=self.company_name,
             job_title=self.job_title,
         )
-        if letter:
-            self.cover_letter_generated = True
-            return await self._apply_answer(page, field, letter)
+        if not letter:
+            return False
+        self.cover_letter_generated = True
+
+        if field.field_type == "file":
+            # Render to PDF and set_input_files. PDF lives at
+            # data/cover_letters/<job_id>/<First>_<Last>_Cover_Letter.pdf
+            # — same path `cli cover` uses, so a manual cli run + a
+            # live apply share the same artifact.
+            try:
+                pdf_path = await self._render_cover_letter_pdf(letter)
+                if pdf_path is None:
+                    return False
+                await field.element.set_input_files(str(pdf_path))
+                # Wait for the upload to actually settle before we let
+                # the form-walker advance to the next step. Otherwise
+                # "Continue" can fire before the file is attached and
+                # the application submits without the cover letter.
+                await self.wait_for_upload_complete(
+                    page, expected_name=str(pdf_path), timeout=15.0,
+                )
+                self.fields_filled += 1
+                await random_delay(0.5, 1.5)
+                return True
+            except Exception as exc:
+                logger.warning(
+                    "Cover letter file upload failed: %s", exc,
+                )
+                return False
+        # Textarea / text field — fill the generated text directly.
+        return await self._apply_answer(page, field, letter)
+
+    async def _render_cover_letter_pdf(self, letter_text: str):
+        """Render the LLM-generated letter to a PDF on disk.
+
+        Reuses the cover_letter_service HTML template + tailor's
+        Playwright PDF renderer. Returns the Path written to, or None
+        on failure (Playwright not installed, render error, etc.).
+        """
+        try:
+            from auto_applier.config import COVER_LETTERS_DIR, USER_CONFIG_FILE
+            from auto_applier.resume.cover_letter_service import (
+                _render_cover_letter_html,
+            )
+            from auto_applier.resume.tailor import (
+                _user_filename_prefix, render_pdf,
+            )
+            import json as _json
+
+            # Look up display name for the PDF body (greeting + sign-off).
+            display_name = ""
+            try:
+                if USER_CONFIG_FILE.exists():
+                    cfg = _json.loads(
+                        USER_CONFIG_FILE.read_text(encoding="utf-8")
+                    )
+                    p = cfg.get("personal_info", {}) or {}
+                    display_name = (p.get("name") or "").strip()
+                    if not display_name:
+                        first = (p.get("first_name") or "").strip()
+                        last = (p.get("last_name") or "").strip()
+                        display_name = " ".join(x for x in (first, last) if x)
+            except Exception:
+                display_name = ""
+
+            html = _render_cover_letter_html(letter_text, display_name)
+
+            # Path: data/cover_letters/<job_id>/<First>_<Last>_Cover_Letter.pdf
+            # Use job_id from form_filler context if we have it.
+            job_id = getattr(self, "job_id", "") or "current"
+            safe_job = "".join(
+                c if c.isalnum() or c in "-_." else "_" for c in job_id
+            )
+            prefix = _user_filename_prefix()
+            filename = (
+                f"{prefix}_Cover_Letter.pdf" if prefix else "Cover_Letter.pdf"
+            )
+            out_dir = COVER_LETTERS_DIR / safe_job
+            out_dir.mkdir(parents=True, exist_ok=True)
+            pdf_path = out_dir / filename
+
+            ok = await render_pdf(html, pdf_path)
+            if ok:
+                logger.info(
+                    "Rendered cover letter PDF for upload: %s", pdf_path,
+                )
+                return pdf_path
+            return None
+        except Exception as exc:
+            logger.warning("Cover letter PDF render failed: %s", exc)
+            return None
+
+    @staticmethod
+    async def classify_file_input(element) -> str:
+        """Classify a file input element by what it's asking for.
+
+        Returns one of "resume", "cover_letter", "transcript",
+        "portfolio", or "unknown". Conservative — if we can't tell,
+        return "unknown" so callers can decide whether to upload
+        anything.
+
+        Inspection sources (in order):
+          1. data-cy / data-testid / name / id attributes
+          2. aria-label
+          3. <label for=...> if id exists
+          4. closest <label> wrap
+          5. nearby preceding text (heading / sentence)
+
+        Implemented as a single JS evaluate so we don't round-trip
+        five times per input.
+        """
+        try:
+            text = await element.evaluate(
+                """(el) => {
+                    const bits = [];
+                    for (const a of ['name', 'id', 'data-cy',
+                                      'data-testid', 'aria-label',
+                                      'placeholder', 'accept']) {
+                        const v = el.getAttribute(a);
+                        if (v) bits.push(v);
+                    }
+                    if (el.id) {
+                        const lbl = el.ownerDocument.querySelector(
+                            'label[for="' + el.id.replace(/"/g, '\\\\"') + '"]'
+                        );
+                        if (lbl) bits.push(lbl.innerText || '');
+                    }
+                    const wrap = el.closest('label');
+                    if (wrap) bits.push(wrap.innerText || '');
+                    // Walk up 4 levels for nearby heading text.
+                    let p = el.parentElement;
+                    for (let i = 0; i < 4 && p; i++) {
+                        const heading = p.querySelector(
+                            ':scope > label, :scope > h1, :scope > h2,'
+                            + ' :scope > h3, :scope > h4, :scope > h5,'
+                            + ' :scope > h6, :scope > legend,'
+                            + ' :scope > p, :scope > span, :scope > div'
+                        );
+                        if (heading && heading !== el) {
+                            const t = (heading.innerText || '').trim();
+                            if (t && t.length < 200) bits.push(t);
+                        }
+                        p = p.parentElement;
+                    }
+                    return bits.join(' | ').toLowerCase();
+                }"""
+            )
+        except Exception:
+            return "unknown"
+
+        text = text or ""
+        # Order matters — cover letter tested first because some sites
+        # use "resume / cv / cover letter" in a single label and we
+        # want the more specific match to win.
+        if any(kw in text for kw in (
+            "cover letter", "letter of interest", "cover note",
+            "motivation letter", "coverletter",
+        )):
+            return "cover_letter"
+        if any(kw in text for kw in (
+            "transcript", "academic record",
+        )):
+            return "transcript"
+        if any(kw in text for kw in (
+            "portfolio", "work sample", "writing sample",
+        )):
+            return "portfolio"
+        if any(kw in text for kw in (
+            "resume", "cv", "curriculum vitae",
+        )):
+            return "resume"
+        return "unknown"
+
+    @staticmethod
+    async def wait_for_upload_complete(
+        page, expected_name: str = "", timeout: float = 15.0,
+    ) -> bool:
+        """Block until an in-flight file upload visually finishes.
+
+        ``set_input_files()`` resolves the moment the file is queued,
+        not when the server has accepted it. On Dice and a handful of
+        Indeed steps the form's "Continue" button stays disabled until
+        the upload spinner clears, and clicking it early advances
+        without the file attached. Earlier code papered over this with
+        a fixed ``random_delay(1.0, 2.0)`` which is both too short for
+        big PDFs and too long when the upload was instant.
+
+        Heuristics tried in parallel — first to fire wins:
+
+          1. The expected filename appears as text on the page (most
+             sites render the chosen filename next to the input).
+          2. All visible upload-spinner / progress / "uploading"
+             indicators disappear.
+          3. Hard timeout.
+
+        Returns True if either of (1) or (2) fired before timeout,
+        False on timeout (caller can still proceed — this is a
+        best-effort polish, not a hard gate).
+        """
+        import asyncio
+        import os
+
+        deadline = asyncio.get_event_loop().time() + max(0.5, timeout)
+        stem = ""
+        if expected_name:
+            stem = os.path.splitext(os.path.basename(expected_name))[0]
+
+        spinner_selectors = [
+            "[class*='spinner']:not([style*='display: none'])",
+            "[class*='Spinner']:not([style*='display: none'])",
+            "[class*='loading']:not([style*='display: none'])",
+            "[class*='Loading']:not([style*='display: none'])",
+            "[class*='uploading']",
+            "[class*='Uploading']",
+            "[role='progressbar']",
+            "progress",
+            "[aria-busy='true']",
+        ]
+
+        # Quick poll loop. Cheap evaluations, ~200ms cadence.
+        while asyncio.get_event_loop().time() < deadline:
+            # 1. Filename rendered on page?
+            if stem and len(stem) >= 3:
+                try:
+                    found = await page.evaluate(
+                        """(needle) => {
+                            const t = (document.body.innerText || '');
+                            return t.toLowerCase().includes(
+                                needle.toLowerCase()
+                            );
+                        }""",
+                        stem,
+                    )
+                    if found:
+                        return True
+                except Exception:
+                    pass
+
+            # 2. Any spinners still visible?
+            spinner_visible = False
+            for sel in spinner_selectors:
+                try:
+                    el = await page.query_selector(sel)
+                    if el is None:
+                        continue
+                    try:
+                        if await el.is_visible():
+                            spinner_visible = True
+                            break
+                    except Exception:
+                        spinner_visible = True
+                        break
+                except Exception:
+                    continue
+            if not spinner_visible and stem:
+                # No spinner AND we had a filename to look for but
+                # didn't find it — give the page a moment longer.
+                await asyncio.sleep(0.2)
+                continue
+            if not spinner_visible:
+                # No spinner at all, no filename hint — assume done.
+                return True
+
+            await asyncio.sleep(0.2)
+
         return False
 
     # ------------------------------------------------------------------

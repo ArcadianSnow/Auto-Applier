@@ -1262,20 +1262,69 @@ class DicePlatform(JobPlatform):
         return False
 
     async def _handle_resume_upload(self, page: Page, resume_path: str) -> None:
-        """Upload resume if a file input is present on the current modal step."""
+        """Upload the resume to the RESUME slot specifically.
+
+        Earlier versions used a generic ``input[type='file']``
+        selector that grabbed the first file input on the page.
+        On multi-step Dice forms with the resume slot on step 1
+        and a separate cover-letter file input on step 2, this
+        invocation on step 2 uploaded the resume PDF to the
+        cover-letter slot — the user saw their resume filename in
+        both places. Now we enumerate every file input, classify
+        each via FormFiller.classify_file_input, and only upload
+        to one classified as "resume" (or "unknown" as a fallback,
+        with a warning).
+        """
         if not resume_path:
             return
 
-        for sel in RESUME_UPLOAD_SELECTORS:
+        from auto_applier.browser.form_filler import FormFiller
+
+        try:
+            inputs = await page.query_selector_all("input[type='file']")
+        except Exception:
+            inputs = []
+        if not inputs:
+            return
+
+        # Classify every file input. Pick the resume slot specifically.
+        resume_input = None
+        unknown_input = None
+        for inp in inputs:
             try:
-                file_input = await page.query_selector(sel)
-                if file_input:
-                    await file_input.set_input_files(resume_path)
-                    logger.info("Dice: Uploaded resume from %s", resume_path)
-                    await random_delay(1.0, 2.0)
-                    return
+                if not await inp.is_visible():
+                    continue
             except Exception:
-                continue
+                pass
+            kind = await FormFiller.classify_file_input(inp)
+            if kind == "resume":
+                resume_input = inp
+                break
+            if kind == "unknown" and unknown_input is None:
+                unknown_input = inp
+
+        target = resume_input
+        if target is None and unknown_input is not None:
+            # Fall back to the unknown one with a clear warning so
+            # we can spot misclassifications. Better than no upload.
+            logger.warning(
+                "Dice: no file input classified as 'resume' on this "
+                "step; falling back to first 'unknown' input — "
+                "verify the right slot got the resume."
+            )
+            target = unknown_input
+        if target is None:
+            return
+
+        try:
+            await target.set_input_files(resume_path)
+            await FormFiller.wait_for_upload_complete(
+                page, expected_name=resume_path, timeout=15.0,
+            )
+            logger.info("Dice: Uploaded resume from %s", resume_path)
+            await random_delay(1.0, 2.0)
+        except Exception as exc:
+            logger.warning("Dice: resume upload failed: %s", exc)
 
     async def _close_modal(self, page: Page) -> None:
         """Close the Easy Apply modal to leave a clean state."""

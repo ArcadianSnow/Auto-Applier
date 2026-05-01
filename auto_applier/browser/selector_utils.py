@@ -9,11 +9,68 @@ Detects form fields on any job application page using four strategies:
 Deduplicates by label text to avoid filling the same field twice.
 """
 import logging
+import re
 from dataclasses import dataclass, field
 
 from playwright.async_api import ElementHandle, Page
 
 logger = logging.getLogger(__name__)
+
+
+# Labels that look like questions but aren't — they're page chrome,
+# section headers, file-upload affordance text, or accessibility helper
+# text we should never try to LLM-answer. Matched as a substring (after
+# lowercasing the detected label) so minor wording variants still hit.
+# User explicitly called out the first three from a dry-run audit; the
+# rest were observed in run logs as "filled" with junk answers.
+_PHANTOM_LABEL_PATTERNS = (
+    "voluntary self identification",
+    "voluntary self-identification",
+    "self-identification questions",
+    "self identification questions",
+    "upload a file",
+    "drag and drop",
+    "drag & drop",
+    "drop your file here",
+    "current page",
+    "page navigation",
+    "powered by",
+    "click to upload",
+    "browse files",
+    "choose file",
+    "no file chosen",
+    "accepted formats",
+    "max size",
+    "maximum file size",
+)
+
+
+def _is_phantom_label(label: str) -> bool:
+    """Return True for labels that look like form chrome, not a question.
+
+    Conservative — only patterns we've seen produce nonsense answers.
+    Real questions occasionally contain phrases like ``upload`` (e.g.
+    "Upload your resume — required"), so we only block when the label
+    is *dominated* by chrome text. The two-pronged rule:
+
+      1. The label substring-matches a phantom pattern, AND
+      2. The label is short (<= 80 chars) — long labels usually wrap a
+         real question around any upload-flavoured noise.
+    """
+    if not label:
+        return True
+    s = label.strip().lower()
+    if not s:
+        return True
+    if len(s) > 80:
+        return False
+    # Pure punctuation / digits-only stays out of the form filler.
+    if not re.search(r"[a-z]", s):
+        return True
+    for pat in _PHANTOM_LABEL_PATTERNS:
+        if pat in s:
+            return True
+    return False
 
 
 @dataclass
@@ -199,6 +256,23 @@ async def _classify_element(
         tag = await el.evaluate("el => el.tagName.toLowerCase()")
         input_type = (await el.get_attribute("type") or "text").lower()
     except Exception:
+        return None
+
+    # Drop phantom labels that aren't actually questions ("Current
+    # page", "Voluntary self identification questions", "Upload a
+    # file"). The form_filler used to feed these to the LLM as if
+    # they were real prompts and got back garbage like "Yes" or the
+    # user's phone number, then typed it into a heading-shaped
+    # element. File inputs run the phantom check too — every
+    # phantom hit there is upload-chrome text ("Upload a file",
+    # "Drag and drop"), which the platform-level uploader handles
+    # via classify_file_input regardless of the field-detector's
+    # opinion.
+    if _is_phantom_label(label):
+        logger.debug(
+            "Skipping phantom-label field: %r (type=%s)",
+            label, input_type,
+        )
         return None
 
     if tag == "textarea":

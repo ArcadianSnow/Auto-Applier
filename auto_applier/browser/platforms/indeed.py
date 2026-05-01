@@ -1846,20 +1846,64 @@ class IndeedPlatform(JobPlatform):
         return False
 
     async def _handle_resume_upload(self, page: Page, resume_path: str) -> None:
-        """Upload resume if a file input is present on the current form step."""
+        """Upload the resume to the RESUME slot specifically.
+
+        Older code walked RESUME_UPLOAD_SELECTORS in order and uploaded
+        to the first input that matched. The final selector is a bare
+        ``input[type='file']`` — on multi-input pages (resume + cover
+        letter + transcript) that grabbed whichever file input came
+        first in the DOM, which sometimes wasn't the resume slot.
+        Now we enumerate every visible file input, classify each via
+        ``FormFiller.classify_file_input``, and prefer the one tagged
+        ``resume``, with a fallback to ``unknown`` and a warning log.
+        """
         if not resume_path:
             return
 
-        for sel in RESUME_UPLOAD_SELECTORS:
+        from auto_applier.browser.form_filler import FormFiller
+
+        try:
+            inputs = await page.query_selector_all("input[type='file']")
+        except Exception:
+            inputs = []
+        if not inputs:
+            return
+
+        resume_input = None
+        unknown_input = None
+        for inp in inputs:
             try:
-                file_input = await page.query_selector(sel)
-                if file_input:
-                    await file_input.set_input_files(resume_path)
-                    logger.info("Indeed: Uploaded resume from %s", resume_path)
-                    await random_delay(1.0, 2.0)
-                    return
+                if not await inp.is_visible():
+                    continue
             except Exception:
-                continue
+                pass
+            kind = await FormFiller.classify_file_input(inp)
+            if kind == "resume":
+                resume_input = inp
+                break
+            if kind == "unknown" and unknown_input is None:
+                unknown_input = inp
+
+        target = resume_input
+        if target is None and unknown_input is not None:
+            logger.warning(
+                "Indeed: no file input classified as 'resume' on this "
+                "step; falling back to first 'unknown' input — "
+                "verify the right slot got the resume."
+            )
+            target = unknown_input
+        if target is None:
+            return
+
+        try:
+            await target.set_input_files(resume_path)
+            await FormFiller.wait_for_upload_complete(
+                page, expected_name=resume_path, timeout=15.0,
+            )
+            logger.info("Indeed: Uploaded resume from %s", resume_path)
+            await random_delay(1.0, 2.0)
+        except Exception as exc:
+            logger.warning("Indeed: resume upload failed: %s", exc)
 
     async def _select_uploaded_resume(self, page: Page, resume_path: str) -> bool:
         """Pick the uploaded-resume option on resume-selection-module.
