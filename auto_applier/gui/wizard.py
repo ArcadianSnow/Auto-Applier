@@ -119,9 +119,14 @@ class WizardApp(tk.Tk):
             self.data[f"{key}_enabled"] = tk.BooleanVar(value=default)
 
         # Personal info
-        for key in ("first_name", "last_name", "email", "phone", "city",
-                     "linkedin_url", "website"):
+        for key in ("first_name", "last_name", "email", "phone",
+                     "street_address", "city", "state", "zip_code",
+                     "country", "linkedin_url", "website"):
             self.data[key] = tk.StringVar(value="")
+        # Country defaults to United States — that's the project's
+        # current audience, and pre-filling spares the user one
+        # required field. They can edit it before saving.
+        self.data["country"].set("United States")
 
         # Job preferences
         self.data["search_keywords"] = tk.StringVar(value="")
@@ -160,8 +165,9 @@ class WizardApp(tk.Tk):
 
         # Personal info
         personal = cfg.get("personal_info", {})
-        for key in ("first_name", "last_name", "email", "phone", "city",
-                     "linkedin_url", "website"):
+        for key in ("first_name", "last_name", "email", "phone",
+                     "street_address", "city", "state", "zip_code",
+                     "country", "linkedin_url", "website"):
             if key in personal and key in self.data:
                 self.data[key].set(personal[key])
 
@@ -426,9 +432,11 @@ class WizardApp(tk.Tk):
         except (json.JSONDecodeError, OSError):
             pass
 
-        for key in ("first_name", "last_name", "email", "phone", "city",
-                     "linkedin_url", "website"):
-            personal[key] = self.data[key].get().strip()
+        for key in ("first_name", "last_name", "email", "phone",
+                     "street_address", "city", "state", "zip_code",
+                     "country", "linkedin_url", "website"):
+            if key in self.data:
+                personal[key] = self.data[key].get().strip()
 
         # Derive a combined 'name' so doctor's user_config check
         # passes without requiring a separate full-name input.
@@ -436,6 +444,21 @@ class WizardApp(tk.Tk):
         ln = personal.get("last_name", "")
         if fn or ln:
             personal["name"] = f"{fn} {ln}".strip()
+        # Convenience: the form filler reads either 'zip_code' or
+        # 'postal_code' depending on which keyword the JD form used.
+        # Mirror zip_code -> postal_code so both styles match.
+        if personal.get("zip_code") and not personal.get("postal_code"):
+            personal["postal_code"] = personal["zip_code"]
+        # Combined city+state for forms that ask for "City, State".
+        cs_city = personal.get("city", "")
+        cs_state = personal.get("state", "")
+        if cs_city and cs_state:
+            personal["city_state"] = f"{cs_city}, {cs_state}"
+        # Combined address for forms that ask for a single "Address" line.
+        addr = personal.get("street_address", "")
+        if addr and cs_city and cs_state:
+            zc = personal.get("zip_code", "")
+            personal["address"] = f"{addr}, {cs_city}, {cs_state} {zc}".strip()
 
         # Search keywords as list
         raw_kw = self.data["search_keywords"].get()

@@ -83,13 +83,34 @@ def check_env_file() -> CheckResult:
     from auto_applier.config import PROJECT_ROOT
 
     env = PROJECT_ROOT / ".env"
+    env_txt = PROJECT_ROOT / ".env.txt"
     example = PROJECT_ROOT / ".env.example"
     if env.exists():
         return CheckResult(".env file", PASS, "present")
+    # Windows hides ".txt" by default, so users who try to make a
+    # ".env" file in Notepad often end up with ".env.txt" without
+    # realizing it. Detect that case explicitly so they don't sit
+    # confused.
+    if env_txt.exists():
+        return CheckResult(
+            ".env file", FAIL,
+            "found '.env.txt' (Windows added a hidden .txt extension)",
+            fix=(
+                "Rename '.env.txt' to '.env'. In File Explorer:\n"
+                "           1. View menu -> turn ON 'File name extensions'.\n"
+                "           2. Right-click '.env.txt', Rename, remove '.txt'.\n"
+                "           Confirm Windows' \"are you sure?\" prompt with Yes."
+            ),
+        )
     if example.exists():
         return CheckResult(
             ".env file", WARN, "missing (.env.example available)",
-            fix="Copy .env.example to .env and fill in credentials",
+            fix=(
+                "Copy .env.example to .env and fill in credentials. "
+                "If you tried this in Notepad and Windows saved it as "
+                "'.env.txt', see this check's repeat output for the "
+                "rename steps."
+            ),
         )
     return CheckResult(
         ".env file", WARN, "missing",
@@ -269,7 +290,18 @@ def check_gemini_key() -> CheckResult:
     if not GEMINI_API_KEY:
         return CheckResult(
             "Gemini fallback", WARN, "no API key configured",
-            fix="Add GEMINI_API_KEY to .env (free at ai.google.dev)",
+            fix=(
+                "Free, takes ~60 seconds:\n"
+                "           1. Open https://aistudio.google.com/apikey in your browser.\n"
+                "           2. Sign in with any Google account.\n"
+                "           3. Click 'Create API key' (top right).\n"
+                "              Pick 'Create API key in new project' if it asks.\n"
+                "           4. Copy the long string that starts with 'AIzaSy...'.\n"
+                "           5. Open '.env' in Notepad, add a line:\n"
+                "                  GEMINI_API_KEY=AIzaSy...your_key_here\n"
+                "           6. Save and re-run doctor.\n"
+                "           No credit card. Free tier is 1500 req/day, plenty for this app."
+            ),
         )
     return CheckResult("Gemini fallback", PASS, "API key present")
 

@@ -164,12 +164,69 @@ async def apply_to_job(
     silently dropped every row.
     """
 
-    # If a tailored resume PDF was generated ahead of time for this
-    # job, use it for the upload instead of the original file. The
-    # tailored version is strictly additive — falls back silently
-    # when none exists.
-    from auto_applier.resume.tailor import tailored_pdf_path
+    # Auto-personalize the resume for this job. If we've already
+    # tailored for this job_id (e.g. a prior `cli tailor` run, or an
+    # earlier auto-tailor in this session), reuse it. Otherwise
+    # generate one now from resume + JD via the LLM, render to PDF,
+    # and use that for the upload.
+    #
+    # On real (non-dry) runs we tailor unconditionally — that's the
+    # whole point of "AI personalizes your resume for each job".
+    # Dry runs skip the tailor LLM call to keep the test cycle fast;
+    # the apply flow then falls back to the original resume file.
+    #
+    # Tailoring cost: one LLM call (~5-15s) + one Playwright PDF
+    # render (~3-5s) per first-apply to a job. Cached on disk after
+    # that, so re-applies / cli tailor / cli show are all free.
+    from auto_applier.resume.tailor import (
+        tailored_pdf_path, ResumeTailor,
+        save_tailored_json, render_html, render_pdf,
+    )
     tailored = tailored_pdf_path(job.job_id)
+    if not tailored.exists() and not dry_run and resume_text and job.description:
+        try:
+            tailor_obj = ResumeTailor(router)
+            tailored_resume = await tailor_obj.tailor(
+                resume_text=resume_text,
+                job_description=job.description,
+                company_name=job.company or "the company",
+                job_title=job.title or "the position",
+                job_id=job.job_id,
+                resume_label=resume_label,
+            )
+            if tailored_resume is not None:
+                # Pull display name + contact from personal_info so
+                # the rendered PDF shows the candidate's actual info,
+                # not "Jane Doe" placeholders.
+                disp_name = (
+                    personal_info.get("name")
+                    or " ".join(
+                        x for x in (
+                            personal_info.get("first_name", ""),
+                            personal_info.get("last_name", ""),
+                        ) if x
+                    )
+                    or "Resume"
+                )
+                contact_bits = [
+                    personal_info.get("email", ""),
+                    personal_info.get("phone", ""),
+                    personal_info.get("city", ""),
+                ]
+                disp_contact = " | ".join(b for b in contact_bits if b)
+                html = render_html(tailored_resume, disp_name, disp_contact)
+                ok = await render_pdf(html, tailored)
+                if ok:
+                    save_tailored_json(tailored_resume)
+                    logger.info(
+                        "Auto-tailored resume for %s — using tailored PDF for upload",
+                        job.job_id,
+                    )
+        except Exception as exc:
+            logger.warning(
+                "Auto-tailor failed for %s (%s) — falling back to original resume",
+                job.job_id, exc,
+            )
     if tailored.exists():
         resume_path = str(tailored)
 

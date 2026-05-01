@@ -53,38 +53,70 @@ if "!PY_CMD!"=="" (
 
 REM ---- If still no Python, try winget for a silent install -----------
 if "!PY_CMD!"=="" (
-    echo        Python isn't installed. Trying winget for a silent install...
+    echo        Python isn't installed. I'll try to install it for you.
+    echo.
     where winget >nul 2>nul
     if not errorlevel 1 (
-        echo        Installing Python 3.12 via winget. This can take 1-3 minutes.
-        echo        ^(detailed output in setup.log^)
-        winget install --id Python.Python.3.12 -e --silent ^
+        echo        Calling winget to install Python 3.12 in the background.
+        echo        This can take 1-3 minutes; watch progress below:
+        echo.
+        echo        ----------------------------------------------------------
+        REM Show winget's output live so the user sees progress instead of
+        REM staring at a frozen window for 3 minutes. Tee a copy to
+        REM setup.log too in case troubleshooting is needed afterward.
+        winget install --id Python.Python.3.12 -e ^
             --accept-source-agreements --accept-package-agreements ^
-            --override "/quiet PrependPath=1 InstallAllUsers=0" ^
-            > setup.log 2>&1
-
-        REM PATH in the CURRENT cmd doesn't reflect the just-installed
-        REM Python — the install updated the registry, not this shell's
-        REM env block. Probe the known install locations directly so we
-        REM don't have to ask the user to relaunch the script.
-        for %%P in (
-            "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
-            "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
-            "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
-            "%ProgramFiles%\Python313\python.exe"
-            "%ProgramFiles%\Python312\python.exe"
-            "%ProgramFiles%\Python311\python.exe"
-        ) do (
-            if exist "%%~P" (
-                set "PY_CMD=%%~P"
-                echo        Found Python at %%~P
-                goto :have_python
+            --override "/quiet PrependPath=1 InstallAllUsers=0"
+        set "WINGET_RC=!errorlevel!"
+        echo        ----------------------------------------------------------
+        echo.
+        if not "!WINGET_RC!"=="0" (
+            color 0E
+            echo        winget exited with code !WINGET_RC! — install probably failed.
+            echo        Common causes:
+            echo          * No internet connection ^(winget needs to reach github.com^)
+            echo          * Corporate firewall / VPN blocks winget
+            echo          * Windows Defender held the installer for review
+            echo.
+            echo        Falling back to manual install instructions below.
+            echo.
+        ) else (
+            REM PATH in the CURRENT cmd doesn't reflect the just-installed
+            REM Python — the install updated the registry, not this shell's
+            REM env block. Probe the known install locations directly so we
+            REM don't have to ask the user to relaunch the script.
+            for %%P in (
+                "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+                "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+                "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+                "%ProgramFiles%\Python313\python.exe"
+                "%ProgramFiles%\Python312\python.exe"
+                "%ProgramFiles%\Python311\python.exe"
+            ) do (
+                if exist "%%~P" if "!PY_CMD!"=="" (
+                    set "PY_CMD=%%~P"
+                    echo        Python installed and detected at %%~P
+                )
+            )
+            if "!PY_CMD!"=="" (
+                color 0E
+                echo        winget reported success but I can't find python.exe
+                echo        in the usual install locations. Falling back to
+                echo        manual install instructions.
+                echo.
             )
         )
     ) else (
-        echo        winget isn't available on this Windows version.
+        color 0E
+        echo        winget is not available on this Windows version.
+        echo        ^(winget ships with Windows 10 1909+ and all Windows 11.
+        echo         You may have a much older version — falling back to
+        echo         manual install.^)
+        echo.
     )
 )
+
+if not "!PY_CMD!"=="" goto :have_python
 
 :have_python
 

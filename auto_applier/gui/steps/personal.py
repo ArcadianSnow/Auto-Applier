@@ -42,12 +42,20 @@ class PersonalStep(ttk.Frame):
         card.pack(fill="x", padx=4, pady=4)
 
         # Field definitions: (label, key, placeholder, required)
+        # Address fields added so the form filler doesn't have to
+        # invent (or LLM-guess) values when an apply form asks
+        # for ZIP / state / country. Country defaults to "United
+        # States" because that's the current audience.
         fields = [
             ("First Name", "first_name", "Jane", True),
             ("Last Name", "last_name", "Doe", True),
             ("Email", "email", "jane.doe@email.com", True),
             ("Phone", "phone", "+1 (555) 123-4567", True),
-            ("City", "city", "New York, NY", True),
+            ("Street Address", "street_address", "123 Main St", False),
+            ("City", "city", "New York", True),
+            ("State / Province", "state", "NY", True),
+            ("ZIP / Postal Code", "zip_code", "10001", True),
+            ("Country", "country", "United States", True),
             ("LinkedIn Profile URL", "linkedin_url", "https://linkedin.com/in/janedoe", False),
             ("Website / Portfolio URL", "website", "https://janedoe.dev", False),
         ]
