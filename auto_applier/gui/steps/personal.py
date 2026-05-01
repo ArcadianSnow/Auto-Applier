@@ -103,7 +103,15 @@ class PersonalStep(ttk.Frame):
         entry.bind("<FocusOut>", on_focus_out)
 
     def validate(self) -> bool:
-        """Require first name, last name, email."""
+        """Require first name, last name, email + save what's filled.
+
+        Persists personal_info to user_config.json on every advance,
+        not just on the final Ready step. Otherwise users who fill
+        the form but close the wizard before reaching Ready (e.g.
+        to verify with `cli doctor`) would lose their input — and
+        doctor would still report the address fields as missing
+        because nothing made it to disk.
+        """
         missing = []
         for key, label in [
             ("first_name", "First Name"),
@@ -120,4 +128,15 @@ class PersonalStep(ttk.Frame):
                 parent=self.wizard,
             )
             return False
+
+        # Save the personal_info section now so a partial wizard run
+        # (e.g. user clicks Next from here, then closes the window)
+        # still leaves a usable user_config.json for the CLI to read.
+        try:
+            self.wizard.save_personal_info_only()
+        except Exception:
+            # Save failures shouldn't block navigation — the final
+            # Ready step's save_config will surface a clear error
+            # if the data folder is genuinely unwritable.
+            pass
         return True

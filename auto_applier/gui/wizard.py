@@ -504,6 +504,32 @@ class WizardApp(tk.Tk):
         with open(USER_CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
 
+    def save_personal_info_only(self) -> None:
+        """Persist just the personal_info section without touching other keys.
+
+        Called from PersonalStep.validate so users who fill the
+        Personal page and then jump straight to `cli doctor` (or
+        otherwise close the wizard before reaching the Ready step)
+        still get their address / contact fields saved to disk.
+        """
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        # Read existing config (if any) so we only mutate
+        # personal_info — preferences, platform toggles, etc. stay.
+        existing: dict = {}
+        if USER_CONFIG_FILE.exists():
+            try:
+                with open(USER_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    existing = json.load(f) or {}
+            except (json.JSONDecodeError, OSError):
+                existing = {}
+
+        # Pull personal_info shape from get_config (so we get the
+        # derived fields: name, postal_code, city_state, address).
+        full_config = self.get_config()
+        existing["personal_info"] = full_config.get("personal_info", {})
+        with open(USER_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=2)
+
     def save_answers(self) -> None:
         """Write collected answers to answers.json.
 
