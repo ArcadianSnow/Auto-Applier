@@ -37,27 +37,33 @@ class ResumesStep(ttk.Frame):
         )
         card.pack(fill="both", expand=True, padx=PAD_X, pady=(0, 8))
 
-        # Listbox with scrollbar
+        # Treeview with status column. The status icon is the at-a-glance
+        # signal the user asked for: ✓ when the resume is on disk and
+        # readable, ✗ when something went wrong. ✗ rows can be retried
+        # via the Reprocess button instead of remove-and-re-add.
         list_frame = tk.Frame(card, bg=BG_CARD)
         list_frame.pack(fill="both", expand=True)
 
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical")
-        self.listbox = tk.Listbox(
+        self.tree = ttk.Treeview(
             list_frame,
-            font=FONT_BODY,
-            bg=BG_CARD,
-            fg=TEXT,
-            selectbackground=PRIMARY,
-            selectforeground="white",
-            highlightthickness=1,
-            highlightbackground=BORDER,
-            bd=0,
+            columns=("status", "label", "filename"),
+            show="headings",
             height=10,
             yscrollcommand=scrollbar.set,
         )
-        scrollbar.configure(command=self.listbox.yview)
+        self.tree.heading("status", text="Status")
+        self.tree.heading("label", text="Label")
+        self.tree.heading("filename", text="File")
+        self.tree.column("status", width=80, anchor="center", stretch=False)
+        self.tree.column("label", width=200, anchor="w", stretch=False)
+        self.tree.column("filename", width=380, anchor="w", stretch=True)
+        # Color-code by status. tag-based styling.
+        self.tree.tag_configure("ok", foreground=ACCENT)
+        self.tree.tag_configure("bad", foreground=DANGER)
 
-        self.listbox.pack(side="left", fill="both", expand=True)
+        scrollbar.configure(command=self.tree.yview)
+        self.tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
         # Button row
@@ -70,16 +76,34 @@ class ResumesStep(ttk.Frame):
         ).pack(side="left", padx=(0, 8))
 
         ttk.Button(
+            btn_row, text="Reprocess Selected",
+            command=self._reprocess_resume,
+        ).pack(side="left", padx=(0, 8))
+
+        ttk.Button(
             btn_row, text="Remove Selected", style="Danger.TButton",
             command=self._remove_resume,
-        ).pack(side="left")
+        ).pack(side="left", padx=(0, 8))
 
-        # Note
+        ttk.Button(
+            btn_row, text="Open Resumes Folder",
+            command=self._open_resumes_folder,
+        ).pack(side="right")
+
+        # Note + writes-to caption (helps users / friends spot
+        # PROJECT_ROOT mismatches when something looks wrong).
         ttk.Label(
             self,
             text="Minimum 1 resume required. Supported formats: PDF, DOCX.",
             style="Small.TLabel",
-        ).pack(anchor="w", padx=PAD_X, pady=(8, PAD_Y))
+        ).pack(anchor="w", padx=PAD_X, pady=(8, 0))
+
+        from auto_applier.config import RESUMES_DIR
+        ttk.Label(
+            self,
+            text=f"Files saved to: {RESUMES_DIR}",
+            style="Small.TLabel",
+        ).pack(anchor="w", padx=PAD_X, pady=(0, PAD_Y))
 
         # Populate from saved state
         self._refresh_list()
@@ -89,11 +113,46 @@ class ResumesStep(ttk.Frame):
         self._refresh_list()
 
     def _refresh_list(self) -> None:
-        """Sync the listbox with wizard.resume_list."""
-        self.listbox.delete(0, tk.END)
-        for label, path in self.wizard.resume_list:
+        """Sync the treeview with wizard.resume_list + disk state.
+
+        Each row's status comes from a fresh disk check — was the
+        resume actually copied into RESUMES_DIR and is the profile
+        present? That's exactly what doctor reads, so a green ✓
+        in the wizard means doctor will agree.
+        """
+        from auto_applier.config import RESUMES_DIR, PROFILES_DIR
+        # Clear existing rows
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+        for idx, (label, path) in enumerate(self.wizard.resume_list):
             filename = Path(path).name
-            self.listbox.insert(tk.END, f"  {label}  --  {filename}")
+            ext = Path(path).suffix
+            on_disk = (RESUMES_DIR / f"{label}{ext}").exists()
+            profile_present = (PROFILES_DIR / f"{label}.json").exists()
+            if on_disk and profile_present:
+                status = "✓ Ready"
+                tag = "ok"
+            elif on_disk:
+                status = "✓ File / no profile"
+                tag = "ok"
+            else:
+                status = "✗ Not saved"
+                tag = "bad"
+            self.tree.insert(
+                "", "end", iid=str(idx),
+                values=(status, label, filename),
+                tags=(tag,),
+            )
+
+    def _selected_index(self) -> int | None:
+        """Return the index of the highlighted treeview row, or None."""
+        sel = self.tree.selection()
+        if not sel:
+            return None
+        try:
+            return int(sel[0])
+        except ValueError:
+            return None
 
     def _add_resume(self) -> None:
         """Open file dialog, prompt for label, add to list."""
@@ -148,11 +207,21 @@ class ResumesStep(ttk.Frame):
         # detects the file's already in place and skips the copy).
         self._materialize_resume(path, label_key)
 
-    def _materialize_resume(self, source_path: str, label: str) -> None:
+    def _materialize_resume(
+        self,
+        source_path: str,
+        label: str,
+        verbose: bool = True,
+    ) -> bool:
         """Copy the user's resume file into data/resumes/ and write a
-        minimal profile JSON. Skill extraction (LLM) happens later
-        when the dashboard runs ResumeManager.add_resume — this just
-        makes the file visible to doctor / fsck right away.
+        minimal profile JSON. Returns True on full success, False if
+        anything went wrong.
+
+        Failures are now SURFACED to the user via messagebox (when
+        ``verbose`` is True) instead of silently swallowed. A
+        previous version's silent ``except: pass`` produced the
+        confusing "I added a resume but the wizard says it's not
+        loaded" UX — the user had no breadcrumb to follow.
         """
         import shutil
         import json
@@ -162,61 +231,192 @@ class ResumesStep(ttk.Frame):
 
         source = Path(source_path).resolve()
         if not source.exists():
-            return
+            if verbose:
+                messagebox.showerror(
+                    "Resume file not found",
+                    (
+                        f"Couldn't find:\n  {source}\n\n"
+                        "Did you move or delete it after picking it? "
+                        "Click 'Add Resume' again and re-select."
+                    ),
+                    parent=self.wizard,
+                )
+            return False
+
+        # Sanitize the label so it produces a valid Windows filename.
+        # Earlier versions used the label verbatim; a label containing
+        # / \ : * ? " < > | makes shutil.copy2 throw OSError 22 on
+        # Windows and the silent except swallowed it.
+        safe_label = "".join(
+            c if c.isalnum() or c in "-_ " else "_"
+            for c in label
+        ).strip() or "resume"
 
         try:
             RESUMES_DIR.mkdir(parents=True, exist_ok=True)
             PROFILES_DIR.mkdir(parents=True, exist_ok=True)
-            dest = RESUMES_DIR / f"{label}{source.suffix}"
-            if not dest.exists() or dest.resolve() != source:
-                try:
-                    shutil.copy2(source, dest)
-                except (OSError, shutil.SameFileError):
-                    # Already in place or unreadable — give up the
-                    # eager copy; dashboard's add_resume will retry
-                    # with proper error surfacing.
-                    pass
+        except OSError as exc:
+            if verbose:
+                messagebox.showerror(
+                    "Couldn't create resumes folder",
+                    (
+                        f"Auto Applier couldn't create:\n  {RESUMES_DIR}\n\n"
+                        f"Error: {exc}\n\n"
+                        "Most likely cause: the project folder is on a "
+                        "read-only drive, or your antivirus is blocking "
+                        "writes. Try running setup.bat from a folder "
+                        "outside of Downloads or OneDrive."
+                    ),
+                    parent=self.wizard,
+                )
+            return False
 
-            profile_path = PROFILES_DIR / f"{label}.json"
-            if profile_path.exists():
-                return  # don't clobber an existing parsed profile
-
+        dest = RESUMES_DIR / f"{safe_label}{source.suffix}"
+        # Copy if dest is missing OR dest points to a different file.
+        copy_needed = True
+        if dest.exists():
             try:
-                raw_text = parse_resume(str(dest))
-            except Exception:
-                raw_text = ""
+                copy_needed = dest.resolve() != source
+            except OSError:
+                copy_needed = True
+        if copy_needed:
+            try:
+                shutil.copy2(source, dest)
+            except shutil.SameFileError:
+                pass  # already at dest — fine
+            except OSError as exc:
+                if verbose:
+                    messagebox.showerror(
+                        "Couldn't copy resume file",
+                        (
+                            f"Source: {source}\n"
+                            f"Destination: {dest}\n\n"
+                            f"Error: {exc}\n\n"
+                            "Most likely cause: Windows Defender or "
+                            "OneDrive has the source file locked, or "
+                            "the destination is read-only. Move the "
+                            "source resume out of Downloads first, or "
+                            "exclude this folder in Defender."
+                        ),
+                        parent=self.wizard,
+                    )
+                return False
 
+        profile_path = PROFILES_DIR / f"{safe_label}.json"
+        if profile_path.exists():
+            return True  # already parsed; nothing more to do
+
+        try:
+            raw_text = parse_resume(str(dest))
+        except Exception as exc:
+            # Profile gets written with empty raw_text — better than
+            # nothing; dashboard's later add_resume will retry the parse.
+            raw_text = ""
+            if verbose:
+                messagebox.showwarning(
+                    "Resume couldn't be parsed",
+                    (
+                        f"File: {dest}\n\n"
+                        f"Error: {exc}\n\n"
+                        "The file was saved, but the AI couldn't read "
+                        "the text from it. Common causes: password-"
+                        "protected PDFs, scanned-image PDFs (no OCR), "
+                        "corrupted DOCX. Try saving the resume as plain "
+                        "PDF/DOCX from your editor and re-adding."
+                    ),
+                    parent=self.wizard,
+                )
+
+        try:
             profile = {
-                "label": label,
+                "label": safe_label,
                 "source_file": dest.name,
                 "parsed_at": datetime.now(timezone.utc).isoformat(),
                 "raw_text": raw_text,
                 "summary": "",
-                "skills": [],            # filled in on first dashboard run
-                "confirmed_skills": [],  # populated by `cli refine`
+                "skills": [],
+                "confirmed_skills": [],
             }
             profile_path.write_text(
                 json.dumps(profile, indent=2), encoding="utf-8",
             )
-        except Exception:
-            # Eager materialization is a UX nicety; failures shouldn't
-            # block adding the resume to the wizard list. The dashboard
-            # path will surface a real error if something is wrong.
-            pass
+        except OSError as exc:
+            if verbose:
+                messagebox.showerror(
+                    "Couldn't save profile",
+                    (
+                        f"Path: {profile_path}\n\n"
+                        f"Error: {exc}"
+                    ),
+                    parent=self.wizard,
+                )
+            return False
 
-    def _remove_resume(self) -> None:
-        """Remove the selected resume from the list."""
-        selection = self.listbox.curselection()
-        if not selection:
+        return True
+
+    def _reprocess_resume(self) -> None:
+        """Retry materialize on the highlighted row.
+
+        If the user sees ✗ on a row, this is the first thing to try.
+        Surfaces the underlying error if there is one.
+        """
+        idx = self._selected_index()
+        if idx is None:
             messagebox.showinfo(
                 "No Selection",
-                "Please select a resume to remove.",
+                "Click a resume in the list first, then 'Reprocess Selected'.",
                 parent=self.wizard,
             )
             return
+        try:
+            label, path = self.wizard.resume_list[idx]
+        except IndexError:
+            return
+        ok = self._materialize_resume(path, label, verbose=True)
+        self._refresh_list()
+        if ok:
+            messagebox.showinfo(
+                "Reprocessed",
+                f"'{label}' is now saved and ready.",
+                parent=self.wizard,
+            )
 
-        index = selection[0]
-        label, _ = self.wizard.resume_list[index]
+    def _open_resumes_folder(self) -> None:
+        """Open the resumes folder in Windows Explorer.
+
+        Useful when the user wants to verify what's actually on disk
+        — and useful for diagnosing PROJECT_ROOT mismatches between
+        the wizard process and the doctor process.
+        """
+        from auto_applier.config import RESUMES_DIR
+        try:
+            RESUMES_DIR.mkdir(parents=True, exist_ok=True)
+            import os
+            os.startfile(str(RESUMES_DIR))  # noqa: SIM115 — Windows-only
+        except Exception as exc:
+            messagebox.showerror(
+                "Couldn't open folder",
+                (
+                    f"Path: {RESUMES_DIR}\n\n"
+                    f"Error: {exc}"
+                ),
+                parent=self.wizard,
+            )
+
+    def _remove_resume(self) -> None:
+        """Remove the selected resume from the list."""
+        index = self._selected_index()
+        if index is None:
+            messagebox.showinfo(
+                "No Selection",
+                "Click a resume in the list first, then 'Remove Selected'.",
+                parent=self.wizard,
+            )
+            return
+        try:
+            label, _ = self.wizard.resume_list[index]
+        except IndexError:
+            return
         confirm = messagebox.askyesno(
             "Remove Resume",
             f"Remove '{label}' from the list?",
