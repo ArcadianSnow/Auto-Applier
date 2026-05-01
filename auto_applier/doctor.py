@@ -290,7 +290,28 @@ async def check_ollama() -> CheckResult:
 
 
 def check_gemini_key() -> CheckResult:
-    from auto_applier.config import GEMINI_API_KEY
+    # Re-read .env every check rather than rely on the module-level
+    # GEMINI_API_KEY constant. config.py loads .env once at import
+    # time; the wizard writes a freshly-pasted key to .env in the
+    # same process — so the module constant is stale and the check
+    # would falsely report "not configured" until the user restarts.
+    from auto_applier.config import PROJECT_ROOT
+    import os as _os
+    GEMINI_API_KEY = ""
+    env_path = PROJECT_ROOT / ".env"
+    if env_path.exists():
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("GEMINI_API_KEY="):
+                    GEMINI_API_KEY = stripped.split("=", 1)[1].strip().strip('"').strip("'")
+                    break
+        except OSError:
+            pass
+    if not GEMINI_API_KEY:
+        # Fall back to whatever's in the live process env (in case
+        # the user set it via OS env vars instead of .env).
+        GEMINI_API_KEY = _os.getenv("GEMINI_API_KEY", "")
 
     if not GEMINI_API_KEY:
         return CheckResult(

@@ -171,15 +171,32 @@ class TestAnswersFile:
 
 
 class TestGeminiKey:
-    def test_missing_warns(self, monkeypatch):
+    """check_gemini_key now re-reads .env at call time (not from the
+    cached module constant) so wizard-written keys are visible without
+    a process restart. Tests must patch BOTH the file-read source
+    (PROJECT_ROOT/.env) and the env-var fallback."""
+
+    def test_missing_warns(self, tmp_path, monkeypatch):
         import auto_applier.config as cfg
-        monkeypatch.setattr(cfg, "GEMINI_API_KEY", "")
+        monkeypatch.setattr(cfg, "PROJECT_ROOT", tmp_path)  # no .env in tmp_path
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         r = doctor.check_gemini_key()
         assert r.status == doctor.WARN
 
-    def test_present_passes(self, monkeypatch):
+    def test_present_passes_from_env_file(self, tmp_path, monkeypatch):
         import auto_applier.config as cfg
-        monkeypatch.setattr(cfg, "GEMINI_API_KEY", "abc123")
+        env = tmp_path / ".env"
+        env.write_text("GEMINI_API_KEY=abc123\n", encoding="utf-8")
+        monkeypatch.setattr(cfg, "PROJECT_ROOT", tmp_path)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        r = doctor.check_gemini_key()
+        assert r.status == doctor.PASS
+
+    def test_present_passes_from_os_env(self, tmp_path, monkeypatch):
+        """Fallback path: key set via OS env var, no .env file."""
+        import auto_applier.config as cfg
+        monkeypatch.setattr(cfg, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setenv("GEMINI_API_KEY", "abc123")
         r = doctor.check_gemini_key()
         assert r.status == doctor.PASS
 

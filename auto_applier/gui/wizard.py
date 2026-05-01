@@ -509,8 +509,62 @@ class WizardApp(tk.Tk):
         self._save_partial(("personal_info",))
 
     def save_resumes_only(self) -> None:
-        """Persist just the resumes section without touching other keys."""
+        """Persist just the resumes section without touching other keys.
+
+        Also eagerly materializes any resume in ``resume_list`` that
+        hasn't been copied into ``data/resumes/`` yet — covers the
+        case where a user added a resume on an older build (before
+        ResumesStep gained eager copy) and now they're advancing
+        through the wizard on the newer code.
+        """
         self._save_partial(("resumes",))
+        self._materialize_pending_resumes()
+
+    def _materialize_pending_resumes(self) -> None:
+        """For every (label, source_path) in resume_list, make sure
+        the file is present in data/resumes/ and a profile JSON is
+        present in data/profiles/. Idempotent — skips files already
+        in place. Error-tolerant — failures don't block navigation.
+        """
+        import shutil
+        from datetime import datetime, timezone
+        from auto_applier.config import RESUMES_DIR, PROFILES_DIR
+        from auto_applier.resume.parser import parse_resume
+
+        for label, source_path in self.resume_list:
+            try:
+                source = Path(source_path).resolve()
+                if not source.exists():
+                    continue
+                RESUMES_DIR.mkdir(parents=True, exist_ok=True)
+                PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+                dest = RESUMES_DIR / f"{label}{source.suffix}"
+                if not dest.exists():
+                    try:
+                        shutil.copy2(source, dest)
+                    except (OSError, shutil.SameFileError):
+                        pass
+                profile_path = PROFILES_DIR / f"{label}.json"
+                if profile_path.exists():
+                    continue
+                try:
+                    raw_text = parse_resume(str(dest)) if dest.exists() else ""
+                except Exception:
+                    raw_text = ""
+                profile_path.write_text(
+                    json.dumps({
+                        "label": label,
+                        "source_file": dest.name if dest.exists() else "",
+                        "parsed_at": datetime.now(timezone.utc).isoformat(),
+                        "raw_text": raw_text,
+                        "summary": "",
+                        "skills": [],
+                        "confirmed_skills": [],
+                    }, indent=2),
+                    encoding="utf-8",
+                )
+            except Exception:
+                continue
 
     def save_llm_setup_only(self) -> None:
         """Persist the llm section AND write GEMINI_API_KEY to .env.
