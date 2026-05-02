@@ -812,6 +812,49 @@ class DicePlatform(JobPlatform):
 
             # Record current page count to detect new tabs
             pages_before = len(self.context.pages)
+            try:
+                url_before_click = page.url
+            except Exception:
+                url_before_click = ""
+
+            # Pre-click diagnostic: dump the apply-button outerHTML so
+            # the log shows exactly what we're about to click. The
+            # 2026-05-02 live run produced "0 form fields, no modal,
+            # no new tab, body still says Apply Now" — which means
+            # the click reported success but didn't trigger Dice's
+            # apply flow. Most likely we matched a non-button element
+            # (an outer wrapper) or the click is being eaten by a
+            # bot-detection guard. This dump tells us which.
+            try:
+                btn_diag = await page.evaluate(
+                    """(selectors) => {
+                        for (const sel of selectors) {
+                            const el = document.querySelector(sel);
+                            if (el && el.offsetParent !== null) {
+                                return {
+                                    selector: sel,
+                                    tag: el.tagName,
+                                    text: (el.innerText || '').substring(0, 80),
+                                    href: el.getAttribute('href') || '',
+                                    target: el.getAttribute('target') || '',
+                                    testid: el.getAttribute('data-testid') || '',
+                                    disabled: el.disabled || el.getAttribute('aria-disabled') === 'true',
+                                    outer: (el.outerHTML || '').substring(0, 400),
+                                };
+                            }
+                        }
+                        return null;
+                    }""",
+                    EASY_APPLY_BUTTON_SELECTORS,
+                )
+            except Exception:
+                btn_diag = None
+            logger.info(
+                "DICE_APPLY_BUTTON job=%s pages_before=%d url=%s "
+                "matched=%s",
+                job.job_id, pages_before, url_before_click,
+                btn_diag,
+            )
 
             # Click the Easy Apply button
             clicked = await self.safe_click(
@@ -840,6 +883,114 @@ class DicePlatform(JobPlatform):
                 )
 
             await random_delay(1.5, 3.0)
+
+            # Post-click diagnostic — did anything actually happen?
+            # Compare URL and tab count to pre-click. If both are
+            # unchanged AND no modal mounted, the click was eaten
+            # (most likely bot-detection guard or wrong-element
+            # match). Try a JS-dispatched click on the same anchor
+            # as a fallback before giving up — Playwright's click
+            # routes through trusted-event handlers but Dice's
+            # React onClick may also accept a plain dispatch.
+            try:
+                url_after_click = page.url
+            except Exception:
+                url_after_click = ""
+            pages_after = len(self.context.pages)
+            modal_visible = False
+            try:
+                modal_el = await page.query_selector(
+                    "[role='dialog']:not([aria-hidden='true']), "
+                    "[aria-modal='true'], "
+                    "[class*='modal']:not([style*='display: none'])"
+                )
+                if modal_el:
+                    modal_visible = await modal_el.is_visible()
+            except Exception:
+                modal_visible = False
+            logger.info(
+                "DICE_POST_CLICK job=%s url_changed=%s tabs_added=%d "
+                "modal_visible=%s",
+                job.job_id,
+                url_after_click != url_before_click,
+                pages_after - pages_before,
+                modal_visible,
+            )
+
+            click_had_effect = (
+                url_after_click != url_before_click
+                or pages_after > pages_before
+                or modal_visible
+            )
+
+            if not click_had_effect:
+                # First attempt produced no observable change. Try
+                # a JS dispatch on the same anchor — sometimes Dice's
+                # React handler attaches via addEventListener with
+                # capture=true and the trusted Playwright click path
+                # gets pre-empted. A plain .click() fired from JS
+                # bypasses that.
+                logger.warning(
+                    "Dice: click on apply button had no effect for "
+                    "%s — retrying via JS dispatch", job.job_id,
+                )
+                try:
+                    js_clicked = await page.evaluate(
+                        """(selectors) => {
+                            for (const sel of selectors) {
+                                const el = document.querySelector(sel);
+                                if (el && el.offsetParent !== null) {
+                                    el.click();
+                                    return {
+                                        selector: sel,
+                                        href: el.getAttribute('href') || '',
+                                    };
+                                }
+                            }
+                            return null;
+                        }""",
+                        EASY_APPLY_BUTTON_SELECTORS,
+                    )
+                    logger.info(
+                        "Dice: JS-dispatch click result: %s",
+                        js_clicked,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Dice: JS-dispatch click raised: %s", exc,
+                    )
+                await random_delay(1.5, 3.0)
+
+                # If the apply button is an anchor with an href,
+                # navigate directly as a final fallback.
+                if (
+                    btn_diag
+                    and btn_diag.get("tag", "").lower() == "a"
+                    and btn_diag.get("href")
+                ):
+                    href = btn_diag["href"]
+                    if href.startswith("/"):
+                        href = "https://www.dice.com" + href
+                    if href.startswith("http"):
+                        try:
+                            cur_url_check = page.url
+                        except Exception:
+                            cur_url_check = ""
+                        if cur_url_check == url_before_click:
+                            logger.info(
+                                "Dice: still on job-detail; navigating "
+                                "to apply href directly: %s", href,
+                            )
+                            try:
+                                await page.goto(
+                                    href, wait_until="domcontentloaded",
+                                )
+                                await random_delay(1.5, 3.0)
+                            except Exception as exc:
+                                logger.warning(
+                                    "Dice: direct apply nav failed: %s",
+                                    exc,
+                                )
 
             # Dice's apply click sometimes lands on a login gate
             # (/dashboard/login or /register) instead of the apply
