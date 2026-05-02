@@ -478,24 +478,20 @@ class JobPlatform(ABC):
         if not await self.detect_captcha(page):
             return
 
-        # Fire URGENT notification (audible beep + toast) BEFORE any
-        # branch decision so the user gets the alert regardless of
-        # whether we abort immediately or retry. Previously the
-        # retry_seconds <= 0 branch raised without notifying, AND
-        # the retry branch's toast-only path got silenced by Focus
-        # Assist. Audible alert bypasses both.
-        try:
-            from auto_applier.notify import notify_user
-            notify_user(
-                f"Auto Applier — {self.display_name} CAPTCHA",
-                "Solve the CAPTCHA in the browser window NOW. "
-                "The application is paused.",
-                urgent=True,
-            )
-        except Exception:
-            pass
-
+        # retry_seconds==0: hard-stop path. Beep before raising —
+        # this branch skips the polling loop entirely so deferred
+        # notify wouldn't fire.
         if retry_seconds <= 0:
+            try:
+                from auto_applier.notify import notify_user
+                notify_user(
+                    f"Auto Applier — {self.display_name} CAPTCHA",
+                    "Solve the CAPTCHA in the browser window NOW. "
+                    "The application is stopping.",
+                    urgent=True,
+                )
+            except Exception:
+                pass
             raise CaptchaDetectedError(
                 f"CAPTCHA detected on {self.display_name}. "
                 "Stopping immediately to protect the account."
@@ -510,6 +506,14 @@ class JobPlatform(ABC):
         # from inside a running coroutine — use get_running_loop() to
         # get the loop we're already running on.
         loop = asyncio.get_running_loop()
+        # Defer the urgent notify — most "challenges" are transient
+        # Cloudflare JS that auto-clears in 3-8s. Beeping immediately
+        # was a false-fire; user reported hearing the alert when no
+        # real CAPTCHA was on screen. Only notify if the challenge
+        # persists past the auto-resolve window.
+        notify_grace_s = 5.0
+        notify_deadline = loop.time() + notify_grace_s
+        notified = False
         deadline = loop.time() + retry_seconds
         while loop.time() < deadline:
             await asyncio.sleep(2.0)
@@ -518,6 +522,22 @@ class JobPlatform(ABC):
                     "%s: Challenge cleared, proceeding.", self.display_name,
                 )
                 return
+            # Fire urgent alert ONCE, after grace window — only if
+            # the challenge is still detected past the auto-resolve
+            # threshold. If Cloudflare cleared it in 3-4s, we never
+            # beep.
+            if not notified and loop.time() >= notify_deadline:
+                notified = True
+                try:
+                    from auto_applier.notify import notify_user
+                    notify_user(
+                        f"Auto Applier — {self.display_name} CAPTCHA",
+                        "Solve the CAPTCHA in the browser window NOW. "
+                        "The application is paused.",
+                        urgent=True,
+                    )
+                except Exception:
+                    pass
 
         raise CaptchaDetectedError(
             f"CAPTCHA detected on {self.display_name} and didn't clear "
@@ -556,19 +576,14 @@ class JobPlatform(ABC):
             timeout,
             len(selectors),
         )
-        # Audible + visible toast — login waits are user-blocking and
-        # Focus Assist mode silences toast-only notifications. Urgent
-        # path adds a system beep that bypasses Focus Assist.
-        try:
-            from auto_applier.notify import notify_user
-            notify_user(
-                f"Auto Applier — {self.display_name} login needed",
-                f"Please complete the sign-in in the open browser "
-                f"window within {timeout}s.",
-                urgent=True,
-            )
-        except Exception:
-            pass
+        # Notification deferred 5s — many "login required" prompts
+        # auto-resolve from stored cookies / SSO within 1-2 seconds.
+        # User reported a ZipRecruiter wait that fired the audible
+        # alert needlessly because cookies cleared the prompt
+        # immediately. Only fire the urgent alert if the wait
+        # actually persists past the auto-resolve window.
+        notify_grace_s = 5.0
+        notified = False
         start = time.monotonic()
         while time.monotonic() - start < timeout:
             if check_url_pattern and check_url_pattern in page.url:
@@ -582,6 +597,21 @@ class JobPlatform(ABC):
                         return True
                 except Exception:
                     continue
+            # Fire the urgent toast ONCE, after the grace window —
+            # by which point we know it's a real wait, not a quick
+            # cookie/SSO auto-resolve.
+            if not notified and (time.monotonic() - start) >= notify_grace_s:
+                notified = True
+                try:
+                    from auto_applier.notify import notify_user
+                    notify_user(
+                        f"Auto Applier — {self.display_name} login needed",
+                        f"Please complete the sign-in in the open "
+                        f"browser window within {timeout}s.",
+                        urgent=True,
+                    )
+                except Exception:
+                    pass
             await asyncio.sleep(2.0)
 
         logger.warning("Manual login timed out after %ds", timeout)

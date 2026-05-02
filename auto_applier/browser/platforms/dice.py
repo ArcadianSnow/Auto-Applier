@@ -336,12 +336,12 @@ class DicePlatform(JobPlatform):
             "Waiting for manual login on Dice (URL-based, timeout=%ds)...",
             timeout,
         )
-        notify_user(
-            "Auto Applier — Dice login needed",
-            "Dice is asking you to log in before applying. Complete "
-            f"the sign-in in the open browser window within {timeout}s.",
-            urgent=True,
-        )
+        # Defer the urgent notify — Dice often auto-resolves login
+        # within a couple seconds via stored cookies. Only beep if
+        # the user actually has to do something. Polling loop below
+        # checks at 5s mark.
+        notify_grace_s = 5.0
+        notified = False
         start = time.monotonic()
         last_log_url = ""
         while time.monotonic() - start < timeout:
@@ -358,6 +358,17 @@ class DicePlatform(JobPlatform):
                     last_log_url = cur_url
             except Exception:
                 pass
+            # Deferred urgent notify — fire once, after the grace
+            # window confirms this isn't a stored-cookie auto-resolve.
+            if not notified and (time.monotonic() - start) >= notify_grace_s:
+                notified = True
+                notify_user(
+                    "Auto Applier — Dice login needed",
+                    "Dice is asking you to log in before applying. "
+                    f"Complete the sign-in in the open browser window "
+                    f"within {timeout}s.",
+                    urgent=True,
+                )
             await asyncio.sleep(2.0)
 
         logger.warning("Dice: Manual login timed out after %ds", timeout)
