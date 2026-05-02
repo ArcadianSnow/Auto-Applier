@@ -578,16 +578,18 @@ class ApplicationEngine:
         Dry runs still process the queue so users can see how the
         review UX works end-to-end.
         """
-        self.events.emit(
-            REVIEW_QUEUE_READY,
-            queue=self.pending_review,
-            count=len(self.pending_review),
-        )
-
+        # Single emit_and_wait — emit_and_wait already fires the
+        # event AND blocks for the resolution. The previous code
+        # also called emit() right before, which dispatched the
+        # event to subscribers TWICE on the GUI side and the
+        # dashboard's _open_batch_review opened two stacked
+        # JobReviewPanel windows for the same queue (only the
+        # first one's buttons worked; the second was a phantom).
         try:
             decisions = await self.events.emit_and_wait(
                 REVIEW_QUEUE_READY,
                 queue=self.pending_review,
+                count=len(self.pending_review),
                 timeout=600.0,  # 10 minutes to work through the queue
             )
         except Exception:
