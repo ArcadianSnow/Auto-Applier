@@ -1053,12 +1053,29 @@ class DicePlatform(JobPlatform):
                         failure_reason=f"Re-apply after login failed: {exc}",
                     )
 
-            # Check for external ATS redirect (new tab opened)
-            if await self._check_ats_redirect(pages_before):
+            # Check what happened with new tabs after the apply click.
+            # Three cases:
+            #   None      → no new tab; modal opened on this page (or
+            #               click had no effect — handled upstream)
+            #   "external"→ new tab was an off-site ATS — already
+            #               closed by the helper; bail
+            #   Page obj  → new tab is the internal Dice apply form;
+            #               continue the walk on THAT page
+            tab_result = await self._check_ats_redirect(pages_before)
+            if tab_result == "external":
                 return ApplyResult(
                     success=False,
-                    failure_reason="External ATS redirect detected -- new tab opened to company site",
+                    failure_reason=(
+                        "Manual apply on company site (external ATS "
+                        "redirect from Dice apply button)"
+                    ),
+                    requires_manual_apply=True,
                 )
+            if tab_result is not None:
+                # Internal Dice apply opened in a new tab — switch
+                # the page reference so the modal walker reads/clicks
+                # against the right document.
+                page = tab_result
 
             await self.check_and_abort_on_captcha(page)
 
@@ -1082,24 +1099,84 @@ class DicePlatform(JobPlatform):
                 failure_reason=f"Unexpected error: {exc}",
             )
 
-    async def _check_ats_redirect(self, pages_before: int) -> bool:
-        """Check if clicking apply opened a new tab (external ATS).
+    async def _check_ats_redirect(self, pages_before: int):
+        """Check what happened when clicking apply opened a new tab.
 
-        If a new tab was opened, close it and return True.
+        Modern Dice (2026) clicks open the apply form in a NEW TAB
+        via target=_blank. The 2026-05-02 live run mistreated every
+        Dice internal apply as an external ATS redirect because of
+        this — Apply FAILED on every Dice job because we closed the
+        new tab before walking it.
+
+        Returns one of:
+          - ``None`` if no new tab opened (single-page apply or
+            click had no effect)
+          - The new ``Page`` object if the new tab is on
+            ``dice.com/job-applications`` (internal Dice apply form
+            — caller should use this page for the modal walk)
+          - ``"external"`` (string) if the new tab is off-site —
+            close all new tabs and treat as external ATS
+
+        The caller is responsible for updating its ``page`` reference
+        when this method returns a Page.
         """
         await asyncio.sleep(1.0)  # Brief wait for new tab to appear
 
         pages_after = len(self.context.pages)
-        if pages_after > pages_before:
-            logger.info("Dice: External ATS redirect detected (new tab opened)")
-            # Close the new tab(s) to leave a clean state
-            for p in self.context.pages[pages_before:]:
+        if pages_after <= pages_before:
+            return None
+
+        # Check the new tab(s) for an internal Dice apply URL.
+        new_pages = list(self.context.pages[pages_before:])
+        for new_page in new_pages:
+            try:
+                # Wait briefly for navigation to settle on the new tab
+                # so page.url reflects the destination, not about:blank.
                 try:
-                    await p.close()
+                    await new_page.wait_for_load_state(
+                        "domcontentloaded", timeout=8000,
+                    )
                 except Exception:
                     pass
-            return True
-        return False
+                tab_url = new_page.url
+            except Exception:
+                tab_url = ""
+            if (
+                "dice.com/job-applications" in tab_url
+                or "dice.com/dashboard/apply" in tab_url
+                or "/start-apply" in tab_url
+            ):
+                # Internal Dice apply — close all OTHER new tabs and
+                # return this one to the caller.
+                for p in new_pages:
+                    if p is new_page:
+                        continue
+                    try:
+                        await p.close()
+                    except Exception:
+                        pass
+                logger.info(
+                    "Dice: apply opened in new tab (URL=%s); "
+                    "switching context to apply tab",
+                    tab_url,
+                )
+                try:
+                    await new_page.bring_to_front()
+                except Exception:
+                    pass
+                return new_page
+
+        # All new tabs are off-site — external ATS redirect.
+        logger.info(
+            "Dice: External ATS redirect detected (new tab URL=%s)",
+            new_pages[0].url if new_pages else "?",
+        )
+        for p in new_pages:
+            try:
+                await p.close()
+            except Exception:
+                pass
+        return "external"
 
     async def _wait_for_spinners_to_clear(
         self, page: Page, timeout_ms: int = 3500,

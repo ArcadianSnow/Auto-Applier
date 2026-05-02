@@ -63,19 +63,45 @@ class TestCheckSuccess:
 # ------------------------------------------------------------------
 
 class TestCheckAtsRedirect:
-    def test_new_tab_detected(self):
+    """`_check_ats_redirect` returns one of:
+      - None: no new tab opened
+      - Page object: new tab is on dice.com/job-applications (internal)
+      - "external": new tab is off-site ATS
+    """
+
+    def test_external_tab_detected(self):
         platform = _make_platform()
         extra = MagicMock()
         extra.close = AsyncMock()
+        extra.wait_for_load_state = AsyncMock()
+        # Off-site URL — should be classified as external.
+        extra.url = "https://www.randstadusa.com/jobs/apply/123"
         platform.context.pages = [MagicMock(), extra]
 
-        assert _run(platform._check_ats_redirect(pages_before=1)) is True
+        assert _run(platform._check_ats_redirect(pages_before=1)) == "external"
+        extra.close.assert_called_once()
+
+    def test_internal_dice_tab_returns_page(self):
+        platform = _make_platform()
+        extra = MagicMock()
+        extra.close = AsyncMock()
+        extra.bring_to_front = AsyncMock()
+        extra.wait_for_load_state = AsyncMock()
+        extra.url = (
+            "https://www.dice.com/job-applications/abc-123/start-apply"
+        )
+        platform.context.pages = [MagicMock(), extra]
+
+        result = _run(platform._check_ats_redirect(pages_before=1))
+        assert result is extra
+        # Internal tab should NOT be closed — caller will use it.
+        extra.close.assert_not_called()
 
     def test_no_new_tab(self):
         platform = _make_platform()
         platform.context.pages = [MagicMock()]
 
-        assert _run(platform._check_ats_redirect(pages_before=1)) is False
+        assert _run(platform._check_ats_redirect(pages_before=1)) is None
 
 
 # ------------------------------------------------------------------
