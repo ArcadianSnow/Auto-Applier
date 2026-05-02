@@ -985,12 +985,21 @@ class DicePlatform(JobPlatform):
                         except Exception:
                             cur_url_check = ""
                         if cur_url_check == url_before_click:
+                            # Open the apply URL in a NEW TAB instead
+                            # of navigating away on the current page.
+                            # The previous goto() left the page reference
+                            # stranded on whatever the apply link
+                            # redirected to (often a 3rd-party ATS like
+                            # apply.teksystems.com), and the engine then
+                            # hung trying to find the next job's URL on
+                            # an external site.
                             logger.info(
-                                "Dice: still on job-detail; navigating "
-                                "to apply href directly: %s", href,
+                                "Dice: still on job-detail; opening "
+                                "apply href in new tab: %s", href,
                             )
                             try:
-                                await page.goto(
+                                fallback_tab = await self.context.new_page()
+                                await fallback_tab.goto(
                                     href, wait_until="domcontentloaded",
                                 )
                                 await random_delay(1.5, 3.0)
