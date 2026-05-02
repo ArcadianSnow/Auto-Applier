@@ -182,10 +182,32 @@ def make_scrollable(parent: tk.Widget) -> tuple[tk.Canvas, ttk.Frame]:
 
     canvas.configure(yscrollcommand=scrollbar.set)
 
-    def _on_configure(_event=None):
-        canvas.configure(scrollregion=canvas.bbox("all"))
-        # Match inner frame width to canvas width
-        canvas.itemconfig(inner_id, width=canvas.winfo_width())
+    # Cache last-applied values so we can short-circuit no-op
+    # Configure events. Without this cache, _on_configure was
+    # firing on every pixel of canvas resize during a scrollbar
+    # drag, telling the inner frame to relayout each time. The
+    # mid-drag relayout is what the user saw as "questions
+    # distort while scrolling, only settle on release". Caching
+    # the last (width, bbox) pair eliminates the redundant work
+    # so layout only happens when geometry actually changed.
+    state = {"width": -1, "bbox": None}
+
+    def _on_configure(event=None):
+        cur_width = canvas.winfo_width()
+        cur_bbox = canvas.bbox("all")
+        # Only re-apply the inner-frame width when the canvas
+        # width actually changed meaningfully (> 1px). During a
+        # scrollbar drag, the canvas width can fluctuate by a
+        # pixel because the scrollbar grabber's pixel-snap moves
+        # — those tiny diffs caused full relayouts.
+        if abs(cur_width - state["width"]) > 1:
+            canvas.itemconfig(inner_id, width=cur_width)
+            state["width"] = cur_width
+        # scrollregion: only set when the content's bounding box
+        # changed. tuple comparison is cheap.
+        if cur_bbox != state["bbox"]:
+            canvas.configure(scrollregion=cur_bbox)
+            state["bbox"] = cur_bbox
 
     inner.bind("<Configure>", _on_configure)
     canvas.bind("<Configure>", _on_configure)
