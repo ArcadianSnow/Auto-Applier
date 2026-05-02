@@ -992,12 +992,17 @@ class ZipRecruiterPlatform(JobPlatform):
         ZipRecruiter forms are typically shorter than LinkedIn or
         Indeed -- often just a resume upload and 1-3 screener questions.
 
-        Tracks whether each step found real application-form fields
-        vs. only page chrome (header search bar). If we previously
-        filled real fields but a later step only sees chrome, the
-        apply form is gone — treat as submission complete.
+        Strict success detection: only declares success on a real
+        URL-change to a confirmation route OR a visible confirmation
+        banner. The previous heuristic ("0 real fields after we
+        filled some = submission complete") fired on 2026-05-02
+        when ZR rejected step 1 silently because phone+location
+        didn't persist; CSV recorded "applied" while the user's
+        ZR dashboard showed "Application Incomplete". Never trust
+        a missing form as evidence of success.
         """
         any_real_fields_filled = False
+        empty_form_steps = 0  # consecutive steps with 0 real fields
 
         for step in range(MAX_FORM_STEPS):
             logger.info(
@@ -1013,6 +1018,7 @@ class ZipRecruiterPlatform(JobPlatform):
 
             # Detect and fill form fields — filter out page chrome
             real_fields_on_step = 0
+            real_fields: list = []
             if self.form_filler:
                 fields = await find_form_fields(page)
                 real_fields = [
@@ -1036,18 +1042,72 @@ class ZipRecruiterPlatform(JobPlatform):
                     len(fields) - real_fields_on_step,
                 )
 
-            # If we've previously filled real fields but this step has
-            # none, the apply form is gone. Assume success — ZR's apply
-            # flow often closes the modal silently after submit.
-            if any_real_fields_filled and real_fields_on_step == 0 and step > 0:
-                logger.info(
-                    "ZipRecruiter: apply form closed (only chrome fields "
-                    "remain) — treating as submission complete for %s",
-                    job.job_id,
+            # Field-persistence verification BEFORE clicking Continue.
+            # Re-read each filled field's live value via JS — if any
+            # required field is empty after fill, the React state
+            # commit didn't take and Continue will silently bounce
+            # us back to this step. Better to bail with a clear
+            # FAILED_FILL than to march into the false-success
+            # heuristic below.
+            if real_fields:
+                empty_required = await self._check_required_persistence(
+                    real_fields, job.job_id, step + 1,
                 )
-                return self._build_result(
-                    success=True, dry_run=dry_run,
-                )
+                if empty_required:
+                    logger.warning(
+                        "ZipRecruiter: ZR_INCOMPLETE_STEP job=%s "
+                        "step=%d empty_required=%s — fields didn't "
+                        "persist after fill; aborting before Continue",
+                        job.job_id, step + 1, empty_required,
+                    )
+                    return self._build_result(
+                        success=False,
+                        failure_reason=(
+                            "ZR step "
+                            f"{step + 1} fields didn't persist: "
+                            + ", ".join(empty_required[:3])
+                        ),
+                    )
+
+            # Strict success detection — no fields ≠ submission. Real
+            # signals only:
+            #   - URL changed to a /post-apply / /confirmation route
+            #   - A visible "submitted" / "thank you for applying"
+            #     banner on the page
+            # If neither matches AND fields are empty, bail with a
+            # clear failure reason so the manual-apply panel surfaces
+            # the job and the CSV reflects truth.
+            if any_real_fields_filled and real_fields_on_step == 0:
+                empty_form_steps += 1
+                if await self._check_success(page):
+                    logger.info(
+                        "ZipRecruiter: Application success detected "
+                        "for %s (URL/banner)", job.job_id,
+                    )
+                    return self._build_result(
+                        success=True, dry_run=dry_run,
+                    )
+                if empty_form_steps >= 2:
+                    # Two consecutive steps with no fields and no
+                    # success signal — the form is gone but we never
+                    # confirmed the submission. Most likely ZR closed
+                    # the iframe after a silent rejection.
+                    logger.warning(
+                        "ZipRecruiter: ZR_LOST_FORM job=%s — %d "
+                        "consecutive steps with no fields and no "
+                        "success indicator; treating as failed",
+                        job.job_id, empty_form_steps,
+                    )
+                    return self._build_result(
+                        success=False,
+                        failure_reason=(
+                            "ZR apply form disappeared without "
+                            "submission confirmation (likely "
+                            "incomplete fields rejected silently)"
+                        ),
+                    )
+            else:
+                empty_form_steps = 0
 
             await simulate_organic_behavior(page)
 
@@ -1075,22 +1135,69 @@ class ZipRecruiterPlatform(JobPlatform):
                     page, FORM_SUBMIT_SELECTORS, timeout=3000
                 )
                 if clicked:
-                    await random_delay(2.0, 4.0)
+                    # Poll for up to 15s — same pattern as Indeed's
+                    # _wait_for_submit_outcome. ZR's confirmation
+                    # banner can take a few seconds to render after
+                    # the click. Don't return success on a single
+                    # check that fires too early.
+                    import asyncio as _asyncio
+                    deadline = _asyncio.get_event_loop().time() + 15.0
+                    pre_url = page.url
+                    while _asyncio.get_event_loop().time() < deadline:
+                        if await self._check_success(page):
+                            logger.info(
+                                "ZipRecruiter: Submitted application "
+                                "for %s (success-detected)",
+                                job.job_id,
+                            )
+                            return self._build_result(
+                                success=True, dry_run=False,
+                            )
+                        try:
+                            cur = page.url
+                        except Exception:
+                            cur = pre_url
+                        # URL navigated to a confirmation route
+                        # without an explicit banner = probable
+                        # success. ZR uses /apply/successful and
+                        # /apply/confirmation as redirect targets.
+                        if cur != pre_url and any(
+                            p in cur.lower() for p in (
+                                "/apply/successful",
+                                "/apply/confirmation",
+                                "/apply/thank",
+                                "/post-apply",
+                                "/thanks",
+                            )
+                        ):
+                            logger.info(
+                                "ZipRecruiter: SUBMIT_PROBABLE_SUCCESS "
+                                "job=%s url=%s — confirmation route",
+                                job.job_id, cur,
+                            )
+                            return self._build_result(
+                                success=True, dry_run=False,
+                            )
+                        await _asyncio.sleep(1.0)
 
-                    # Verify submission success
-                    if await self._check_success(page):
-                        logger.info(
-                            "ZipRecruiter: Submitted application for %s",
-                            job.job_id,
-                        )
-                        return self._build_result(success=True, dry_run=False)
-
-                    # Assume success if submit clicked without error
-                    logger.info(
-                        "ZipRecruiter: Submit clicked for %s (no explicit success indicator)",
+                    # 15s elapsed with no success signal. Don't lie
+                    # to the CSV — return failure so the manual-apply
+                    # panel surfaces the job and the user can verify
+                    # on ZR's site.
+                    logger.warning(
+                        "ZipRecruiter: ZR_SUBMIT_UNCONFIRMED job=%s "
+                        "— submit clicked but no success URL/banner "
+                        "in 15s",
                         job.job_id,
                     )
-                    return self._build_result(success=True, dry_run=False)
+                    return self._build_result(
+                        success=False,
+                        failure_reason=(
+                            "Submit clicked but no success "
+                            "confirmation appeared on ZipRecruiter "
+                            "(verify on the site before retrying)"
+                        ),
+                    )
                 else:
                     return self._build_result(
                         success=False,
@@ -1143,6 +1250,54 @@ class ZipRecruiterPlatform(JobPlatform):
             success=False,
             failure_reason=f"Exceeded maximum form steps ({MAX_FORM_STEPS})",
         )
+
+    async def _check_required_persistence(
+        self, real_fields: list, job_id: str, step: int,
+    ) -> list[str]:
+        """Re-read live element values; return labels of required-but-empty.
+
+        After filling, ZipRecruiter's React iframe sometimes reverts
+        the value if our fill path bypassed React's onChange handler.
+        Querying ``el.value`` (or ``el.checked`` for radio/checkbox)
+        directly tells us whether the value actually committed. If a
+        REQUIRED field is empty after fill, Continue will silently
+        bounce back and the next step's apply form will look "gone"
+        — exactly the failure mode the old false-success heuristic
+        masked.
+
+        Returns the list of empty-required field labels (truncated).
+        Non-required empty fields are NOT flagged; the user might
+        legitimately leave optional fields blank.
+        """
+        empty_required: list[str] = []
+        for field in real_fields:
+            try:
+                state = await field.element.evaluate(
+                    """(el) => ({
+                        type: el.type || el.tagName.toLowerCase(),
+                        value: (el.value || '').trim(),
+                        checked: !!el.checked,
+                        required: el.required ||
+                            el.getAttribute('aria-required') === 'true',
+                    })"""
+                )
+            except Exception:
+                continue
+            if not state.get("required"):
+                continue
+            ftype = (state.get("type") or "").lower()
+            if ftype in ("radio", "checkbox"):
+                if not state.get("checked"):
+                    empty_required.append(field.label[:60])
+            elif ftype == "file":
+                # File inputs report empty .value when nothing was
+                # uploaded; the platform uploader handles those
+                # separately. Skip here.
+                continue
+            else:
+                if not state.get("value"):
+                    empty_required.append(field.label[:60])
+        return empty_required
 
     async def _is_submit_step(self, page: Page) -> bool:
         """Check if the current form step has a Submit button."""
