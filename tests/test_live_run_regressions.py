@@ -15,6 +15,7 @@ import pytest
 from auto_applier.browser.form_filler import FormFiller
 from auto_applier.browser.selector_utils import (
     FormField,
+    _classify_element,
     _clean_compound_label,
     _is_phantom_label,
 )
@@ -378,3 +379,165 @@ class TestPickResumeInput:
 
         result = _run(FormFiller.pick_resume_input(page, "Dice"))
         assert result is None
+
+
+# ------------------------------------------------------------------
+# 11. AnswerAssistDialog placeholder detection
+# ------------------------------------------------------------------
+
+class TestAnswerAssistPlaceholder:
+    """Live run 2026-05-01: clicking the "?" assist button on a
+    template-shaped question ("Do you have experience with [specific
+    tool]?") sent the literal placeholder to the LLM, which then
+    hallucinated 'Testpilot' (the candidate's last name) as a tool.
+    Detect placeholder shapes Python-side and bypass the LLM."""
+
+    def test_square_bracket_placeholder_matches(self):
+        from auto_applier.gui.steps.answers import _find_placeholder
+
+        match = _find_placeholder(
+            "Do you have experience with [specific tool]?"
+        )
+        assert match == "[specific tool]"
+
+    def test_angle_bracket_placeholder_matches(self):
+        from auto_applier.gui.steps.answers import _find_placeholder
+
+        assert _find_placeholder("Tell us about <topic>") == "<topic>"
+
+    def test_curly_brace_placeholder_matches(self):
+        from auto_applier.gui.steps.answers import _find_placeholder
+
+        assert (
+            _find_placeholder("Why do you want to work at {company}?")
+            == "{company}"
+        )
+
+    def test_underscores_placeholder_matches(self):
+        from auto_applier.gui.steps.answers import _find_placeholder
+
+        # Three or more consecutive underscores qualify as a fill-in.
+        assert _find_placeholder("Years of ___ experience?") == "___"
+
+    def test_year_placeholder_matches(self):
+        from auto_applier.gui.steps.answers import _find_placeholder
+
+        # [year] is a legit template variable shape.
+        assert _find_placeholder("Graduated in [year]?") == "[year]"
+
+    def test_normal_question_does_not_match(self):
+        from auto_applier.gui.steps.answers import _find_placeholder
+
+        # A real user-facing question with no template shapes.
+        assert _find_placeholder(
+            "Are you 18 years of age or older?"
+        ) is None
+
+    def test_empty_string_does_not_match(self):
+        from auto_applier.gui.steps.answers import _find_placeholder
+
+        assert _find_placeholder("") is None
+
+    def test_mailto_in_brackets_still_flagged(self):
+        from auto_applier.gui.steps.answers import _find_placeholder
+
+        # Anything inside square brackets gets flagged — including
+        # something like [mailto:foo]. Better to over-flag than to
+        # let an un-customized template through.
+        result = _find_placeholder("Contact via [mailto:foo]?")
+        assert result == "[mailto:foo]"
+
+    def test_two_underscores_does_not_match(self):
+        from auto_applier.gui.steps.answers import _find_placeholder
+
+        # Two underscores are not enough — needs 3+ to count as a
+        # fill-in blank (avoids matching naming conventions like
+        # snake__case).
+        assert _find_placeholder("Years of __ experience?") is None
+
+
+# ------------------------------------------------------------------
+# 12. Numeric-only text input detection (Issue B)
+# ------------------------------------------------------------------
+
+def _make_numeric_text_input(
+    *, inputmode: str = "", pattern: str = "", hint_text: str = ""
+):
+    """Mock a `<input type="text">` with selected attributes.
+
+    The classifier reads tag, type, inputmode, and pattern via
+    ``el.evaluate`` / ``el.get_attribute``. It also calls a single
+    ``el.evaluate`` to gather ancestor inner_text for the hint walk.
+    We stub each call's return value so the helper can run synchronously
+    against an AsyncMock.
+    """
+    el = AsyncMock()
+
+    async def _evaluate(script, *args, **kwargs):
+        # First call: tag name lookup (lowercased).
+        if "tagName" in script:
+            return "input"
+        # Hint-text walk: parents joined to lowercase.
+        if "parentElement" in script:
+            return hint_text.lower()
+        return ""
+
+    async def _get_attribute(name):
+        attrs = {
+            "type": "text",
+            "inputmode": inputmode,
+            "pattern": pattern,
+        }
+        return attrs.get(name, "")
+
+    el.evaluate = _evaluate
+    el.get_attribute = _get_attribute
+    return el
+
+
+class TestNumericTextInputClassification:
+    """Live run 2026-05-01: a 'Years of experience' text input with a
+    visible 'Numbers only' hint received 'I have 6 years...' and was
+    silently rejected by the platform. Promote text inputs with numeric
+    intent (inputmode/pattern/hint) to field_type='number' so the form
+    filler treats them numerically."""
+
+    def test_inputmode_numeric_classifies_as_number(self):
+        el = _make_numeric_text_input(inputmode="numeric")
+        page = MagicMock()
+        result = _run(_classify_element(el, "Years of experience", page))
+        assert result is not None
+        assert result.field_type == "number"
+
+    def test_pattern_digit_class_classifies_as_number(self):
+        el = _make_numeric_text_input(pattern=r"\d+")
+        page = MagicMock()
+        result = _run(_classify_element(el, "Years of experience", page))
+        assert result is not None
+        assert result.field_type == "number"
+
+
+class TestAnswerFitsNumberFieldRejectsProse:
+    """Same live-run bug, downstream half: even if the platform accepts
+    the field as text, _answer_fits_field must reject prose answers
+    that happen to contain a digit so the candidate chain falls through
+    to the bare-digit personal-info match."""
+
+    def test_prose_with_digit_rejected_for_number_field(self):
+        field = FormField(
+            label="Years of experience",
+            element=MagicMock(),
+            field_type="number",
+        )
+        assert (
+            FormFiller._answer_fits_field(field, "I have 6 years")
+            is False
+        )
+
+    def test_bare_digit_accepted_for_number_field(self):
+        field = FormField(
+            label="Years of experience",
+            element=MagicMock(),
+            field_type="number",
+        )
+        assert FormFiller._answer_fits_field(field, "6") is True

@@ -191,33 +191,57 @@ def make_scrollable(parent: tk.Widget) -> tuple[tk.Canvas, ttk.Frame]:
     canvas.bind("<Configure>", _on_configure)
 
     # ------------------------------------------------------------------
-    # Wheel scrolling — per-canvas, scoped to pointer-hover. Windows /
-    # macOS deliver <MouseWheel> with event.delta in 120-unit ticks;
-    # Linux uses <Button-4> / <Button-5>.
+    # Wheel scrolling — pointer-routed. The previous attempt used
+    # <Enter>/<Leave> on canvas+inner but those events fire whenever
+    # the pointer enters/leaves a CHILD widget (Entry, Button, Label),
+    # not the surface as a whole. So the wheel binding flickered on
+    # and off as the user moved between rows on the Answers page,
+    # which the user reported as "scrolling broke".
+    #
+    # New approach: keep a single bind_all on the toplevel for wheel
+    # events. On each event, walk up from the widget under the pointer
+    # — if any ancestor is THIS canvas's inner frame (or canvas), we
+    # scroll. Otherwise we let other handlers (other canvases) win
+    # via the chain. Each scrollable surface registers itself in a
+    # module-level registry keyed by toplevel; lookup is O(N) where
+    # N is the number of scrollables in the same window (typically 1-3).
     # ------------------------------------------------------------------
     def _on_mousewheel(event):
+        # event.widget is the binding target (the toplevel); we want
+        # the widget actually under the pointer.
+        try:
+            target = canvas.winfo_containing(event.x_root, event.y_root)
+        except Exception:
+            target = None
+        # Walk up the widget tree to see if `target` is inside our
+        # scrollable. If so, this is our event — scroll and stop
+        # propagation. If not, return to let another binding handle it.
+        cur = target
+        owner = False
+        while cur is not None:
+            if cur is canvas or cur is inner:
+                owner = True
+                break
+            cur = getattr(cur, "master", None)
+        if not owner:
+            return
         if hasattr(event, "delta") and event.delta:
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
         else:
             # Linux click-wheel events
             canvas.yview_scroll(-1 if event.num == 4 else 1, "units")
+        return "break"
 
-    def _bind_wheel(_e=None):
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        canvas.bind_all("<Button-4>", _on_mousewheel)
-        canvas.bind_all("<Button-5>", _on_mousewheel)
-
-    def _unbind_wheel(_e=None):
-        canvas.unbind_all("<MouseWheel>")
-        canvas.unbind_all("<Button-4>")
-        canvas.unbind_all("<Button-5>")
-
-    # Bind wheel only while pointer is over THIS canvas's visible
-    # area, so two scrollable surfaces never fight over events.
-    canvas.bind("<Enter>", _bind_wheel)
-    canvas.bind("<Leave>", _unbind_wheel)
-    inner.bind("<Enter>", _bind_wheel)
-    inner.bind("<Leave>", _unbind_wheel)
+    # Bind on the toplevel so wheel events arrive even when the
+    # pointer is over child widgets. add="+" preserves any other
+    # bindings (the dashboard log, prior scrollables in same window).
+    try:
+        toplevel = canvas.winfo_toplevel()
+    except Exception:
+        toplevel = parent
+    toplevel.bind("<MouseWheel>", _on_mousewheel, add="+")
+    toplevel.bind("<Button-4>", _on_mousewheel, add="+")
+    toplevel.bind("<Button-5>", _on_mousewheel, add="+")
 
     # ------------------------------------------------------------------
     # Tab-into-view — when a child widget gets focus (typically via

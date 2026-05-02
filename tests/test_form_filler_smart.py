@@ -277,54 +277,75 @@ class TestHoneypot:
 class TestUnansweredFormatTolerance:
     """_record_unanswered crashed on str.get() when the file was a dict."""
 
+    @staticmethod
+    def _stub_answers_empty(monkeypatch, tmp_path):
+        """Point ANSWERS_FILE at a non-existent path so the dup-check is a no-op."""
+        from auto_applier.browser import form_filler as ff
+        from auto_applier.browser import selector_utils as su
+        empty = tmp_path / "no-answers.json"
+        monkeypatch.setattr(ff, "ANSWERS_FILE", empty)
+        # selector_utils.should_skip_unanswered re-imports ANSWERS_FILE
+        # from config when answers_path is None, but we pass an explicit
+        # path from form_filler so this is just belt-and-braces.
+        import auto_applier.config as cfg
+        monkeypatch.setattr(cfg, "ANSWERS_FILE", empty)
+
     def test_accepts_list_format(self, tmp_path, monkeypatch):
         from auto_applier.browser import form_filler as ff
+        self._stub_answers_empty(monkeypatch, tmp_path)
         f = tmp_path / "unanswered.json"
-        f.write_text('[{"question": "Q1", "encountered": 2}]')
+        f.write_text('[{"question": "Question one long enough", "encountered": 2}]')
         monkeypatch.setattr(ff, "UNANSWERED_FILE", f)
         filler = _filler()
-        filler._record_unanswered("Q2")
+        filler._record_unanswered("Question two long enough")
         import json
         data = json.loads(f.read_text())
         questions = [e["question"] for e in data]
-        assert "Q1" in questions
-        assert "Q2" in questions
+        assert "Question one long enough" in questions
+        assert "Question two long enough" in questions
 
     def test_accepts_dict_format(self, tmp_path, monkeypatch):
         """Historical wizard runs wrote this as a dict. Must not crash."""
         from auto_applier.browser import form_filler as ff
+        self._stub_answers_empty(monkeypatch, tmp_path)
         f = tmp_path / "unanswered.json"
-        f.write_text('{"Q1": 2, "Q2": 1}')
+        f.write_text('{"Question one long enough": 2, "Question two long enough": 1}')
         monkeypatch.setattr(ff, "UNANSWERED_FILE", f)
         filler = _filler()
         # Previously crashed with 'str' object has no attribute 'get'
-        filler._record_unanswered("Q3")
+        filler._record_unanswered("Question three long enough")
         import json
         data = json.loads(f.read_text())
         assert isinstance(data, list)
         questions = [e["question"] for e in data]
-        assert set(questions) == {"Q1", "Q2", "Q3"}
+        assert set(questions) == {
+            "Question one long enough",
+            "Question two long enough",
+            "Question three long enough",
+        }
 
     def test_accepts_missing_file(self, tmp_path, monkeypatch):
         from auto_applier.browser import form_filler as ff
+        self._stub_answers_empty(monkeypatch, tmp_path)
         f = tmp_path / "does-not-exist.json"
         monkeypatch.setattr(ff, "UNANSWERED_FILE", f)
         filler = _filler()
-        filler._record_unanswered("new question")
+        filler._record_unanswered("new question goes here")
         import json
         data = json.loads(f.read_text())
-        assert data == [{"question": "new question", "encountered": 1}]
+        assert data == [{"question": "new question goes here", "encountered": 1}]
 
     def test_accepts_garbage_file(self, tmp_path, monkeypatch):
         from auto_applier.browser import form_filler as ff
+        self._stub_answers_empty(monkeypatch, tmp_path)
         f = tmp_path / "unanswered.json"
         f.write_text("{ not json")
         monkeypatch.setattr(ff, "UNANSWERED_FILE", f)
         filler = _filler()
-        filler._record_unanswered("new")
+        filler._record_unanswered("brand new question text")
         import json
         data = json.loads(f.read_text())
-        assert data == [{"question": "new", "encountered": 1}]
+        assert data == [{"question": "brand new question text", "encountered": 1}]
 
 
 class TestLocationFields:

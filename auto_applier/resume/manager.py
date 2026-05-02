@@ -73,6 +73,56 @@ class ResumeScore:
 
 
 # ------------------------------------------------------------------
+# Resume file lock detection
+# ------------------------------------------------------------------
+
+
+def find_locked_resume_files(paths: list[Path] | None = None) -> list[Path]:
+    """Return resume files that another process holds an exclusive lock on.
+
+    Word, Excel, and similar editors keep an exclusive read lock while a
+    document is open. Trying to open such a file with ``open(path, 'rb')``
+    raises ``PermissionError`` (Windows: WinError 32 — "process cannot
+    access the file because it is being used by another process").
+
+    The check is intentionally cheap: open + immediate close, no parse.
+    Used by both ``cli doctor`` (preflight) and the apply pipeline so a
+    user who forgot to close their resume in Word fails fast with a
+    clear message instead of crashing minutes into the run.
+
+    Args:
+        paths: Optional list of files to check. Defaults to every file
+            in :data:`RESUMES_DIR`.
+
+    Returns:
+        The subset of ``paths`` that are currently locked. Missing files
+        are skipped silently — they're a different failure mode handled
+        elsewhere.
+    """
+    if paths is None:
+        if not RESUMES_DIR.exists():
+            return []
+        paths = [p for p in RESUMES_DIR.iterdir() if p.is_file()]
+
+    locked: list[Path] = []
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            with open(path, "rb") as fh:
+                fh.read(1)
+        except PermissionError:
+            locked.append(path)
+        except OSError as exc:
+            # Other I/O errors aren't lock-related but a sibling code
+            # path may surface them; log and move on so the lock check
+            # itself never crashes the caller.
+            logger.debug("Skipping %s in lock check: %s", path, exc)
+            continue
+    return locked
+
+
+# ------------------------------------------------------------------
 # Manager
 # ------------------------------------------------------------------
 

@@ -1,6 +1,7 @@
 """Step 7: Pre-configured answers for common application questions."""
 import asyncio
 import json
+import re
 import threading
 import tkinter as tk
 from tkinter import ttk
@@ -9,9 +10,28 @@ from auto_applier.config import ANSWERS_FILE, UNANSWERED_FILE
 from auto_applier.gui.styles import (
     ACCENT_TEXT, BG, BG_CARD, DANGER_TEXT, PRIMARY, WARNING, TEXT, TEXT_LIGHT,
     TEXT_MUTED, BORDER,
-    FONT_HEADING, FONT_SUBHEADING, FONT_BODY, FONT_SMALL,
+    FONT_HEADING, FONT_SUBHEADING, FONT_BODY, FONT_SMALL, FONT_MONO,
     PAD_X, PAD_Y, make_scrollable,
 )
+
+
+# Matches placeholder shapes in question templates that haven't been
+# customized: [tool], <topic>, {company}, ___, etc. Used both to flag
+# template entries in the row list and to bypass LLM calls when the
+# user clicks the "?" assist button — otherwise the model hallucinates
+# a fill-in for the placeholder (see live run 2026-05-01: "Testpilot"
+# returned as a tool the candidate "lists in the question").
+PLACEHOLDER_RE = re.compile(r"\[[^\]]+\]|<[^>]+>|\{[^}]+\}|_{3,}")
+
+
+def _find_placeholder(question: str) -> str | None:
+    """Return the literal placeholder substring if the question is a
+    template, else None.
+    """
+    if not question:
+        return None
+    m = PLACEHOLDER_RE.search(question)
+    return m.group(0) if m else None
 
 # Default common questions and their input types.
 # "dropdown" means use a Combobox; "entry" means a plain text field.
@@ -147,11 +167,24 @@ class AnswersStep(ttk.Frame):
         row = tk.Frame(parent, bg=BG_CARD)
         row.pack(fill="x", pady=(0, 10))
 
+        is_template = _find_placeholder(question) is not None
+
+        q_line = tk.Frame(row, bg=BG_CARD)
+        q_line.pack(anchor="w", fill="x")
+
         tk.Label(
-            row, text=question, font=FONT_BODY,
+            q_line, text=question, font=FONT_BODY,
             fg=TEXT, bg=BG_CARD, anchor="w",
             wraplength=650, justify="left",
-        ).pack(anchor="w")
+        ).pack(side="left", anchor="w")
+
+        if is_template:
+            # Subtle muted hint so users can spot template rows at a
+            # glance without clicking the "?" button.
+            tk.Label(
+                q_line, text=" (template)", font=FONT_SMALL,
+                fg=TEXT_MUTED, bg=BG_CARD,
+            ).pack(side="left", anchor="w")
 
         var = tk.StringVar(value=saved.get(question, ""))
 
@@ -288,6 +321,12 @@ class AnswerAssistDialog(tk.Toplevel):
         self._question = question
         self._answer_var = answer_var
         self._suggested_answer: str = ""
+        # Detect un-customized template placeholders (e.g. "[specific
+        # tool]", "<topic>", "___"). When set, we skip the LLM calls
+        # entirely — otherwise the model fabricates fills for the
+        # placeholder by stitching together unrelated tokens from its
+        # context (live run 2026-05-01: "Testpilot" hallucination).
+        self._placeholder = _find_placeholder(question)
 
         self.title("AI assist — answer review")
         self.configure(bg=BG)
@@ -307,8 +346,9 @@ class AnswerAssistDialog(tk.Toplevel):
         # window itself so Escape works without a tab.
         self.after_idle(self.focus_set)
 
-        # Kick off both LLM calls immediately on open.
-        self.after(50, self._start_workers)
+        if self._placeholder is None:
+            # Kick off both LLM calls immediately on open.
+            self.after(50, self._start_workers)
 
     # ------------------------------------------------------------------
     # Layout
@@ -346,11 +386,22 @@ class AnswerAssistDialog(tk.Toplevel):
             val_card, text="Validation",
             font=FONT_SUBHEADING, fg=PRIMARY, bg=BG_CARD,
         ).pack(anchor="w", padx=12, pady=(8, 4))
-        self._validation_lbl = tk.Label(
-            val_card, text="Checking...",
-            font=FONT_BODY, fg=TEXT_MUTED, bg=BG_CARD,
-            wraplength=540, justify="left",
-        )
+        if self._placeholder is not None:
+            self._validation_lbl = tk.Label(
+                val_card,
+                text=(
+                    "Cannot validate — this question contains a "
+                    "placeholder. Customize it first."
+                ),
+                font=FONT_BODY, fg=WARNING, bg=BG_CARD,
+                wraplength=540, justify="left",
+            )
+        else:
+            self._validation_lbl = tk.Label(
+                val_card, text="Checking...",
+                font=FONT_BODY, fg=TEXT_MUTED, bg=BG_CARD,
+                wraplength=540, justify="left",
+            )
         self._validation_lbl.pack(anchor="w", padx=12, pady=(0, 8))
 
         # Suggestion card
@@ -363,40 +414,75 @@ class AnswerAssistDialog(tk.Toplevel):
             sug_card, text="Suggested answer",
             font=FONT_SUBHEADING, fg=PRIMARY, bg=BG_CARD,
         ).pack(anchor="w", padx=12, pady=(8, 4))
-        self._suggestion_lbl = tk.Label(
-            sug_card, text="Checking...",
-            font=FONT_BODY, fg=TEXT, bg=BG_CARD,
-            wraplength=540, justify="left",
-        )
-        self._suggestion_lbl.pack(anchor="w", padx=12, pady=(0, 4))
-        self._rationale_lbl = tk.Label(
-            sug_card, text="",
-            font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD,
-            wraplength=540, justify="left",
-        )
-        self._rationale_lbl.pack(anchor="w", padx=12, pady=(0, 8))
+        if self._placeholder is not None:
+            # Bypass LLM entirely. Render a fixed warning that names
+            # the exact placeholder substring so the user knows what
+            # to replace.
+            self._suggestion_lbl = tk.Label(
+                sug_card,
+                text=(
+                    "This question is a TEMPLATE. Replace the "
+                    "placeholder below with the real tool/topic/"
+                    "company name from the actual job application "
+                    "before saving an answer here."
+                ),
+                font=FONT_BODY, fg=TEXT, bg=BG_CARD,
+                wraplength=540, justify="left",
+            )
+            self._suggestion_lbl.pack(anchor="w", padx=12, pady=(0, 6))
+            tk.Label(
+                sug_card, text=self._placeholder,
+                font=FONT_MONO, fg=DANGER_TEXT, bg=BG_CARD,
+                wraplength=540, justify="left",
+            ).pack(anchor="w", padx=12, pady=(0, 4))
+            self._rationale_lbl = tk.Label(
+                sug_card, text="",
+                font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD,
+                wraplength=540, justify="left",
+            )
+            self._rationale_lbl.pack(anchor="w", padx=12, pady=(0, 8))
+        else:
+            self._suggestion_lbl = tk.Label(
+                sug_card, text="Checking...",
+                font=FONT_BODY, fg=TEXT, bg=BG_CARD,
+                wraplength=540, justify="left",
+            )
+            self._suggestion_lbl.pack(anchor="w", padx=12, pady=(0, 4))
+            self._rationale_lbl = tk.Label(
+                sug_card, text="",
+                font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD,
+                wraplength=540, justify="left",
+            )
+            self._rationale_lbl.pack(anchor="w", padx=12, pady=(0, 8))
 
-        # Action buttons
+        # Action buttons. For placeholder-bearing questions we omit
+        # the "Use suggested answer" button — there is no suggestion
+        # to use, only Close.
         btn_row = tk.Frame(self, bg=BG)
         btn_row.pack(fill="x", padx=PAD_X, pady=(0, PAD_Y))
-        self._use_btn = ttk.Button(
-            btn_row, text="Use suggested answer",
-            style="Primary.TButton",
-            command=self._on_use_suggestion,
-            state="disabled",
-        )
-        self._use_btn.pack(side="left")
+        if self._placeholder is None:
+            self._use_btn = ttk.Button(
+                btn_row, text="Use suggested answer",
+                style="Primary.TButton",
+                command=self._on_use_suggestion,
+                state="disabled",
+            )
+            self._use_btn.pack(side="left")
+        else:
+            self._use_btn = None
         ttk.Button(
             btn_row, text="Close",
             command=self.destroy,
         ).pack(side="right")
 
-        # Enter on the dialog accepts the suggestion (when ready)
-        self.bind(
-            "<Return>",
-            lambda _e: self._on_use_suggestion()
-            if str(self._use_btn["state"]) == "normal" else None,
-        )
+        # Enter on the dialog accepts the suggestion (when ready).
+        # For placeholder dialogs Enter is a no-op (closes via Escape).
+        if self._use_btn is not None:
+            self.bind(
+                "<Return>",
+                lambda _e: self._on_use_suggestion()
+                if str(self._use_btn["state"]) == "normal" else None,
+            )
 
     # ------------------------------------------------------------------
     # Workers
@@ -540,7 +626,8 @@ class AnswerAssistDialog(tk.Toplevel):
                 self._rationale_lbl.configure(
                     text=f"Why: {rationale}",
                 )
-            self._use_btn.configure(state="normal")
+            if self._use_btn is not None:
+                self._use_btn.configure(state="normal")
         except tk.TclError:
             # Window already closed — nothing to render into.
             return

@@ -118,6 +118,112 @@ def _is_phantom_label(label: str) -> bool:
     return False
 
 
+# Minimum length for a "real" question. Anything shorter is fragment
+# chrome ("X", "Yes", "*") that slipped past the phantom filter.
+# "Country *" is 9 chars, so 8 is a safe lower bound.
+_MIN_QUESTION_LEN = 8
+
+
+def _load_answers_keys(answers_path) -> tuple[set[str], set[str]]:
+    """Return (exact_keys_lower, exact_keys_lower) for answers.json.
+
+    Tolerates the three historical shapes (flat dict, list of entry
+    dicts, ``{"questions": [...]}`` wrapper) and returns a set of
+    lower-cased question keys. Returns an empty set on any failure
+    so callers stay defensive — better to record a duplicate than to
+    crash the apply path.
+
+    The duplicated return is intentional: callers want one set for
+    exact matching and the *same* set for case-insensitive substring
+    matching. Kept as a tuple for forward extensibility.
+    """
+    from pathlib import Path
+
+    p = Path(answers_path)
+    if not p.exists():
+        return set(), set()
+    try:
+        import json as _json
+        with open(p, "r", encoding="utf-8") as fh:
+            data = _json.load(fh)
+    except (OSError, ValueError):
+        return set(), set()
+
+    keys: set[str] = set()
+    if isinstance(data, dict) and "questions" not in data:
+        for k in data.keys():
+            if isinstance(k, str) and k.strip():
+                keys.add(k.strip().lower())
+    elif isinstance(data, dict) and "questions" in data:
+        items = data.get("questions", [])
+        if isinstance(items, list):
+            for entry in items:
+                if isinstance(entry, dict):
+                    q = entry.get("question", "")
+                    if isinstance(q, str) and q.strip():
+                        keys.add(q.strip().lower())
+    elif isinstance(data, list):
+        for entry in data:
+            if isinstance(entry, dict):
+                q = entry.get("question", "")
+                if isinstance(q, str) and q.strip():
+                    keys.add(q.strip().lower())
+            elif isinstance(entry, str) and entry.strip():
+                keys.add(entry.strip().lower())
+    return keys, keys
+
+
+def should_skip_unanswered(question: str, answers_path=None) -> bool:
+    """Return True if ``question`` should NOT be written to unanswered.json.
+
+    Three rejection rules:
+
+    1. Phantom label — page chrome, headings, upload affordance text
+       (delegates to :func:`_is_phantom_label`).
+    2. Already in answers.json — exact (case-insensitive) match against
+       any existing answer key. Substring match against the trimmed
+       question against keys also rejects (catches "Are you 18 years
+       of age or older?" appearing both in the answers list and in
+       the unanswered queue with trailing punctuation/asterisk).
+    3. Too short — less than ``_MIN_QUESTION_LEN`` characters after
+       stripping. "X" or "Yes" aren't real questions.
+
+    ``answers_path`` defaults to the configured ``ANSWERS_FILE`` if
+    omitted. Pass an explicit path in tests so the helper doesn't
+    touch the user's real data.
+    """
+    if not question:
+        return True
+    trimmed = question.strip()
+    if not trimmed:
+        return True
+    if len(trimmed) < _MIN_QUESTION_LEN:
+        return True
+    if _is_phantom_label(trimmed):
+        return True
+
+    if answers_path is None:
+        from auto_applier.config import ANSWERS_FILE
+        answers_path = ANSWERS_FILE
+
+    keys, _ = _load_answers_keys(answers_path)
+    if not keys:
+        return False
+
+    q_lower = trimmed.lower()
+    if q_lower in keys:
+        return True
+    # Case-insensitive substring: the unanswered question contains the
+    # answers.json key (e.g. unanswered "Are you 18 years of age or
+    # older? *" contains "are you 18 years of age or older?"),
+    # OR the answers.json key contains the unanswered question (rare,
+    # but covers "Email" key vs "email" question).
+    for key in keys:
+        if key and (key in q_lower or q_lower in key):
+            return True
+    return False
+
+
 @dataclass
 class FormField:
     """A detected form field with its label and element handle."""
@@ -293,6 +399,96 @@ async def find_form_fields(page: Page) -> list[FormField]:
     return fields
 
 
+# Hint phrases (lowercased substrings) that mark a sibling text input
+# as numeric-only. Live-run example: a "Years of experience" field with
+# "Numbers only" caption underneath. The form was silently rejected
+# when we typed "I have 6 years" because the platform validated the
+# field client-side and refused submission.
+_NUMERIC_HINT_PHRASES = (
+    "numbers only",
+    "numeric only",
+    "numeric value",
+    "numeric values",
+    "digits only",
+    "must be a number",
+    "must be numeric",
+    "enter a number",
+    "enter numbers",
+    "whole number",
+    "integer only",
+)
+
+# Pattern attribute regexes that indicate the input expects digits.
+# Servers regularly write `pattern="\\d+"`, `pattern="[0-9]+"`,
+# `pattern="^\\d{1,3}$"`, etc. Match conservatively — only flag when
+# the start of the pattern is a digit class, not when digits appear
+# inside a broader expression like a phone-format mask.
+_NUMERIC_PATTERN_RE = re.compile(r"^\^?\\d|^\^?\[0-9\]")
+
+
+async def _looks_numeric(el: ElementHandle, page: Page) -> bool:
+    """Return True if a text-shaped input is actually numeric-only.
+
+    Three signals (any one suffices):
+
+    1. ``inputmode`` attribute contains "numeric" or "decimal".
+    2. ``pattern`` attribute starts with a digit class (``\\d`` or
+       ``[0-9]``).
+    3. A nearby ancestor (within 4 parents) contains a hint text like
+       "numbers only" / "digits only" / "must be a number".
+
+    The walk is identical in spirit to ``_clean_compound_label``'s
+    ancestor crawl — capped depth, lowercased substring search, fail-
+    closed on any DOM exception.
+    """
+    # Signal 1: inputmode
+    try:
+        inputmode = (await el.get_attribute("inputmode") or "").lower()
+    except Exception:
+        inputmode = ""
+    if "numeric" in inputmode or "decimal" in inputmode:
+        return True
+
+    # Signal 2: pattern attribute
+    try:
+        pattern = (await el.get_attribute("pattern") or "").strip()
+    except Exception:
+        pattern = ""
+    if pattern and _NUMERIC_PATTERN_RE.search(pattern):
+        return True
+
+    # Signal 3: ancestor hint text. Walk up the DOM (cap at 4 parents)
+    # and check inner_text for any of the numeric hint phrases. Caps
+    # match elsewhere in this file — anything deeper risks dragging
+    # in unrelated chrome from the page header.
+    try:
+        hint_text = await el.evaluate(
+            """el => {
+                const phrases = [];
+                let cur = el.parentElement;
+                let depth = 0;
+                while (cur && depth < 4) {
+                    // Cheap and good enough: grab visible text of the
+                    // ancestor. A label hint ("Numbers only") is
+                    // almost always within ~200 chars of the input.
+                    const t = cur.innerText || cur.textContent || '';
+                    phrases.push(t);
+                    cur = cur.parentElement;
+                    depth += 1;
+                }
+                return phrases.join(' \\n ').toLowerCase();
+            }"""
+        )
+    except Exception:
+        hint_text = ""
+    if hint_text:
+        for phrase in _NUMERIC_HINT_PHRASES:
+            if phrase in hint_text:
+                return True
+
+    return False
+
+
 async def _classify_element(
     el: ElementHandle, label: str, page: Page
 ) -> FormField | None:
@@ -358,6 +554,15 @@ async def _classify_element(
         elif input_type == "number":
             return FormField(label=label, element=el, field_type="number")
         else:
+            # `<input type="text">` (or unspecified) is the catch-all,
+            # but many sites mark a numeric-only field via inputmode,
+            # pattern, or a sibling hint label like "numbers only".
+            # Promote to field_type="number" so the form_filler treats
+            # the answer numerically (live-run bug 2026-05-01: a
+            # "Years of experience" text field with a 'numeric only'
+            # hint received "I have 6 years..." and silently rejected).
+            if await _looks_numeric(el, page):
+                return FormField(label=label, element=el, field_type="number")
             return FormField(label=label, element=el, field_type="text")
 
     else:

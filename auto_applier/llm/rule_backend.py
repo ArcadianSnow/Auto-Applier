@@ -133,7 +133,17 @@ class RuleBackend(LLMBackend):
     # ------------------------------------------------------------------
 
     def _record_unanswered(self, prompt: str) -> None:
-        """Append the unmatched prompt to unanswered.json for later review."""
+        """Append the unmatched prompt to unanswered.json for later review.
+
+        Skips phantom labels, questions already covered by answers.json,
+        and ultra-short fragments — same filter used by the form
+        filler's record path so both producers stay consistent.
+        """
+        from auto_applier.browser.selector_utils import should_skip_unanswered
+
+        if should_skip_unanswered(prompt, self.answers_path):
+            return
+
         existing: list[str] = []
         if self.unanswered_path.exists():
             try:

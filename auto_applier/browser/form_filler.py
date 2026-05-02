@@ -1861,7 +1861,20 @@ class FormFiller:
             return bool(matches)
 
         if field.field_type == "number":
-            return any(c.isdigit() for c in ans)
+            # Must contain a digit at minimum.
+            if not any(c.isdigit() for c in ans):
+                return False
+            # ...but also reject prose-with-a-number candidates like
+            # "I have 6 years of experience". Live-run 2026-05-01:
+            # the LLM produced this for a numeric-only "Years of
+            # experience" field with a "Numbers only" hint; the site
+            # rejected silently. The first-priority numeric path is
+            # `_match_personal_info` returning bare digits — let the
+            # caller fall through to that by failing here.
+            alpha_count = sum(1 for c in ans if c.isalpha())
+            if alpha_count >= 5:
+                return False
+            return True
 
         # Location-shaped text fields: "Where are you located?", "City",
         # "Zip code", "Address" — these expect a place name or postal
@@ -2413,7 +2426,21 @@ class FormFiller:
         entry dicts). Any iteration that assumes the list shape
         crashes the platform's apply flow with 'str has no
         attribute get'. Normalize whatever we find and keep going.
+
+        Also filters phantom labels (page chrome, headings), questions
+        already present in answers.json, and ultra-short fragments —
+        these used to leak into unanswered.json and clutter the
+        wizard's "New Questions" panel with garbage entries.
         """
+        from auto_applier.browser.selector_utils import should_skip_unanswered
+
+        if should_skip_unanswered(question, ANSWERS_FILE):
+            logger.debug(
+                "Skipping unanswered record (phantom/dup/short): %r",
+                question[:80],
+            )
+            return
+
         raw = None
         if UNANSWERED_FILE.exists():
             try:

@@ -1639,6 +1639,117 @@ def reset_history(yes: bool):
     click.echo("\nDone. Dry runs will now see every job as fresh.")
 
 
+@cli.command("prune-unanswered")
+@click.option(
+    "--dry-run", is_flag=True,
+    help="Preview what would be removed without writing the file",
+)
+def prune_unanswered(dry_run: bool):
+    """Strip phantom labels, duplicates of answers.json, and ultra-short
+    fragments from data/unanswered.json.
+
+    The wizard's "New Questions from Recent Applications" panel was
+    showing junk entries — page headings ("Voluntary self
+    identification questions"), upload chrome ("Upload a file"),
+    duplicates of questions already in answers.json, and meaningless
+    fragments. This command applies the same filter the form filler
+    now uses on write, retroactively cleaning up entries written
+    before the filter existed.
+    """
+    from auto_applier.browser.selector_utils import (
+        _is_phantom_label,
+        _load_answers_keys,
+        _MIN_QUESTION_LEN,
+    )
+    from auto_applier.config import ANSWERS_FILE, UNANSWERED_FILE
+
+    if not UNANSWERED_FILE.exists():
+        click.echo("No unanswered.json file — nothing to prune.")
+        return
+
+    try:
+        with open(UNANSWERED_FILE, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (json.JSONDecodeError, OSError) as exc:
+        click.echo(f"Could not read unanswered.json: {exc}", err=True)
+        return
+
+    # Normalize to list[dict] regardless of historical shape.
+    entries: list[dict] = []
+    if isinstance(raw, list):
+        for entry in raw:
+            if isinstance(entry, dict) and entry.get("question"):
+                entries.append({
+                    "question": str(entry["question"]),
+                    "encountered": int(entry.get("encountered", 1) or 1),
+                })
+            elif isinstance(entry, str) and entry.strip():
+                entries.append({"question": entry, "encountered": 1})
+    elif isinstance(raw, dict):
+        for q, count in raw.items():
+            if isinstance(q, str) and q:
+                try:
+                    n = int(count) if count else 1
+                except (TypeError, ValueError):
+                    n = 1
+                entries.append({"question": q, "encountered": n})
+
+    answers_keys, _ = _load_answers_keys(ANSWERS_FILE)
+
+    kept: list[dict] = []
+    removed: list[tuple[str, str]] = []  # (question, reason)
+    for entry in entries:
+        q = entry["question"].strip()
+        if not q:
+            removed.append((entry["question"], "empty"))
+            continue
+        if len(q) < _MIN_QUESTION_LEN:
+            removed.append((q, "too short"))
+            continue
+        if _is_phantom_label(q):
+            removed.append((q, "phantom"))
+            continue
+        q_lower = q.lower()
+        if q_lower in answers_keys:
+            removed.append((q, "duplicate"))
+            continue
+        # Substring match against answers.json keys.
+        substring_match = None
+        for key in answers_keys:
+            if key and (key in q_lower or q_lower in key):
+                substring_match = key
+                break
+        if substring_match is not None:
+            removed.append((q, f"duplicate (~{substring_match[:40]})"))
+            continue
+        kept.append(entry)
+
+    click.echo(f"Read {len(entries)} entries from {UNANSWERED_FILE.name}")
+    click.echo(f"  kept:    {len(kept)}")
+    click.echo(f"  removed: {len(removed)}")
+    if removed:
+        click.echo("\nExamples removed (up to 10):")
+        for q, reason in removed[:10]:
+            display = q if len(q) <= 70 else q[:67] + "..."
+            click.echo(f"  [{reason}] {display}")
+
+    if dry_run:
+        click.echo("\n--dry-run: no changes written.")
+        return
+
+    if not removed:
+        click.echo("\nNothing to prune — file already clean.")
+        return
+
+    try:
+        with open(UNANSWERED_FILE, "w", encoding="utf-8") as fh:
+            json.dump(kept, fh, indent=2, ensure_ascii=False)
+    except OSError as exc:
+        click.echo(f"Failed to write {UNANSWERED_FILE}: {exc}", err=True)
+        return
+    click.echo(f"\nWrote {len(kept)} cleaned entries back to {UNANSWERED_FILE.name}.")
+
+
 @cli.command()
 def fsck():
     """Check CSV data for integrity issues (read-only)."""

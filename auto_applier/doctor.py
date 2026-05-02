@@ -199,6 +199,38 @@ def check_resumes_loaded() -> CheckResult:
     )
 
 
+def check_resume_files_unlocked() -> CheckResult:
+    """Fail fast if a resume file is open in Word / Excel / similar.
+
+    User report: opened the resume in Word, then clicked Start. The run
+    crashed minutes later when the parser tried to open the file. On
+    Windows, an exclusive editor lock raises ``PermissionError`` with
+    WinError 32 ("file is being used by another process"). Detect it
+    here as a hard FAIL with a clear "close <file>" remediation.
+    """
+    from auto_applier.config import RESUMES_DIR
+    from auto_applier.resume.manager import find_locked_resume_files
+
+    if not RESUMES_DIR.exists():
+        # Folder missing is reported by check_resumes_loaded; skip here.
+        return CheckResult("Resume file locks", PASS, "no resumes folder")
+
+    locked = find_locked_resume_files()
+    if not locked:
+        return CheckResult("Resume file locks", PASS, "all resume files readable")
+
+    # Name only the first locked file in the message — keeps the
+    # one-liner scannable. Fix hint enumerates all of them.
+    first = locked[0].name
+    extra = "" if len(locked) == 1 else f" (+{len(locked) - 1} more)"
+    fix_files = ", ".join(p.name for p in locked)
+    return CheckResult(
+        "Resume file locks", FAIL,
+        f"file in use: {first}{extra}",
+        fix=f"Close {fix_files} in Word/your editor and retry.",
+    )
+
+
 def check_answers_file() -> CheckResult:
     from auto_applier.config import ANSWERS_FILE
 
@@ -484,6 +516,7 @@ async def _run_all() -> list[CheckResult]:
         check_env_file,
         check_user_config,
         check_resumes_loaded,
+        check_resume_files_unlocked,
         check_answers_file,
         check_gemini_key,
         check_playwright,

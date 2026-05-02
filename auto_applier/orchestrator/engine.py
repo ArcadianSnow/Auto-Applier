@@ -203,6 +203,36 @@ class ApplicationEngine:
         self.pending_review = []
         self.events.emit(RUN_STARTED, dry_run=self.dry_run)
 
+        # Preflight: refuse to start if any resume file is locked by
+        # another process (typically Word / Excel keeping an exclusive
+        # read lock open). Same shape as `cli doctor`'s
+        # check_resume_files_unlocked, mirrored here so a user who
+        # skips doctor still gets a fail-fast message instead of a
+        # mid-run crash. Must run BEFORE self.start() so we don't
+        # spin up the browser only to abort.
+        try:
+            from auto_applier.resume.manager import find_locked_resume_files
+            locked_resumes = find_locked_resume_files()
+        except Exception as exc:
+            logger.debug("Resume lock preflight check raised: %s", exc)
+            locked_resumes = []
+        if locked_resumes:
+            names = ", ".join(p.name for p in locked_resumes)
+            logger.error(
+                "Resume file in use: %s — close it in Word/your editor "
+                "and retry. Aborting before browser launch.",
+                names,
+            )
+            self.events.emit(
+                RUN_FINISHED,
+                reason=f"Resume file in use: {names}",
+                applied=0,
+                skipped=0,
+                failed=0,
+                dry_run=self.dry_run,
+            )
+            return
+
         try:
             await self.start()
             self._apply_fast_mode()
