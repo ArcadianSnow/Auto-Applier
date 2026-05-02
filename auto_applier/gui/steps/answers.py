@@ -4,7 +4,7 @@ import json
 import re
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from auto_applier.config import ANSWERS_FILE, UNANSWERED_FILE
 from auto_applier.gui.styles import (
@@ -134,6 +134,9 @@ class AnswersStep(ttk.Frame):
                 highlightthickness=1, padx=20, pady=16,
             )
             new_card.pack(fill="x", padx=4, pady=4)
+            # Stash the card frame + count label so the per-row delete
+            # handler can update them when entries are removed.
+            self._unanswered_card = new_card
 
             header_row = tk.Frame(new_card, bg=BG_CARD)
             header_row.pack(fill="x", pady=(0, 12))
@@ -144,16 +147,150 @@ class AnswersStep(ttk.Frame):
                 font=FONT_SUBHEADING, fg=WARNING, bg=BG_CARD,
             ).pack(side="left")
 
-            tk.Label(
+            self._unanswered_count_label = tk.Label(
                 header_row,
                 text=f"  ({len(unanswered)} new)",
                 font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD,
-            ).pack(side="left")
+            )
+            self._unanswered_count_label.pack(side="left")
+
+            # Bulk-clear button — for when a user just wants to nuke
+            # the whole suggested-questions list. Confirmation guards
+            # against fat-finger clears.
+            ttk.Button(
+                header_row,
+                text="Clear all",
+                command=self._clear_all_unanswered,
+            ).pack(side="right")
 
             for question in unanswered:
                 self._add_question_row(
                     new_card, question, "entry", None, saved,
+                    deletable=True,
                 )
+
+    # ------------------------------------------------------------------
+    # Delete-question handlers (only fire for unanswered/new rows)
+    # ------------------------------------------------------------------
+
+    def _delete_unanswered(
+        self, question: str, row_widget: tk.Widget,
+    ) -> None:
+        """Remove a single question from unanswered.json + the UI.
+
+        Confirms first because the user may have meant to click "?"
+        (AI assist) instead. Cleans the wizard's answer_vars mapping
+        too so the eventual save doesn't ressurrect the entry.
+        """
+        if not messagebox.askyesno(
+            "Remove question?",
+            f"Remove this question from your saved list?\n\n"
+            f"  {question[:200]}\n\n"
+            "It won't appear in this wizard again unless a future "
+            "application encounters it.",
+        ):
+            return
+        self._remove_unanswered_from_disk([question])
+        # Forget the StringVar so save_to_config doesn't write it back.
+        self.wizard.answer_vars.pop(question, None)
+        try:
+            row_widget.destroy()
+        except Exception:
+            pass
+        self._refresh_unanswered_count()
+
+    def _clear_all_unanswered(self) -> None:
+        """Wipe data/unanswered.json + remove every new-question row."""
+        try:
+            current = self._load_unanswered()
+        except Exception:
+            current = []
+        if not current:
+            return
+        if not messagebox.askyesno(
+            "Clear all suggested questions?",
+            f"Remove all {len(current)} suggested questions from your "
+            "list?\n\nThey'll only reappear if future applications "
+            "encounter them.",
+        ):
+            return
+        self._remove_unanswered_from_disk(current)
+        # Drop StringVars for the cleared questions so they don't
+        # round-trip back into answers.json on save.
+        for q in current:
+            self.wizard.answer_vars.pop(q, None)
+        # Destroy the entire new-questions card so the section
+        # disappears cleanly. Reload-and-rebuild would also work but
+        # is heavier and would lose scroll position.
+        card = getattr(self, "_unanswered_card", None)
+        if card is not None:
+            try:
+                card.destroy()
+            except Exception:
+                pass
+
+    def _remove_unanswered_from_disk(self, questions: list[str]) -> None:
+        """Delete listed questions from data/unanswered.json.
+
+        Tolerates the file being a flat list, a {questions: [...]}
+        wrapped dict, or a list of {question, ...} entry dicts —
+        same shapes _load_unanswered handles.
+        """
+        if not UNANSWERED_FILE.exists():
+            return
+        try:
+            with open(UNANSWERED_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return
+        target = {q.strip() for q in questions if q.strip()}
+
+        if isinstance(data, list):
+            cleaned: list = []
+            for item in data:
+                if isinstance(item, str):
+                    if item.strip() not in target:
+                        cleaned.append(item)
+                elif isinstance(item, dict):
+                    q = str(item.get("question", "")).strip()
+                    if q and q not in target:
+                        cleaned.append(item)
+                else:
+                    cleaned.append(item)
+            payload: object = cleaned
+        elif isinstance(data, dict) and "questions" in data:
+            qs = data.get("questions") or []
+            cleaned = []
+            for item in qs:
+                if isinstance(item, dict):
+                    q = str(item.get("question", "")).strip()
+                    if q and q not in target:
+                        cleaned.append(item)
+                elif isinstance(item, str):
+                    if item.strip() not in target:
+                        cleaned.append(item)
+                else:
+                    cleaned.append(item)
+            payload = {"questions": cleaned}
+        else:
+            return
+
+        try:
+            with open(UNANSWERED_FILE, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+        except OSError:
+            pass
+
+    def _refresh_unanswered_count(self) -> None:
+        """Update the "(N new)" label after a per-row delete."""
+        lbl = getattr(self, "_unanswered_count_label", None)
+        if lbl is None:
+            return
+        try:
+            remaining = self._load_unanswered()
+            lbl.configure(text=f"  ({len(remaining)} new)")
+        except Exception:
+            pass
 
     def _add_question_row(
         self,
@@ -162,8 +299,17 @@ class AnswersStep(ttk.Frame):
         input_type: str,
         options: list[str] | None,
         saved: dict[str, str],
+        deletable: bool = False,
     ) -> None:
-        """Add a single question + input row."""
+        """Add a single question + input row.
+
+        ``deletable=True`` adds a ✕ button so the user can remove a
+        question from data/unanswered.json. The base wizard questions
+        (``QUESTIONS``) are NOT deletable — they're seeded into the
+        wizard structurally and removing them would only leave them
+        re-rendered next launch. Only the "New Questions from Recent
+        Applications" section uses ``deletable=True``.
+        """
         row = tk.Frame(parent, bg=BG_CARD)
         row.pack(fill="x", pady=(0, 10))
 
@@ -211,6 +357,17 @@ class AnswersStep(ttk.Frame):
             input_row, text="?", width=3,
             command=lambda q=question, v=var: self._open_answer_assist(q, v),
         ).pack(side="left", padx=(8, 0))
+
+        if deletable:
+            # Small ✕ to remove the row + its entry from
+            # data/unanswered.json. Confirmation lives in the handler
+            # so a fat-finger click on a row near "?" doesn't lose
+            # data silently.
+            ttk.Button(
+                input_row, text="✕", width=3,
+                command=lambda q=question, r=row:
+                    self._delete_unanswered(q, r),
+            ).pack(side="left", padx=(4, 0))
 
         # Store the variable on the wizard for later retrieval
         self.wizard.answer_vars[question] = var
