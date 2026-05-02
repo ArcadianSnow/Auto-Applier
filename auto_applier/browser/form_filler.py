@@ -261,7 +261,7 @@ class FormFiller:
     # ------------------------------------------------------------------
 
     async def _field_already_has_value(self, field: FormField) -> bool:
-        """True if the input already has a non-empty value.
+        """True if the input already has a non-empty AND VALID value.
 
         Job sites that know the user (LinkedIn, Indeed with an account)
         pre-fill many fields from the stored profile. Re-typing those
@@ -272,18 +272,75 @@ class FormFiller:
           re-triggers async validation
         - Wasting time on fields that already pass
 
-        Skip anything that already reads non-empty. Only non-text
-        inputs (radio, checkbox, select) bypass this check — their
-        "value" semantics are different and their pre-fill detection
-        lives inside each handler.
+        EXCEPTION: phone/tel-shaped fields. Live run 2026-05-02 had
+        Indeed pre-fill the phone with an invalid 8-digit value
+        ("+1 15550100", 11 chars total). Our skip-if-non-empty logic
+        accepted it; Continue refused; form sat stuck across every
+        Indeed apply for the rest of the session because every job's
+        contact-info step inherited the same bad pre-fill from the
+        user's Indeed profile. For tel-shaped fields, only treat
+        pre-fill as valid when the value has at least 10 digits
+        (US/CA local + country code minimum). Anything shorter is
+        garbage and we should overwrite with our profile value.
+
+        Other text fields keep the simple non-empty rule — being
+        defensive about phone validity but trusting other pre-fills.
         """
         if field.field_type not in ("text", "textarea"):
             return False
         try:
             value = await field.element.input_value()
-            return bool(value and value.strip())
         except Exception:
             return False
+        if not (value and value.strip()):
+            return False
+
+        # Phone/tel-shaped field — apply the digit-count check.
+        if await self._is_phone_shaped(field):
+            digits = sum(1 for c in value if c.isdigit())
+            if digits < 10:
+                logger.info(
+                    "Pre-filled phone field has only %d digits "
+                    "(value=%r) — overwriting with profile value",
+                    digits, value[:30],
+                )
+                return False
+            # 10+ digits = trust the pre-fill (could be the user's
+            # real number with formatting we'd otherwise wreck).
+        return True
+
+    @staticmethod
+    async def _is_phone_shaped(field: FormField) -> bool:
+        """True when the field is clearly a telephone input.
+
+        Checks (any one wins):
+          - input type=tel
+          - name attribute contains "phone" / "tel" / "mobile"
+          - id contains those tokens
+          - aria-label contains those tokens
+          - inputmode=tel
+        Cheap — single JS evaluate to inspect attributes.
+        """
+        try:
+            attrs = await field.element.evaluate(
+                """(el) => ({
+                    type: (el.type || '').toLowerCase(),
+                    name: (el.name || '').toLowerCase(),
+                    id: (el.id || '').toLowerCase(),
+                    aria: (el.getAttribute('aria-label') || '').toLowerCase(),
+                    inputmode: (el.getAttribute('inputmode') || '').toLowerCase(),
+                })"""
+            )
+        except Exception:
+            return False
+        if attrs.get("type") == "tel":
+            return True
+        if attrs.get("inputmode") == "tel":
+            return True
+        bag = " ".join(
+            attrs.get(k, "") for k in ("name", "id", "aria")
+        )
+        return any(kw in bag for kw in ("phone", "mobile", "telephone", "tel"))
 
     async def fill_field(
         self, page: Page, field: FormField, job_id: str = ""
