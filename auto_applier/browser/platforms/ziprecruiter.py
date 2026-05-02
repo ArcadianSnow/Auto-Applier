@@ -1065,6 +1065,16 @@ class ZipRecruiterPlatform(JobPlatform):
                 job.job_id,
             )
 
+            # Recover from ZR's exit-confirmation popup. When ANYTHING
+            # tries to close the apply iframe (errant mouse hover from
+            # simulate_organic_behavior, accidental click on the X,
+            # etc.) ZR shows a popup with "Continue Application" /
+            # "Save & Exit". User reported the walker sitting on this
+            # popup repeatedly. Detect + click "Continue Application"
+            # to recover so the form walker can keep going. Best-
+            # effort, runs every step in case the popup re-appears.
+            await self._recover_from_exit_popup(page)
+
             await self.check_and_abort_on_captcha(page)
 
             # Handle resume upload on this step
@@ -1347,6 +1357,84 @@ class ZipRecruiterPlatform(JobPlatform):
             success=False,
             failure_reason=f"Exceeded maximum form steps ({MAX_FORM_STEPS})",
         )
+
+    async def _recover_from_exit_popup(self, page: Page) -> bool:
+        """Detect ZR's "Continue Application / Save & Exit" popup and
+        click "Continue Application" to dismiss it.
+
+        ZR's apply iframe shows this confirmation popup whenever
+        anything tries to close the iframe — errant clicks from
+        simulate_organic_behavior, the user accidentally hitting
+        the X, browser-side navigation events, etc. User reported
+        the walker repeatedly sitting on this popup mid-apply.
+
+        Recovery: always click "Continue Application" to keep the
+        apply flow alive. Best-effort, returns True if a popup was
+        found and dismissed, False otherwise. Runs at the top of
+        every form-step iteration so a popup that re-appears is
+        handled within one cycle.
+        """
+        # Only fire if the popup is actually present. Cheap query:
+        # look for the distinctive "Save & Exit" button text — it's
+        # present on this specific popup and rare elsewhere.
+        try:
+            exit_btn = await page.query_selector(
+                "button:has-text('Save & Exit'), "
+                "button:has-text('Save and Exit')"
+            )
+        except Exception:
+            exit_btn = None
+        if not exit_btn:
+            return False
+        try:
+            if not await exit_btn.is_visible():
+                return False
+        except Exception:
+            return False
+
+        # Popup is showing. Click "Continue Application" to dismiss
+        # and stay in the apply flow.
+        for sel in (
+            "button:has-text('Continue Application')",
+            "button:has-text('Continue application')",
+            "button:has-text('Continue')",
+        ):
+            try:
+                btn = await page.query_selector(sel)
+                if not btn:
+                    continue
+                if not await btn.is_visible():
+                    continue
+                logger.info(
+                    "ZipRecruiter: dismissing exit-confirmation "
+                    "popup via %s",
+                    sel,
+                )
+                try:
+                    await btn.click(timeout=3000)
+                except Exception:
+                    try:
+                        await btn.click(force=True, timeout=2000)
+                    except Exception:
+                        continue
+                # Brief settle so the popup actually closes before
+                # the form scan runs.
+                try:
+                    await random_delay(0.4, 1.0)
+                except Exception:
+                    await asyncio.sleep(0.6)
+                return True
+            except Exception:
+                continue
+
+        # Found the popup but couldn't find / click Continue —
+        # log the diagnostic so we can extend selectors next time.
+        logger.warning(
+            "ZipRecruiter: exit-confirmation popup detected but "
+            "no 'Continue Application' button matched our "
+            "selectors. Walker may stall.",
+        )
+        return False
 
     async def _check_required_persistence(
         self, real_fields: list, job_id: str, step: int,
