@@ -331,7 +331,19 @@ def cli():
 @cli.command()
 @click.option("--dry-run", is_flag=True, help="Don't submit applications")
 @click.option("--platform", default=None, help="Run only on a specific platform")
-@click.option("--limit", default=0, type=int, help="Max applications this session")
+@click.option(
+    "--limit", default=0, type=int,
+    help="Cap applications this session. RESTRICTS only — cannot raise "
+         "the daily cap. If --limit is greater than max_applications_per_day "
+         "in your config, the daily cap wins. Use --no-daily-cap to remove "
+         "the daily cap entirely.",
+)
+@click.option(
+    "--no-daily-cap", is_flag=True,
+    help="Ignore max_applications_per_day for this session (treat as "
+         "infinite). Combine with --limit to set a session-only cap. "
+         "Use carefully: a high run rate flags Indeed accounts as bots.",
+)
 @click.option("--continuous", is_flag=True,
               help="Loop the pipeline on a cadence instead of running once. "
                    "Uses continuous_cycle_delay_min/max from user_config.json.")
@@ -341,7 +353,10 @@ def cli():
               help="Active-hours window for --continuous (e.g. '09:00-22:00'). "
                    "Outside this window the loop idles — browser stays warm, "
                    "refinement prompts still fire.")
-def run(dry_run, platform, limit, continuous, max_cycles, active_hours):
+def run(
+    dry_run, platform, limit, no_daily_cap,
+    continuous, max_cycles, active_hours,
+):
     """Run the job application pipeline."""
     from auto_applier.log_setup import start_run_logging
     log_path = start_run_logging()
@@ -353,8 +368,43 @@ def run(dry_run, platform, limit, continuous, max_cycles, active_hours):
     if platform:
         config["enabled_platforms"] = [platform]
 
-    if limit > 0:
-        config["max_applications_per_day"] = limit
+    # Resolve the effective per-platform cap for this session.
+    #
+    # Old behavior was a hard override: --limit 5 raised the cap to 5
+    # regardless of user_config.json. That accidentally let `--limit`
+    # punch through the user's intended daily limit and submitted 3+
+    # applications during a session where the wizard cap was 3.
+    #
+    # New rules:
+    #   --no-daily-cap         → cap = limit (or unlimited if no limit)
+    #   --limit N (without flag) → cap = min(N, daily_cap)
+    #   --limit 0 (default)    → cap = daily_cap (no change)
+    #
+    # Intent: --limit can ONLY restrict. To raise above daily_cap, the
+    # user must consciously opt out of the cap with --no-daily-cap.
+    from auto_applier.config import MAX_APPLICATIONS_PER_DAY
+    daily_cap = int(
+        config.get("max_applications_per_day", MAX_APPLICATIONS_PER_DAY)
+    )
+    if no_daily_cap:
+        # 1_000_000 stands in for "infinite" without changing the int
+        # contract everywhere downstream that expects a number.
+        effective_cap = limit if limit > 0 else 1_000_000
+        click.echo(
+            f"--no-daily-cap: ignoring daily cap; session cap = "
+            f"{'unlimited' if effective_cap == 1_000_000 else effective_cap}"
+        )
+    elif limit > 0:
+        effective_cap = min(limit, daily_cap)
+        if limit > daily_cap:
+            click.echo(
+                f"--limit {limit} > daily cap {daily_cap}; using "
+                f"{daily_cap}. Use --no-daily-cap to override.",
+                err=True,
+            )
+    else:
+        effective_cap = daily_cap
+    config["max_applications_per_day"] = effective_cap
 
     # Continuous-mode flags override user_config.json for this run only.
     if continuous:
