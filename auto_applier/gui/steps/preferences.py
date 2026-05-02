@@ -1,4 +1,6 @@
 """Step 5: Job search preferences."""
+import asyncio
+import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -146,10 +148,20 @@ class PreferencesStep(ttk.Frame):
             kw_row, text="Type one or more, separated by commas.",
             font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
         ).pack(anchor="w")
+
+        # Entry + AI-assist button on the same line. Entry expands
+        # to fill, button hugs the right edge so the layout matches
+        # the existing "input field with action" pattern in resumes.py.
+        kw_input_row = tk.Frame(kw_row, bg=BG_CARD)
+        kw_input_row.pack(fill="x", pady=(4, 0))
         ttk.Entry(
-            kw_row, textvariable=self.wizard.data["search_keywords"],
-            font=FONT_BODY, width=60,
-        ).pack(fill="x", pady=(4, 0))
+            kw_input_row, textvariable=self.wizard.data["search_keywords"],
+            font=FONT_BODY,
+        ).pack(side="left", fill="x", expand=True)
+        ttk.Button(
+            kw_input_row, text="Suggest related titles",
+            command=self._open_title_suggester,
+        ).pack(side="left", padx=(8, 0))
 
         # Location
         loc_row = tk.Frame(search_card, bg=BG_CARD)
@@ -343,3 +355,247 @@ class PreferencesStep(ttk.Frame):
             )
             return False
         return True
+
+    # ------------------------------------------------------------------
+    # Feature A — AI-assisted job-title suggestions
+    # ------------------------------------------------------------------
+
+    def _open_title_suggester(self) -> None:
+        """Open the modal that asks the LLM for adjacent job titles."""
+        TitleSuggesterDialog(self, self.wizard.data["search_keywords"])
+
+
+class TitleSuggesterDialog(tk.Toplevel):
+    """Modal popup: enter a seed title, get AI-suggested adjacents.
+
+    Calls :data:`auto_applier.llm.prompts.TITLE_EXPANSION` directly via
+    ``LLMRouter.complete_json`` on a background thread so the wizard
+    UI never blocks. Lifted out of the engine path on purpose — the
+    engine's expansion routine couples to ``ResumeManager`` and the
+    cycle cache, neither of which the wizard owns.
+
+    Selected suggestions are appended to the existing search-keywords
+    StringVar in the wizard's existing comma-separated format.
+    """
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        target_var: tk.StringVar,
+    ) -> None:
+        super().__init__(parent)
+        self._target_var = target_var
+        self._suggestions: list[str] = []
+
+        self.title("Suggest related job titles")
+        self.configure(bg=BG)
+        self.geometry("520x460")
+        self.minsize(420, 360)
+
+        self._build_ui()
+
+        # Modal-grab pattern matching JobReviewPanel / AlmostPanel.
+        self.transient(parent)
+        self.grab_set()
+        self.focus_set()
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        # Focus the input on open so the user can start typing
+        # immediately. after_idle ensures the widget exists.
+        self.after_idle(self._seed_entry.focus_set)
+
+    def _build_ui(self) -> None:
+        ttk.Label(
+            self, text="Suggest related job titles",
+            style="Heading.TLabel",
+        ).pack(anchor="w", padx=PAD_X, pady=(PAD_Y, 4))
+
+        ttk.Label(
+            self,
+            text=(
+                "Enter a job title you're targeting. The AI will "
+                "suggest adjacent / lateral titles you'd qualify "
+                "for at the same seniority level."
+            ),
+            style="Small.TLabel",
+            wraplength=460, justify="left",
+        ).pack(anchor="w", padx=PAD_X, pady=(0, PAD_Y))
+
+        # Seed input row
+        seed_row = tk.Frame(self, bg=BG)
+        seed_row.pack(fill="x", padx=PAD_X, pady=(0, 8))
+        tk.Label(
+            seed_row, text="Job title:", font=FONT_BODY,
+            bg=BG, fg=TEXT,
+        ).pack(side="left")
+        self._seed_var = tk.StringVar()
+        self._seed_entry = ttk.Entry(
+            seed_row, textvariable=self._seed_var,
+            font=FONT_BODY,
+        )
+        self._seed_entry.pack(side="left", fill="x", expand=True, padx=(8, 8))
+        self._generate_btn = ttk.Button(
+            seed_row, text="Generate",
+            style="Primary.TButton",
+            command=self._on_generate,
+        )
+        self._generate_btn.pack(side="left")
+
+        # Pressing Enter in the entry triggers Generate
+        self._seed_entry.bind("<Return>", lambda _e: self._on_generate())
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+        # Listbox of suggestions
+        list_card = tk.Frame(
+            self, bg=BG_CARD, highlightbackground=BORDER,
+            highlightthickness=1,
+        )
+        list_card.pack(fill="both", expand=True, padx=PAD_X, pady=(8, 8))
+
+        list_inner = tk.Frame(list_card, bg=BG_CARD)
+        list_inner.pack(fill="both", expand=True, padx=8, pady=8)
+
+        self._listbox = tk.Listbox(
+            list_inner,
+            selectmode="extended",
+            font=FONT_BODY,
+            bg=BG_CARD, fg=TEXT,
+            highlightthickness=0, bd=0,
+            activestyle="dotbox",
+        )
+        sb = ttk.Scrollbar(
+            list_inner, orient="vertical",
+            command=self._listbox.yview,
+        )
+        self._listbox.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self._listbox.pack(side="left", fill="both", expand=True)
+
+        # Action buttons
+        btn_row = tk.Frame(self, bg=BG)
+        btn_row.pack(fill="x", padx=PAD_X, pady=(0, PAD_Y))
+        self._add_btn = ttk.Button(
+            btn_row, text="Add selected",
+            style="Primary.TButton",
+            command=self._on_add_selected,
+            state="disabled",
+        )
+        self._add_btn.pack(side="left")
+        ttk.Button(
+            btn_row, text="Cancel",
+            command=self.destroy,
+        ).pack(side="right")
+
+    # ------------------------------------------------------------------
+    # Generation (background thread + marshal back via after())
+    # ------------------------------------------------------------------
+
+    def _on_generate(self) -> None:
+        seed = self._seed_var.get().strip()
+        if not seed:
+            self._show_status_in_listbox("Enter a job title first.")
+            return
+
+        self._generate_btn.configure(state="disabled")
+        self._add_btn.configure(state="disabled")
+        self._show_status_in_listbox("Generating...")
+
+        threading.Thread(
+            target=self._worker, args=(seed,), daemon=True,
+        ).start()
+
+    def _worker(self, seed: str) -> None:
+        # Lazy import to mirror the established pattern in
+        # panels/almost.py — keeps GUI startup snappy.
+        from auto_applier.llm.prompts import TITLE_EXPANSION
+        from auto_applier.llm.router import LLMRouter
+
+        async def run() -> tuple[bool, list[str]]:
+            router = LLMRouter()
+            await router.initialize()
+            prompt = TITLE_EXPANSION.format(
+                seed_title=seed,
+                resume_text="(not provided)",
+            )
+            try:
+                result = await router.complete_json(
+                    prompt=prompt,
+                    system_prompt=TITLE_EXPANSION.system,
+                )
+            except Exception:
+                return (False, [])
+            raw = result.get("adjacents") or result.get("titles") or []
+            cleaned: list[str] = []
+            seen: set[str] = {seed.strip().lower()}
+            if isinstance(raw, list):
+                for item in raw:
+                    if not isinstance(item, str):
+                        continue
+                    item = item.strip()
+                    if not item:
+                        continue
+                    key = item.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    cleaned.append(item)
+            return (True, cleaned[:10])
+
+        try:
+            ok, titles = asyncio.run(run())
+        except Exception:
+            ok, titles = False, []
+
+        self.after(0, lambda: self._on_worker_done(ok, titles))
+
+    def _on_worker_done(self, ok: bool, titles: list[str]) -> None:
+        try:
+            self._generate_btn.configure(state="normal")
+        except tk.TclError:
+            return  # window already closed
+        if not ok:
+            self._show_status_in_listbox(
+                "Couldn't get suggestions — is Ollama running? "
+                "Check `cli doctor`.",
+            )
+            return
+        if not titles:
+            self._show_status_in_listbox(
+                "No suggestions returned for that title.",
+            )
+            return
+        self._suggestions = titles
+        self._listbox.delete(0, tk.END)
+        for t in titles:
+            self._listbox.insert(tk.END, t)
+        self._add_btn.configure(state="normal")
+
+    def _show_status_in_listbox(self, msg: str) -> None:
+        self._suggestions = []
+        self._listbox.delete(0, tk.END)
+        self._listbox.insert(tk.END, msg)
+
+    # ------------------------------------------------------------------
+    # Append selected suggestions to the search-keywords field
+    # ------------------------------------------------------------------
+
+    def _on_add_selected(self) -> None:
+        selected_indices = self._listbox.curselection()
+        if not selected_indices:
+            return
+        picks = [self._suggestions[i] for i in selected_indices
+                 if 0 <= i < len(self._suggestions)]
+        if not picks:
+            return
+
+        # Merge with whatever's already in the field, deduped, comma-sep.
+        existing_raw = self._target_var.get().strip()
+        existing = [
+            t.strip() for t in existing_raw.split(",") if t.strip()
+        ]
+        seen_lower = {t.lower() for t in existing}
+        for pick in picks:
+            if pick.lower() not in seen_lower:
+                existing.append(pick)
+                seen_lower.add(pick.lower())
+        self._target_var.set(", ".join(existing))
+        self.destroy()

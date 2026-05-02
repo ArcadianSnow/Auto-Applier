@@ -162,6 +162,17 @@ def make_scrollable(parent: tk.Widget) -> tuple[tk.Canvas, ttk.Frame]:
 
     Returns (canvas, inner_frame).  Pack widgets into inner_frame.
     The canvas fills *parent* and scrolls vertically.
+
+    Wheel scrolling is bound per-canvas (NOT global) — the previous
+    ``bind_all`` made the last-mounted scrollable area steal wheel
+    events from every other step / panel in the app, so wheel only
+    worked on whichever wizard step was rendered last. Now each
+    canvas binds the wheel only while the pointer is over it.
+
+    Tab-into-view: any widget that gains focus inside ``inner`` is
+    scrolled into the visible viewport. Without this, tabbing to a
+    text field below the fold leaves the cursor invisible until the
+    user reaches for the mouse.
     """
     canvas = tk.Canvas(parent, bg=BG, highlightthickness=0, bd=0)
     scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
@@ -179,11 +190,81 @@ def make_scrollable(parent: tk.Widget) -> tuple[tk.Canvas, ttk.Frame]:
     inner.bind("<Configure>", _on_configure)
     canvas.bind("<Configure>", _on_configure)
 
-    # Mouse wheel scrolling
+    # ------------------------------------------------------------------
+    # Wheel scrolling — per-canvas, scoped to pointer-hover. Windows /
+    # macOS deliver <MouseWheel> with event.delta in 120-unit ticks;
+    # Linux uses <Button-4> / <Button-5>.
+    # ------------------------------------------------------------------
     def _on_mousewheel(event):
-        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        if hasattr(event, "delta") and event.delta:
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        else:
+            # Linux click-wheel events
+            canvas.yview_scroll(-1 if event.num == 4 else 1, "units")
 
-    canvas.bind_all("<MouseWheel>", _on_mousewheel)
+    def _bind_wheel(_e=None):
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind_all("<Button-4>", _on_mousewheel)
+        canvas.bind_all("<Button-5>", _on_mousewheel)
+
+    def _unbind_wheel(_e=None):
+        canvas.unbind_all("<MouseWheel>")
+        canvas.unbind_all("<Button-4>")
+        canvas.unbind_all("<Button-5>")
+
+    # Bind wheel only while pointer is over THIS canvas's visible
+    # area, so two scrollable surfaces never fight over events.
+    canvas.bind("<Enter>", _bind_wheel)
+    canvas.bind("<Leave>", _unbind_wheel)
+    inner.bind("<Enter>", _bind_wheel)
+    inner.bind("<Leave>", _unbind_wheel)
+
+    # ------------------------------------------------------------------
+    # Tab-into-view — when a child widget gets focus (typically via
+    # Tab), make sure it's actually visible. Without this, tabbing
+    # past the fold puts the focused entry behind the bottom edge
+    # and the user has no idea where the cursor went.
+    # ------------------------------------------------------------------
+    def _scroll_focused_into_view(event):
+        # Only react if the focused widget is a descendant of our inner.
+        widget = event.widget
+        try:
+            cur = widget
+            while cur is not None and cur is not inner:
+                cur = cur.master
+            if cur is not inner:
+                return
+        except Exception:
+            return
+        try:
+            # widget position relative to canvas
+            wy = widget.winfo_rooty() - canvas.winfo_rooty()
+            wh = widget.winfo_height()
+            ch = canvas.winfo_height()
+            if ch <= 0:
+                return
+            scroll_top, scroll_bottom = canvas.yview()
+            inner_h = max(inner.winfo_height(), 1)
+            # Convert pixel-space to fraction-space
+            top_frac = (wy / inner_h) + scroll_top
+            bot_frac = ((wy + wh) / inner_h) + scroll_top
+            if wy < 0:
+                # Widget is above the viewport — scroll up so its top
+                # is at the viewport top (with a small padding).
+                target = max(top_frac - 0.02, 0.0)
+                canvas.yview_moveto(target)
+            elif wy + wh > ch:
+                # Widget is below the viewport — scroll down so its
+                # bottom is at the viewport bottom (with padding).
+                visible_frac = ch / inner_h
+                target = min(bot_frac - visible_frac + 0.02, 1.0)
+                canvas.yview_moveto(target)
+        except Exception:
+            pass
+
+    # bind_class would catch every TEntry / TCombobox in the app; we
+    # restrict to inner via the descendant-check inside the handler.
+    inner.bind_all("<FocusIn>", _scroll_focused_into_view, add="+")
 
     scrollbar.pack(side="right", fill="y")
     canvas.pack(side="left", fill="both", expand=True)

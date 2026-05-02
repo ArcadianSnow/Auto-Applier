@@ -35,7 +35,12 @@ class WizardApp(tk.Tk):
 
         self.title("Auto Applier v2")
         self.configure(bg=BG)
-        self.resizable(False, False)
+        # Resizable + maximizable. Previously locked at 980x820 which
+        # forced laptop users to scroll inside content frames AND made
+        # the OS maximize button do nothing. Setting a minsize keeps
+        # the layout from collapsing on a half-pinned window.
+        self.resizable(True, True)
+        self.minsize(840, 720)
         self._center_window()
 
         apply_theme(self)

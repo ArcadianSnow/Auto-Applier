@@ -1,11 +1,14 @@
 """Step 7: Pre-configured answers for common application questions."""
+import asyncio
 import json
+import threading
 import tkinter as tk
 from tkinter import ttk
 
 from auto_applier.config import ANSWERS_FILE, UNANSWERED_FILE
 from auto_applier.gui.styles import (
-    BG, BG_CARD, PRIMARY, WARNING, TEXT, TEXT_LIGHT, TEXT_MUTED, BORDER,
+    ACCENT_TEXT, BG, BG_CARD, DANGER_TEXT, PRIMARY, WARNING, TEXT, TEXT_LIGHT,
+    TEXT_MUTED, BORDER,
     FONT_HEADING, FONT_SUBHEADING, FONT_BODY, FONT_SMALL,
     PAD_X, PAD_Y, make_scrollable,
 )
@@ -152,21 +155,42 @@ class AnswersStep(ttk.Frame):
 
         var = tk.StringVar(value=saved.get(question, ""))
 
+        # Input + AI-assist button on a single line. The assist
+        # button is intentionally tiny (single-character glyph) so
+        # it doesn't compete visually with the answer field.
+        input_row = tk.Frame(row, bg=BG_CARD)
+        input_row.pack(fill="x", pady=(4, 0))
+
         if input_type == "dropdown" and options:
             combo = ttk.Combobox(
-                row, textvariable=var, values=options,
+                input_row, textvariable=var, values=options,
                 font=FONT_BODY, width=30, state="readonly",
             )
-            combo.pack(anchor="w", pady=(4, 0))
+            combo.pack(side="left", anchor="w")
         else:
             entry = ttk.Entry(
-                row, textvariable=var,
-                font=FONT_BODY, width=50,
+                input_row, textvariable=var,
+                font=FONT_BODY,
             )
-            entry.pack(fill="x", pady=(4, 0))
+            entry.pack(side="left", fill="x", expand=True)
+
+        ttk.Button(
+            input_row, text="?", width=3,
+            command=lambda q=question, v=var: self._open_answer_assist(q, v),
+        ).pack(side="left", padx=(8, 0))
 
         # Store the variable on the wizard for later retrieval
         self.wizard.answer_vars[question] = var
+
+    # ------------------------------------------------------------------
+    # Feature B — AI-assisted answer validation + suggestion
+    # ------------------------------------------------------------------
+
+    def _open_answer_assist(
+        self, question: str, answer_var: tk.StringVar,
+    ) -> None:
+        """Open the validation + suggestion popup for a single row."""
+        AnswerAssistDialog(self, question, answer_var)
 
     # ------------------------------------------------------------------
     # Persistence helpers
@@ -242,3 +266,287 @@ class AnswersStep(ttk.Frame):
         if isinstance(data, dict):
             return [k for k in data.keys() if isinstance(k, str)]
         return []
+
+
+class AnswerAssistDialog(tk.Toplevel):
+    """Modal popup: validate an answer and propose a resume-grounded one.
+
+    Two LLM calls fire in parallel on a single background thread (one
+    asyncio.run() drives both via ``asyncio.gather``). Each section
+    shows a "Checking..." placeholder until its result lands, then
+    flips to the rendered output. The user can replace their answer
+    with the suggestion via "Use suggested answer".
+    """
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        question: str,
+        answer_var: tk.StringVar,
+    ) -> None:
+        super().__init__(parent)
+        self._question = question
+        self._answer_var = answer_var
+        self._suggested_answer: str = ""
+
+        self.title("AI assist — answer review")
+        self.configure(bg=BG)
+        self.geometry("620x540")
+        self.minsize(460, 420)
+
+        self._build_ui()
+
+        # Modal-grab — match JobReviewPanel / AlmostPanel pattern.
+        self.transient(parent)
+        self.grab_set()
+        self.focus_set()
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.bind("<Escape>", lambda _e: self.destroy())
+        # First focusable control on open is the close/use button —
+        # but the user usually wants to read first, so focus the
+        # window itself so Escape works without a tab.
+        self.after_idle(self.focus_set)
+
+        # Kick off both LLM calls immediately on open.
+        self.after(50, self._start_workers)
+
+    # ------------------------------------------------------------------
+    # Layout
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        # Header — full question text
+        ttk.Label(
+            self, text="Answer review",
+            style="Heading.TLabel",
+        ).pack(anchor="w", padx=PAD_X, pady=(PAD_Y, 4))
+
+        q_card = tk.Frame(
+            self, bg=BG_CARD, highlightbackground=BORDER,
+            highlightthickness=1,
+        )
+        q_card.pack(fill="x", padx=PAD_X, pady=(0, 8))
+        tk.Label(
+            q_card, text="Question:",
+            font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD,
+        ).pack(anchor="w", padx=12, pady=(8, 0))
+        tk.Label(
+            q_card, text=self._question,
+            font=FONT_BODY, fg=TEXT, bg=BG_CARD,
+            wraplength=540, justify="left",
+        ).pack(anchor="w", padx=12, pady=(0, 8))
+
+        # Validation card
+        val_card = tk.Frame(
+            self, bg=BG_CARD, highlightbackground=BORDER,
+            highlightthickness=1,
+        )
+        val_card.pack(fill="x", padx=PAD_X, pady=(0, 8))
+        tk.Label(
+            val_card, text="Validation",
+            font=FONT_SUBHEADING, fg=PRIMARY, bg=BG_CARD,
+        ).pack(anchor="w", padx=12, pady=(8, 4))
+        self._validation_lbl = tk.Label(
+            val_card, text="Checking...",
+            font=FONT_BODY, fg=TEXT_MUTED, bg=BG_CARD,
+            wraplength=540, justify="left",
+        )
+        self._validation_lbl.pack(anchor="w", padx=12, pady=(0, 8))
+
+        # Suggestion card
+        sug_card = tk.Frame(
+            self, bg=BG_CARD, highlightbackground=BORDER,
+            highlightthickness=1,
+        )
+        sug_card.pack(fill="both", expand=True, padx=PAD_X, pady=(0, 8))
+        tk.Label(
+            sug_card, text="Suggested answer",
+            font=FONT_SUBHEADING, fg=PRIMARY, bg=BG_CARD,
+        ).pack(anchor="w", padx=12, pady=(8, 4))
+        self._suggestion_lbl = tk.Label(
+            sug_card, text="Checking...",
+            font=FONT_BODY, fg=TEXT, bg=BG_CARD,
+            wraplength=540, justify="left",
+        )
+        self._suggestion_lbl.pack(anchor="w", padx=12, pady=(0, 4))
+        self._rationale_lbl = tk.Label(
+            sug_card, text="",
+            font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD,
+            wraplength=540, justify="left",
+        )
+        self._rationale_lbl.pack(anchor="w", padx=12, pady=(0, 8))
+
+        # Action buttons
+        btn_row = tk.Frame(self, bg=BG)
+        btn_row.pack(fill="x", padx=PAD_X, pady=(0, PAD_Y))
+        self._use_btn = ttk.Button(
+            btn_row, text="Use suggested answer",
+            style="Primary.TButton",
+            command=self._on_use_suggestion,
+            state="disabled",
+        )
+        self._use_btn.pack(side="left")
+        ttk.Button(
+            btn_row, text="Close",
+            command=self.destroy,
+        ).pack(side="right")
+
+        # Enter on the dialog accepts the suggestion (when ready)
+        self.bind(
+            "<Return>",
+            lambda _e: self._on_use_suggestion()
+            if str(self._use_btn["state"]) == "normal" else None,
+        )
+
+    # ------------------------------------------------------------------
+    # Workers
+    # ------------------------------------------------------------------
+
+    def _start_workers(self) -> None:
+        current_answer = self._answer_var.get()
+        # Capture resume context once on the UI thread — ResumeManager
+        # only needs the router for new adds, but we still construct
+        # it the same way panels/almost.py does for consistency.
+        threading.Thread(
+            target=self._worker,
+            args=(self._question, current_answer),
+            daemon=True,
+        ).start()
+
+    def _worker(self, question: str, current_answer: str) -> None:
+        # Lazy imports — keeps wizard startup snappy.
+        from auto_applier.llm.prompts import (
+            ANSWER_SUGGESTION,
+            ANSWER_VALIDATION,
+        )
+        from auto_applier.llm.router import LLMRouter
+        from auto_applier.resume.manager import ResumeManager
+
+        async def run() -> tuple[dict | None, dict | None]:
+            router = LLMRouter()
+            await router.initialize()
+
+            # Concatenate every loaded resume so the suggestion call
+            # has the full picture. The user's pain point is "do you
+            # have experience with X?" — we want the LLM to scan all
+            # resume text and answer truthfully.
+            try:
+                rm = ResumeManager(router)
+                resumes = rm.list_resumes()
+                resume_chunks: list[str] = []
+                for r in resumes:
+                    text = rm.get_resume_text(r.label)
+                    if text:
+                        resume_chunks.append(f"=== {r.label} ===\n{text}")
+                resume_text = (
+                    "\n\n".join(resume_chunks) if resume_chunks
+                    else "(no resumes loaded)"
+                )
+            except Exception:
+                resume_text = "(no resumes loaded)"
+
+            async def _validate() -> dict | None:
+                try:
+                    return await router.complete_json(
+                        prompt=ANSWER_VALIDATION.format(
+                            question=question,
+                            answer=current_answer or "(empty)",
+                        ),
+                        system_prompt=ANSWER_VALIDATION.system,
+                    )
+                except Exception:
+                    return None
+
+            async def _suggest() -> dict | None:
+                # Truncate resume text — local models choke past ~8k
+                # chars in the prompt body, and we already saw the
+                # equivalent cap in analysis/title_expansion.py.
+                excerpt = resume_text[:8000]
+                try:
+                    return await router.complete_json(
+                        prompt=ANSWER_SUGGESTION.format(
+                            question=question,
+                            resume_text=excerpt,
+                        ),
+                        system_prompt=ANSWER_SUGGESTION.system,
+                    )
+                except Exception:
+                    return None
+
+            return await asyncio.gather(_validate(), _suggest())
+
+        try:
+            validation, suggestion = asyncio.run(run())
+        except Exception:
+            validation, suggestion = None, None
+
+        self.after(0, lambda: self._render_results(validation, suggestion))
+
+    # ------------------------------------------------------------------
+    # UI updates
+    # ------------------------------------------------------------------
+
+    def _render_results(
+        self,
+        validation: dict | None,
+        suggestion: dict | None,
+    ) -> None:
+        try:
+            # Validation
+            if validation is None:
+                self._validation_lbl.configure(
+                    text="Couldn't reach the AI — is Ollama running?",
+                    fg=DANGER_TEXT,
+                )
+            else:
+                valid = bool(validation.get("valid"))
+                issue = str(validation.get("issue") or "").strip()
+                if valid:
+                    self._validation_lbl.configure(
+                        text="✓ Looks good — your saved answer "
+                             "fits the question.",
+                        fg=ACCENT_TEXT,
+                    )
+                else:
+                    msg = "✗ " + (issue or "This answer may not fit.")
+                    self._validation_lbl.configure(
+                        text=msg, fg=DANGER_TEXT,
+                    )
+
+            # Suggestion
+            if suggestion is None:
+                self._suggestion_lbl.configure(
+                    text="Couldn't generate a suggestion.",
+                    fg=DANGER_TEXT,
+                )
+                self._rationale_lbl.configure(text="")
+                return
+
+            answer = str(suggestion.get("answer") or "").strip()
+            rationale = str(suggestion.get("rationale") or "").strip()
+
+            if not answer:
+                self._suggestion_lbl.configure(
+                    text="(no resume-backed suggestion available)",
+                    fg=TEXT_MUTED,
+                )
+                if rationale:
+                    self._rationale_lbl.configure(text=rationale)
+                return
+
+            self._suggested_answer = answer
+            self._suggestion_lbl.configure(text=answer, fg=TEXT)
+            if rationale:
+                self._rationale_lbl.configure(
+                    text=f"Why: {rationale}",
+                )
+            self._use_btn.configure(state="normal")
+        except tk.TclError:
+            # Window already closed — nothing to render into.
+            return
+
+    def _on_use_suggestion(self) -> None:
+        if not self._suggested_answer:
+            return
+        self._answer_var.set(self._suggested_answer)
+        self.destroy()

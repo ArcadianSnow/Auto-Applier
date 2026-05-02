@@ -510,3 +510,66 @@ TITLE_EXPANSION = PromptTemplate(
         "Candidate resume (optional context):\n{resume_text}"
     ),
 )
+
+
+# ------------------------------------------------------------------
+# Answer validation — does the user's current answer fit the question?
+# ------------------------------------------------------------------
+
+ANSWER_VALIDATION = PromptTemplate(
+    system=(
+        "You check whether a candidate's saved answer is in the right "
+        "shape and content for a job-application question. You are NOT "
+        "judging whether the answer is true — only whether it answers "
+        "the question and is in a reasonable format.\n\n"
+        "Examples of INVALID answers:\n"
+        "- Question expects Yes/No, answer is a sentence\n"
+        "- Question asks for a number of years, answer is non-numeric\n"
+        "- Question asks for a date, answer is unparseable\n"
+        "- Answer is empty or obviously a placeholder ('TBD', 'asdf')\n"
+        "- Answer addresses a different question entirely\n\n"
+        "Examples of VALID answers:\n"
+        "- 'Yes' / 'No' to a yes/no question\n"
+        "- An integer to a years-of-experience question\n"
+        "- A short sentence to a free-text question, even if brief\n\n"
+        "If the answer is empty, mark it invalid with issue 'No answer "
+        "saved yet.'\n\n"
+        "Respond ONLY with this JSON (no preamble, no code fences):\n"
+        '{"valid": bool, "issue": str (one short sentence; empty if valid)}'
+    ),
+    template=(
+        "Question: {question}\n\n"
+        "Saved answer: {answer}"
+    ),
+)
+
+
+# ------------------------------------------------------------------
+# Answer suggestion — best answer based on resume(s)
+# ------------------------------------------------------------------
+
+ANSWER_SUGGESTION = PromptTemplate(
+    system=(
+        "Suggest the best honest answer to a job-application question "
+        "for this candidate, using ONLY their resume(s) as ground truth. "
+        "Rules:\n"
+        "- Yes/No: answer 'Yes' only if the resume genuinely supports "
+        "it. For 'Do you have experience with X?' questions, check "
+        "whether X (or a clearly equivalent tool) appears in the resume "
+        "text. If yes, say 'Yes' and mention the closest matching "
+        "experience in the rationale. If not, say 'No' honestly — never "
+        "fabricate experience.\n"
+        "- Years-of-experience: count only years explicitly visible on "
+        "the resume. Return a single integer.\n"
+        "- Free-text: keep the answer concise (one or two short "
+        "sentences) and grounded in resume facts.\n"
+        "- If the resume has no relevant information, return an empty "
+        "string for answer and explain in rationale.\n\n"
+        "Respond ONLY with this JSON (no preamble, no code fences):\n"
+        '{"answer": str, "rationale": str (one sentence why)}'
+    ),
+    template=(
+        "Question: {question}\n\n"
+        "Candidate resume(s):\n{resume_text}"
+    ),
+)
