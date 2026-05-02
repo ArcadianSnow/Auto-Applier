@@ -66,6 +66,17 @@ PERSONAL_INFO_KEYS: dict[str, str] = {
     "country": "country",
     "city": "city",
     "location": "city",
+    # Past-tense / variant phrasings — Indeed and ZR ask "Where are
+    # you located?" and "Current location" which our word-boundary
+    # match on bare "location" missed. ZR live run 2026-05-02 hit
+    # this and fell through to fuzzy answers.json which returned
+    # "Yes" — silently invalid for a city/zip text field.
+    "located": "city_state",
+    "where are you located": "city_state",
+    "current location": "city_state",
+    "where do you live": "city_state",
+    "where are you based": "city_state",
+    "based": "city_state",
     # Work authorization — compound keys first so they beat short ones
     "how are you authorized to work": "work_auth",
     "what is your work authorization": "work_auth",
@@ -1848,6 +1859,39 @@ class FormFiller:
 
         if field.field_type == "number":
             return any(c.isdigit() for c in ans)
+
+        # Location-shaped text fields: "Where are you located?", "City",
+        # "Zip code", "Address" — these expect a place name or postal
+        # code. ZR live run 2026-05-02 fuzzy-matched "Where are you
+        # located?" against answers.json at 60% and got "Yes" — passed
+        # the persistence check (non-empty value) but ZR rejected the
+        # form silently. Reject obviously-bool answers ("Yes"/"No")
+        # for these. Bare 1-3 letter answers also rejected (a real
+        # location should be at least 4 chars: "NYC", "Boston", etc.).
+        if field.field_type in ("text", "textarea"):
+            label_lower = (field.label or "").lower()
+            location_shape = any(
+                kw in label_lower for kw in (
+                    "where are you located",
+                    "current location",
+                    "where do you live",
+                    "where are you based",
+                    "city, state",
+                    "city/state",
+                    "city state",
+                    "zip code",
+                    "postal code",
+                    "address",
+                )
+            )
+            if location_shape:
+                if ans.lower() in ("yes", "no", "y", "n", "true", "false"):
+                    return False
+                # Pure-bool tokens disguised as longer strings ("yes,
+                # i live there") still slip — but a 1-3 char location
+                # is meaningless either way.
+                if len(ans) < 3:
+                    return False
 
         if field.field_type in ("radio", "checkbox"):
             # Reject obvious cross-type contamination: a candidate
