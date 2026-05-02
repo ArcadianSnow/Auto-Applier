@@ -298,6 +298,65 @@ class JobPlatform(ABC):
                         "(likely invisible reCAPTCHA v3 tracker)", sel,
                     )
                     continue
+                # Three additional negative checks to suppress false
+                # fires that the bare visibility check missed:
+                #
+                # 1. Size threshold — a real reCAPTCHA / hCaptcha widget
+                #    is at least ~280x80 (the "I'm not a robot" box) or
+                #    ~600x500 (the image-grid challenge). The
+                #    .grecaptcha-badge corner badge is tiny (~256x60
+                #    horizontal but only a few px when collapsed) and
+                #    flickers visible during navigation. Reject < 60px
+                #    in either dimension.
+                # 2. Badge-class exclusion — element OR ancestor with
+                #    class .grecaptcha-badge / .grecaptcha-logo is the
+                #    "protected by reCAPTCHA" footer mark, never a
+                #    real challenge.
+                # 3. iframe URL — recaptcha iframes whose src doesn't
+                #    contain 'anchor' (the visible checkbox frame) or
+                #    'bframe' (the secondary challenge frame) are v3
+                #    telemetry, never user-solvable.
+                try:
+                    diag = await el.evaluate(
+                        """(el) => {
+                            const r = el.getBoundingClientRect();
+                            const isBadge = !!el.closest(
+                                '.grecaptcha-badge, .grecaptcha-logo'
+                            );
+                            const src = el.getAttribute('src') || '';
+                            return {
+                                w: r.width, h: r.height,
+                                isBadge,
+                                src,
+                            };
+                        }"""
+                    )
+                except Exception:
+                    diag = {}
+                w = diag.get("w") or 0
+                h = diag.get("h") or 0
+                if diag.get("isBadge"):
+                    logger.debug(
+                        "Ignoring grecaptcha badge (footer mark, "
+                        "not a real challenge)",
+                    )
+                    continue
+                if w < 60 or h < 40:
+                    logger.debug(
+                        "Ignoring tiny CAPTCHA-shaped element "
+                        "(%dx%d) — likely a tracker/badge flicker",
+                        int(w), int(h),
+                    )
+                    continue
+                src = diag.get("src") or ""
+                if "recaptcha" in src and not (
+                    "anchor" in src or "bframe" in src
+                ):
+                    logger.debug(
+                        "Ignoring recaptcha iframe with non-challenge "
+                        "src (v3 telemetry): %s", src[:120],
+                    )
+                    continue
                 logger.warning("CAPTCHA detected via selector: %s", sel)
                 return True
             except Exception:

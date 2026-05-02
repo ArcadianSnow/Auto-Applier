@@ -32,10 +32,31 @@ class _FakePlatform(JobPlatform):
     async def apply_to_job(self, job, resume_path, dry_run=False): return None
 
 
-def _fake_element(visible: bool = True):
-    """Build a mock element that supports is_visible()."""
+def _fake_element(
+    visible: bool = True,
+    *,
+    width: int = 320,
+    height: int = 200,
+    is_badge: bool = False,
+    src: str = "https://www.google.com/recaptcha/api2/anchor?x=y",
+):
+    """Build a mock element that supports is_visible() AND evaluate().
+
+    ``evaluate`` returns the diagnostic dict shape that the post-2026-05-02
+    detect_captcha helper expects (size + badge-class + src). Defaults
+    represent a real, full-size reCAPTCHA challenge with an anchor src
+    so existing tests that just want "visible = real CAPTCHA" still
+    return True. Pass ``is_badge=True`` / ``width=1, height=1`` /
+    ``src="..."`` to construct false-fire scenarios.
+    """
     el = MagicMock()
     el.is_visible = AsyncMock(return_value=visible)
+    el.evaluate = AsyncMock(return_value={
+        "w": width,
+        "h": height,
+        "isBadge": is_badge,
+        "src": src,
+    })
     return el
 
 

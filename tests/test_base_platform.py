@@ -242,12 +242,72 @@ class TestDetectCaptcha:
         platform = _make_platform()
         el = AsyncMock()
         el.is_visible = AsyncMock(return_value=True)
+        # New: detect_captcha now runs an additional el.evaluate to
+        # rule out v3 trackers / corner badges / undersized widgets
+        # via size + class + src checks. Mock returns a real-challenge
+        # shape: large size, not a badge, anchor src.
+        el.evaluate = AsyncMock(return_value={
+            "w": 320, "h": 200,
+            "isBadge": False,
+            "src": "https://www.google.com/recaptcha/api2/anchor?...",
+        })
         page = AsyncMock()
         page.url = "https://www.indeed.com/jobs"
         page.query_selector = AsyncMock(return_value=el)
 
         result = asyncio.run(platform.detect_captcha(page))
         assert result is True
+
+    def test_grecaptcha_badge_ignored(self):
+        """The bottom-right 'protected by reCAPTCHA' badge is not a
+        real challenge — false-fire prevention added 2026-05-02."""
+        platform = _make_platform()
+        el = AsyncMock()
+        el.is_visible = AsyncMock(return_value=True)
+        el.evaluate = AsyncMock(return_value={
+            "w": 256, "h": 60,
+            "isBadge": True,
+            "src": "",
+        })
+        page = AsyncMock()
+        page.url = "https://www.indeed.com/jobs"
+        page.query_selector = AsyncMock(return_value=el)
+
+        assert asyncio.run(platform.detect_captcha(page)) is False
+
+    def test_recaptcha_v3_telemetry_iframe_ignored(self):
+        """recaptcha iframe whose src isn't a challenge frame is v3
+        telemetry — should not fire CAPTCHA detection."""
+        platform = _make_platform()
+        el = AsyncMock()
+        el.is_visible = AsyncMock(return_value=True)
+        el.evaluate = AsyncMock(return_value={
+            "w": 100, "h": 100,
+            "isBadge": False,
+            "src": "https://www.google.com/recaptcha/enterprise.js",
+        })
+        page = AsyncMock()
+        page.url = "https://www.indeed.com/jobs"
+        page.query_selector = AsyncMock(return_value=el)
+
+        assert asyncio.run(platform.detect_captcha(page)) is False
+
+    def test_tiny_captcha_shape_ignored(self):
+        """A reCAPTCHA-shaped element under the size threshold is a
+        flickering tracker, not a solvable challenge."""
+        platform = _make_platform()
+        el = AsyncMock()
+        el.is_visible = AsyncMock(return_value=True)
+        el.evaluate = AsyncMock(return_value={
+            "w": 1, "h": 1,
+            "isBadge": False,
+            "src": "https://www.google.com/recaptcha/api2/anchor?...",
+        })
+        page = AsyncMock()
+        page.url = "https://www.indeed.com/jobs"
+        page.query_selector = AsyncMock(return_value=el)
+
+        assert asyncio.run(platform.detect_captcha(page)) is False
 
     def test_invisible_captcha_ignored(self):
         platform = _make_platform()
@@ -288,6 +348,13 @@ class TestCheckAndAbortOnCaptcha:
         platform = _make_platform()
         el = AsyncMock()
         el.is_visible = AsyncMock(return_value=True)
+        # detect_captcha now does an additional el.evaluate to filter
+        # v3 trackers / corner badges / undersized widgets.
+        el.evaluate = AsyncMock(return_value={
+            "w": 320, "h": 200,
+            "isBadge": False,
+            "src": "https://www.google.com/recaptcha/api2/anchor?...",
+        })
         page = AsyncMock()
         page.url = "https://www.indeed.com/jobs"
         page.query_selector = AsyncMock(return_value=el)
