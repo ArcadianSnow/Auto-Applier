@@ -125,19 +125,23 @@ APPLY_BUTTON_SELECTORS = [
     "button[aria-label*='Apply']",
     "button[aria-label*='apply']",
     # Text-based fallbacks — stable across UI rewrites because they
-    # match the rendered text, not the DOM structure. Order matters:
-    # most-specific text first so we don't grab a generic "Apply"
-    # link in a sidebar.
+    # match the rendered text, not the DOM structure. The
+    # "Apply with Indeed" / "Apply now" texts are specific enough to
+    # avoid colliding with sidebar / filter chrome on Indeed's
+    # search-results pages. We DO NOT include a bare ``text-is(
+    # 'Apply')`` selector — that wording can match the "Apply" filter
+    # chip in the saved-search sidebar on some Indeed locales, which
+    # would silently click a no-op (or worse, apply a search filter
+    # and reset the page) and the apply walker would falsely think
+    # it advanced. If the friend ever hits a UI variant where neither
+    # 'Apply with Indeed' nor 'Apply now' is rendered, we'll add a
+    # SCOPED selector targeting the job-detail container, not a bare
+    # text-is.
     "button:has-text('Apply with Indeed')",
     "button:has-text('Apply now')",
     "button:has-text('Apply Now')",
     "a:has-text('Apply with Indeed')",
     "a:has-text('Apply now')",
-    # Last resort — any button whose only text is "Apply" (case
-    # insensitive). The :scope-text trick keeps it from grabbing
-    # buttons that contain "Apply" as part of a longer string.
-    "button:text-is('Apply')",
-    "a:text-is('Apply')",
 ]
 
 # Job description on the detail page
@@ -2065,9 +2069,12 @@ class IndeedPlatform(JobPlatform):
             pass
 
         # Polling loop — up to 15s, 1s cadence.
-        deadline = _asyncio.get_event_loop().time() + 15.0
+        # get_running_loop() is the 3.12+ replacement for the
+        # deprecated get_event_loop() inside coroutines.
+        loop = _asyncio.get_running_loop()
+        deadline = loop.time() + 15.0
         last_url = pre_url
-        while _asyncio.get_event_loop().time() < deadline:
+        while loop.time() < deadline:
             # Strong success signal
             try:
                 if await self._check_success(page):

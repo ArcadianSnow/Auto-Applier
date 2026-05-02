@@ -1083,8 +1083,20 @@ class DicePlatform(JobPlatform):
             if tab_result is not None:
                 # Internal Dice apply opened in a new tab — switch
                 # the page reference so the modal walker reads/clicks
-                # against the right document.
+                # against the right document. Close the original
+                # job-detail tab to prevent unbounded tab growth in
+                # continuous-mode runs (one leak per Dice apply
+                # otherwise — code-review caught this 2026-05-02).
+                original_page = page
                 page = tab_result
+                if original_page is not tab_result:
+                    try:
+                        await original_page.close()
+                    except Exception as exc:
+                        logger.debug(
+                            "Dice: failed to close original "
+                            "job-detail tab: %s", exc,
+                        )
 
             await self.check_and_abort_on_captcha(page)
 

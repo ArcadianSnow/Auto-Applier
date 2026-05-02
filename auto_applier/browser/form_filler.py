@@ -1453,7 +1453,10 @@ class FormFiller:
         import asyncio
         import os
 
-        deadline = asyncio.get_event_loop().time() + max(0.5, timeout)
+        # get_running_loop() is the 3.12+ replacement for the
+        # deprecated get_event_loop() inside coroutines.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.5, timeout)
         stem = ""
         if expected_name:
             stem = os.path.splitext(os.path.basename(expected_name))[0]
@@ -1471,7 +1474,7 @@ class FormFiller:
         ]
 
         # Quick poll loop. Cheap evaluations, ~200ms cadence.
-        while asyncio.get_event_loop().time() < deadline:
+        while loop.time() < deadline:
             # 1. Filename rendered on page?
             if stem and len(stem) >= 3:
                 try:

@@ -1141,9 +1141,12 @@ class ZipRecruiterPlatform(JobPlatform):
                     # the click. Don't return success on a single
                     # check that fires too early.
                     import asyncio as _asyncio
-                    deadline = _asyncio.get_event_loop().time() + 15.0
+                    # get_running_loop() is the 3.12+ replacement for
+                    # the deprecated get_event_loop() inside coroutines.
+                    loop = _asyncio.get_running_loop()
+                    deadline = loop.time() + 15.0
                     pre_url = page.url
-                    while _asyncio.get_event_loop().time() < deadline:
+                    while loop.time() < deadline:
                         if await self._check_success(page):
                             logger.info(
                                 "ZipRecruiter: Submitted application "
