@@ -108,3 +108,9 @@ class ApplyResult:
     fields_filled: int = 0
     fields_total: int = 0
     used_llm: bool = False
+    # When True, the apply path determined the job needs to be applied
+    # for manually on the company's own website (external redirect, no
+    # in-platform apply button). The orchestrator routes these to
+    # status="skipped" so the GUI manual-apply panel surfaces them
+    # rather than burying them in the failed bucket.
+    requires_manual_apply: bool = False

@@ -835,7 +835,8 @@ class DicePlatform(JobPlatform):
                     pass
                 return ApplyResult(
                     success=False,
-                    failure_reason="Easy Apply button not found -- job may require external application",
+                    failure_reason="Manual apply on company site (no Easy Apply button)",
+                    requires_manual_apply=True,
                 )
 
             await random_delay(1.5, 3.0)

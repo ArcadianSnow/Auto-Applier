@@ -842,7 +842,8 @@ class ZipRecruiterPlatform(JobPlatform):
                     pass
                 return ApplyResult(
                     success=False,
-                    failure_reason="Apply button not found",
+                    failure_reason="Manual apply on company site (no Apply button)",
+                    requires_manual_apply=True,
                 )
 
             await random_delay(1.5, 3.0)

@@ -652,7 +652,8 @@ class IndeedPlatform(JobPlatform):
                 )
                 return ApplyResult(
                     success=False,
-                    failure_reason="External application -- redirects to company site",
+                    failure_reason="Manual apply on company site (external link)",
+                    requires_manual_apply=True,
                 )
 
             # Click the Apply / Easy Apply button
@@ -662,7 +663,8 @@ class IndeedPlatform(JobPlatform):
             if not clicked:
                 return ApplyResult(
                     success=False,
-                    failure_reason="Apply button not found -- job may require external application",
+                    failure_reason="Manual apply on company site (no Apply button)",
+                    requires_manual_apply=True,
                 )
 
             await random_delay(1.5, 3.0)
@@ -671,7 +673,8 @@ class IndeedPlatform(JobPlatform):
             if await self._check_external_redirect(page):
                 return ApplyResult(
                     success=False,
-                    failure_reason="Apply click redirected to external site",
+                    failure_reason="Manual apply on company site (external redirect)",
+                    requires_manual_apply=True,
                 )
 
             await self.check_and_abort_on_captcha(page)
@@ -1744,6 +1747,63 @@ class IndeedPlatform(JobPlatform):
                 "Indeed: form not advancing at %s (module=%s) — %s",
                 step_start_url, module, reason,
             )
+            # Structured STUCK_FORM dump: the existing button/field
+            # instrumentation lives next to the click site, but on
+            # multi-call stuck loops only the first attempt's dump
+            # ends up in the log. Emit a single canonical line per
+            # stuck event with everything an audit needs in one
+            # place — URL stage, current URL, module, reason, page
+            # title — so grep "STUCK_FORM" tells the whole story.
+            try:
+                cur_url = page.url
+            except Exception:
+                cur_url = "?"
+            try:
+                title_text = await page.title()
+            except Exception:
+                title_text = "?"
+            stage = (
+                "viewjob"
+                if "/viewjob" in cur_url
+                else "smartapply"
+                if "smartapply" in cur_url
+                else "auth"
+                if "/auth" in cur_url or "/login" in cur_url
+                else "other"
+            )
+            logger.warning(
+                "STUCK_FORM job=%s stage=%s module=%s reason=%r "
+                "url=%s title=%r",
+                job.job_id, stage, module, reason,
+                cur_url, title_text[:80],
+            )
+            # If we never left /viewjob it means the Apply click
+            # didn't navigate. Dump the apply-button candidates so
+            # the next debug session can see whether selectors
+            # missed or the button was disabled.
+            if stage == "viewjob":
+                try:
+                    apply_btns = await page.evaluate("""() => {
+                        return [...document.querySelectorAll('button, a[role=button], [role=button], a[href*=apply]')]
+                            .filter(el => el.offsetParent !== null)
+                            .filter(el => /apply|continue|submit/i.test(el.innerText || ''))
+                            .slice(0, 8)
+                            .map(el => ({
+                                tag: el.tagName,
+                                text: (el.innerText || '').trim().substring(0, 60),
+                                disabled: el.disabled || el.getAttribute('aria-disabled') === 'true',
+                                href: el.getAttribute('href') || '',
+                                testid: el.getAttribute('data-testid') || '',
+                                class: (el.className || '').substring(0, 80),
+                            }));
+                    }""")
+                    import json as _json
+                    logger.warning(
+                        "STUCK_FORM apply-candidates: %s",
+                        _json.dumps(apply_btns)[:1000],
+                    )
+                except Exception:
+                    pass
             return self._build_result(
                 success=False,
                 failure_reason=(

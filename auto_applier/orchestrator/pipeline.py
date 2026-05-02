@@ -272,6 +272,13 @@ async def apply_to_job(
     # actually happened.
     if result.success:
         status = "dry_run" if dry_run else "applied"
+    elif getattr(result, "requires_manual_apply", False):
+        # External-application jobs: site has no in-platform apply
+        # button (Indeed external link, Dice no Easy Apply, etc.).
+        # Route to "skipped" so the GUI manual-apply panel surfaces
+        # them, not the failed bucket — the user CAN apply, just
+        # has to do it manually on the company's website.
+        status = "skipped"
     else:
         status = "failed"
     app = Application(
