@@ -1053,6 +1053,38 @@ class DicePlatform(JobPlatform):
                 "Dice: Easy Apply step %d for %s", step + 1, job.job_id
             )
 
+            # Wait for the apply modal / drawer to actually mount in the
+            # DOM before we scan it. Live runs 2026-05-02 hit "No
+            # navigation button found at step 1" on TWO Dice jobs in a
+            # row because find_form_fields ran on the job-detail page
+            # while the modal was still rendering. Poll for any of:
+            # role=dialog, [aria-modal=true], common modal class names,
+            # or a visible Continue/Next/Submit button anywhere on
+            # the page (the modal's own nav). 8s ceiling — past that
+            # the DOM dump will tell us where the modal actually
+            # lives (shadow DOM, iframe, or somewhere else).
+            try:
+                await page.wait_for_selector(
+                    "[role='dialog']:not([aria-hidden='true']), "
+                    "[aria-modal='true'], "
+                    "[class*='modal'], "
+                    "[class*='Modal'], "
+                    "[class*='dialog'], "
+                    "button[data-testid='next-button'], "
+                    "button[data-testid='submit-application'], "
+                    "button[data-testid='submit-next'], "
+                    "[data-testid*='apply-form']",
+                    state="visible",
+                    timeout=8000,
+                )
+            except Exception:
+                # Don't fail yet — let find_form_fields run on whatever
+                # is on the page. We'll dump diagnostics if it sees 0.
+                logger.debug(
+                    "Dice: no modal-shaped element appeared within 8s; "
+                    "scanning current DOM regardless",
+                )
+
             await self.check_and_abort_on_captcha(page)
 
             # Mid-walk login-gate detection. Dice's bot-detection
@@ -1105,6 +1137,12 @@ class DicePlatform(JobPlatform):
             # Detect and fill form fields
             if self.form_filler:
                 fields = await find_form_fields(page)
+                if not fields:
+                    # 0 fields when we expected a modal full of them =
+                    # the walker is looking at the wrong DOM. Dump the
+                    # page structure so the next diagnosis cycle has
+                    # ground truth: where IS the modal actually living?
+                    await self._dump_dice_modal_shape(page, job, step)
                 for field in fields:
                     await self.form_filler.fill_field(
                         page, field, job_id=job.job_id
@@ -1235,6 +1273,94 @@ class DicePlatform(JobPlatform):
             pass
 
         return False
+
+    async def _dump_dice_modal_shape(
+        self, page: Page, job: Job, step: int,
+    ) -> None:
+        """Diagnostic dump for Dice apply: where is the modal actually?
+
+        Two live runs hit "Detected 0 form fields on page" while the
+        URL was unchanged at /job-detail/{id} — meaning the apply
+        click happened, no new tab opened, no URL change occurred,
+        and yet our scanner found nothing fillable. Possible causes:
+          - Modal lives inside a Shadow DOM (custom element)
+          - Modal lives in an iframe
+          - Modal opened in a sibling element our walker doesn't reach
+          - Apply click silently rejected by Dice's bot detection
+
+        This dump captures enough about the page to tell which case
+        we're in: count of all input/textarea/select including
+        shadow-DOM and iframe descendants, top-level dialog/modal
+        elements, iframe URLs, and a body-text snippet. One greppable
+        line per stuck case under the DICE_MODAL_SHAPE tag.
+        """
+        try:
+            cur_url = page.url
+        except Exception:
+            cur_url = "?"
+        try:
+            shape = await page.evaluate(
+                """() => {
+                    const out = {
+                        url: location.href,
+                        title: document.title,
+                        forms_visible: [...document.querySelectorAll('form')]
+                            .filter(f => f.offsetParent !== null).length,
+                        inputs_top: document.querySelectorAll(
+                            'input:not([type=hidden])'
+                        ).length,
+                        textareas_top: document.querySelectorAll('textarea').length,
+                        selects_top: document.querySelectorAll('select').length,
+                        dialogs: [...document.querySelectorAll(
+                            '[role=dialog], [aria-modal=true]'
+                        )]
+                            .filter(d => d.offsetParent !== null)
+                            .map(d => ({
+                                cls: (d.className || '').substring(0, 80),
+                                testid: d.getAttribute('data-testid') || '',
+                                inputs: d.querySelectorAll('input, textarea, select').length,
+                            })),
+                        iframes: [...document.querySelectorAll('iframe')]
+                            .filter(f => f.offsetParent !== null)
+                            .map(f => ({
+                                src: (f.src || '').substring(0, 120),
+                                name: f.name || '',
+                            })),
+                        modal_class_candidates: [...document.querySelectorAll(
+                            '[class*=modal i], [class*=Modal], [class*=drawer i]'
+                        )]
+                            .filter(d => d.offsetParent !== null)
+                            .slice(0, 5)
+                            .map(d => (d.className || '').substring(0, 80)),
+                        // Probe shadow roots — count fillable elements
+                        // inside any visible custom element with a shadowRoot.
+                        shadow_inputs: (() => {
+                            let count = 0;
+                            const visit = (root) => {
+                                count += root.querySelectorAll(
+                                    'input, textarea, select'
+                                ).length;
+                                root.querySelectorAll('*').forEach(el => {
+                                    if (el.shadowRoot) visit(el.shadowRoot);
+                                });
+                            };
+                            visit(document);
+                            return count;
+                        })(),
+                        body_snippet: (document.body.innerText || '')
+                            .substring(0, 300),
+                    };
+                    return out;
+                }"""
+            )
+        except Exception as exc:
+            shape = {"error": str(exc)}
+        import json as _json
+        logger.warning(
+            "DICE_MODAL_SHAPE job=%s step=%d url=%s shape=%s",
+            job.job_id, step + 1, cur_url,
+            _json.dumps(shape)[:1500],
+        )
 
     async def _check_success(self, page: Page) -> bool:
         """Check if application submission succeeded."""
