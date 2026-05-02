@@ -1,9 +1,12 @@
 """Pipeline stages: discover -> score -> decide -> apply."""
+import asyncio
 import logging
+import random
 
-from auto_applier.browser.anti_detect import random_delay, reading_pause
+from auto_applier.browser.anti_detect import reading_pause
 from auto_applier.browser.form_filler import FormFiller
 from auto_applier.config import MIN_DELAY_BETWEEN_APPLICATIONS, MAX_DELAY_BETWEEN_APPLICATIONS
+from auto_applier.orchestrator.events import COOLDOWN_STARTED
 from auto_applier.storage.models import Job, Application
 from auto_applier.storage import repository
 
@@ -152,6 +155,7 @@ async def apply_to_job(
     router,
     dry_run: bool = False,
     score: int = 0,
+    events=None,
 ) -> Application:
     """Apply to a single job and return the Application record.
 
@@ -311,16 +315,27 @@ async def apply_to_job(
     # in progress" instead of going silent for 60-180s. User
     # reported that post-apply quiet "looked stuck" when in fact
     # it was just the cooldown running.
-    if status == "applied":
-        logger.info(
-            "Cooldown: sleeping %.0f-%.0fs before next application "
-            "(anti-detection pacing)",
-            MIN_DELAY_BETWEEN_APPLICATIONS,
-            MAX_DELAY_BETWEEN_APPLICATIONS,
-        )
-    await random_delay(
+    #
+    # We sample the cooldown duration here (instead of letting
+    # random_delay do it internally) so we can fire COOLDOWN_STARTED
+    # with the actual seconds value BEFORE the await blocks. The GUI
+    # uses that to render a live "Cooldown: 2m 47s remaining" countdown
+    # so a 60-180s quiet window doesn't look like a hang.
+    cooldown_seconds = random.uniform(
         MIN_DELAY_BETWEEN_APPLICATIONS,
         MAX_DELAY_BETWEEN_APPLICATIONS,
     )
+    if status == "applied":
+        logger.info(
+            "Cooldown: sleeping %.0fs before next application "
+            "(anti-detection pacing)",
+            cooldown_seconds,
+        )
+    if events is not None:
+        try:
+            events.emit(COOLDOWN_STARTED, seconds=cooldown_seconds)
+        except Exception:
+            pass
+    await asyncio.sleep(cooldown_seconds)
 
     return app

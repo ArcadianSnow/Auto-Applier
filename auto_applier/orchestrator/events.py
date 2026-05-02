@@ -119,3 +119,8 @@ CYCLE_STARTED = "cycle_started"
 CYCLE_IDLE = "cycle_idle"
 CYCLE_RESUMING = "cycle_resuming"
 CONTINUOUS_FINISHED = "continuous_finished"
+
+# Anti-detect cooldown between applications. Pipeline emits this
+# right before sleeping so dashboards can render a live countdown
+# instead of going silent for 60-180s. Payload: seconds=<float>.
+COOLDOWN_STARTED = "cooldown_started"

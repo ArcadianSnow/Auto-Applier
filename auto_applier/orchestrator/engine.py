@@ -693,6 +693,7 @@ class ApplicationEngine:
                     router=self.router,
                     dry_run=self.dry_run,
                     score=job_score.score,
+                    events=self.events,
                 )
                 if app.status in ("applied", "dry_run"):
                     self.applied_count += 1
@@ -1158,6 +1159,7 @@ class ApplicationEngine:
                     router=self.router,
                     dry_run=self.dry_run,
                     score=job_score.score,
+                    events=self.events,
                 )
                 if job_score.dimensions:
                     import json as _json

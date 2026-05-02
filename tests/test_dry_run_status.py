@@ -66,9 +66,12 @@ class TestDryRunStatus:
         platform = self._build_platform(success=True)
         # Patch reading_pause and random_delay to no-ops so the test
         # doesn't sleep
+        # Pipeline used to call random_delay; now it samples a duration
+        # itself and awaits asyncio.sleep so it can emit COOLDOWN_STARTED
+        # with the chosen seconds value. Patch asyncio.sleep instead.
         with patch("auto_applier.orchestrator.pipeline.reading_pause",
                    new=AsyncMock()), \
-             patch("auto_applier.orchestrator.pipeline.random_delay",
+             patch("auto_applier.orchestrator.pipeline.asyncio.sleep",
                    new=AsyncMock()):
             app = _run(apply_to_job(
                 platform, job, "resume.pdf", "text", "r",
@@ -90,9 +93,12 @@ class TestDryRunStatus:
             success=False,
             reason="External application -- redirects to company site",
         )
+        # Pipeline used to call random_delay; now it samples a duration
+        # itself and awaits asyncio.sleep so it can emit COOLDOWN_STARTED
+        # with the chosen seconds value. Patch asyncio.sleep instead.
         with patch("auto_applier.orchestrator.pipeline.reading_pause",
                    new=AsyncMock()), \
-             patch("auto_applier.orchestrator.pipeline.random_delay",
+             patch("auto_applier.orchestrator.pipeline.asyncio.sleep",
                    new=AsyncMock()):
             app = _run(apply_to_job(
                 platform, job, "resume.pdf", "text", "r",
@@ -109,9 +115,12 @@ class TestDryRunStatus:
             source="testsite", description="d",
         )
         platform = self._build_platform(success=True)
+        # Pipeline used to call random_delay; now it samples a duration
+        # itself and awaits asyncio.sleep so it can emit COOLDOWN_STARTED
+        # with the chosen seconds value. Patch asyncio.sleep instead.
         with patch("auto_applier.orchestrator.pipeline.reading_pause",
                    new=AsyncMock()), \
-             patch("auto_applier.orchestrator.pipeline.random_delay",
+             patch("auto_applier.orchestrator.pipeline.asyncio.sleep",
                    new=AsyncMock()):
             app = _run(apply_to_job(
                 platform, job, "resume.pdf", "text", "r",
@@ -129,9 +138,12 @@ class TestDryRunStatus:
         platform = self._build_platform(
             success=False, reason="Honeypot hang",
         )
+        # Pipeline used to call random_delay; now it samples a duration
+        # itself and awaits asyncio.sleep so it can emit COOLDOWN_STARTED
+        # with the chosen seconds value. Patch asyncio.sleep instead.
         with patch("auto_applier.orchestrator.pipeline.reading_pause",
                    new=AsyncMock()), \
-             patch("auto_applier.orchestrator.pipeline.random_delay",
+             patch("auto_applier.orchestrator.pipeline.asyncio.sleep",
                    new=AsyncMock()):
             app = _run(apply_to_job(
                 platform, job, "resume.pdf", "text", "r",

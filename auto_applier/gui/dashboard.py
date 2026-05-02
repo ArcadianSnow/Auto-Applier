@@ -38,7 +38,57 @@ from auto_applier.orchestrator.events import (
     CYCLE_IDLE,
     CYCLE_RESUMING,
     CONTINUOUS_FINISHED,
+    COOLDOWN_STARTED,
 )
+
+
+# Threshold (seconds) above which the "Last activity" footer label
+# turns red and the title-bar pill switches to "Stuck?". Anything
+# below this is considered live activity. 5 minutes covers the
+# slowest legitimate steps (multi-resume scoring on CPU, slow JD
+# fetches) without burying a real hang under noise.
+STUCK_THRESHOLD_SECONDS = 300
+
+
+def _format_age(seconds: float) -> str:
+    """Human-readable elapsed-time helper for the "Last activity" label.
+
+    Below 5s reads as "just now" (the 1Hz tick would otherwise jitter
+    between 0s/1s and look broken). Below 60s shows raw seconds.
+    Above 60s shows minutes + remainder seconds. Above 1 hour shows
+    hours + minutes — long enough that exact seconds add no signal.
+    """
+    s = int(max(0, seconds))
+    if s < 5:
+        return "just now"
+    if s < 60:
+        return f"{s}s ago"
+    if s < 3600:
+        m, sec = divmod(s, 60)
+        return f"{m}m {sec}s ago"
+    h, rem = divmod(s, 3600)
+    m = rem // 60
+    return f"{h}h {m}m ago"
+
+
+def _format_countdown(seconds: float) -> str:
+    """Cooldown countdown helper. Returns "" when the timer has run out.
+
+    Mirrors _format_age formatting (Xm Ys / Xs) but with "remaining"
+    suffix so the user reads it as a forward-looking timer instead of
+    a backward-looking "ago" stamp.
+    """
+    s = int(seconds)
+    if s <= 0:
+        return ""
+    if s < 60:
+        return f"{s}s remaining"
+    if s < 3600:
+        m, sec = divmod(s, 60)
+        return f"{m}m {sec}s remaining"
+    h, rem = divmod(s, 3600)
+    m = rem // 60
+    return f"{h}h {m}m remaining"
 
 
 class DashboardWindow(tk.Toplevel):
@@ -65,9 +115,21 @@ class DashboardWindow(tk.Toplevel):
         # Platform states
         self._platform_cards: dict[str, dict] = {}
 
+        # Runtime visibility state — read every 1Hz tick to keep the
+        # status pill / cooldown / last-activity footer labels honest.
+        # Without these the post-apply quiet window (60-180s) looked
+        # identical to a hang.
+        self._last_activity_at: float = time.monotonic()
+        self._cooldown_until: float | None = None
+        self._current_activity: str = "starting"
+        self._status_tick_id: str | None = None
+
         self._setup_window()
         self._build_ui()
         self._subscribe_events()
+        # Kick the 1Hz status ticker. Runs until the dashboard is
+        # destroyed (after_cancel in _on_close).
+        self._on_status_tick()
 
     # ------------------------------------------------------------------
     # Window setup
@@ -106,6 +168,16 @@ class DashboardWindow(tk.Toplevel):
             font=FONT_HEADING, fg=PRIMARY, bg=BG_CARD,
         )
         self._title_label.pack(side="left", padx=PAD_X, pady=8)
+
+        # Live status pill — shows the current activity / stuck
+        # warning / cooldown countdown derived from runtime state.
+        # Sits between the title and the timer so it's the most
+        # eye-catching real-time signal in the window.
+        self._status_pill = tk.Label(
+            header, text="Working", font=FONT_SMALL,
+            fg=TEXT_LIGHT, bg=BG_CARD,
+        )
+        self._status_pill.pack(side="left", padx=(0, PAD_X), pady=8)
 
         self._timer_label = tk.Label(
             header, text="00:00", font=FONT_MONO,
@@ -242,6 +314,23 @@ class DashboardWindow(tk.Toplevel):
         )
         self._stop_btn.pack(side="left")
 
+        # Live runtime indicators — fed by the 1Hz status ticker.
+        # Cooldown countdown is hidden by default (empty text) and
+        # only shown while a between-applications sleep is active.
+        # Last-activity stamp is always visible so the user can tell
+        # at a glance whether the run is alive or stuck.
+        self._cooldown_label = tk.Label(
+            footer, text="", font=FONT_SMALL,
+            fg=TEXT_LIGHT, bg=BG,
+        )
+        self._cooldown_label.pack(side="left", padx=(16, 0))
+
+        self._last_activity_label = tk.Label(
+            footer, text="", font=FONT_SMALL,
+            fg=TEXT_MUTED, bg=BG,
+        )
+        self._last_activity_label.pack(side="left", padx=(16, 0))
+
         # Developer aid: one-click access to the debug log file for
         # the current run. Paste the path / attach the file when
         # asking for help with a failing run.
@@ -320,28 +409,47 @@ class DashboardWindow(tk.Toplevel):
         self.events.on(CYCLE_IDLE, self._on_cycle_idle)
         self.events.on(CYCLE_RESUMING, self._on_cycle_resuming)
         self.events.on(CONTINUOUS_FINISHED, self._on_continuous_finished)
+        self.events.on(COOLDOWN_STARTED, self._on_cooldown_started)
+
+    def _bump_activity(self, description: str | None = None) -> None:
+        """Mark "something just happened" so the stuck-detector resets.
+
+        Called from every event handler. Updates _last_activity_at so
+        the 1Hz ticker reads a fresh timestamp, and (optionally)
+        replaces _current_activity with a short verb-ish description
+        rendered in the title-bar status pill ("scoring", "filling
+        form", etc.). Events run on the worker thread but assignment
+        to a single attribute is GIL-safe.
+        """
+        self._last_activity_at = time.monotonic()
+        if description is not None:
+            self._current_activity = description
 
     # ------------------------------------------------------------------
     # Event handlers (called from worker thread -- must use self.after)
     # ------------------------------------------------------------------
 
     def _on_run_started(self, **kw):
+        self._bump_activity("starting run")
         dry = kw.get("dry_run", False)
         mode = "DRY RUN" if dry else "LIVE"
         self.after(0, lambda: self.log(f"Run started ({mode})", "info"))
 
     def _on_platform_started(self, **kw):
+        self._bump_activity("opening platform")
         key = kw.get("platform", "")
         self.after(0, lambda: self._update_platform(key, "Running", STATUS_RUNNING))
         self.after(0, lambda: self.log(f"[{key.title()}] Starting...", "info"))
 
     def _on_platform_login(self, **kw):
+        self._bump_activity("waiting for login")
         key = kw.get("platform", "")
         self.after(0, lambda: self.log(
             f"[{key.title()}] Checking login -- please log in if browser opens.", "warning"
         ))
 
     def _on_platform_login_failed(self, **kw):
+        self._bump_activity("login failed")
         key = kw.get("platform", "")
         name = key.title()
         self.after(0, lambda: self._update_platform(key, "Login failed", STATUS_ERROR))
@@ -375,6 +483,7 @@ class DashboardWindow(tk.Toplevel):
             pass  # Best-effort — never break the run on UI issues
 
     def _on_search_started(self, **kw):
+        self._bump_activity("discovering jobs")
         key = kw.get("platform", "")
         keyword = kw.get("keyword", "")
         self.after(0, lambda: self.log(
@@ -382,6 +491,7 @@ class DashboardWindow(tk.Toplevel):
         ))
 
     def _on_jobs_found(self, **kw):
+        self._bump_activity("discovering jobs")
         key = kw.get("platform", "")
         count = kw.get("count", 0)
         keyword = kw.get("keyword", "")
@@ -390,6 +500,7 @@ class DashboardWindow(tk.Toplevel):
         ))
 
     def _on_job_scored(self, **kw):
+        self._bump_activity("scoring")
         job = kw.get("job")
         score = kw.get("score")
         if job and score:
@@ -410,6 +521,7 @@ class DashboardWindow(tk.Toplevel):
         one. This handler just displays a running count so users
         see how many jobs are waiting for them.
         """
+        self._bump_activity("queuing for review")
         job = kw.get("job")
         title = getattr(job, "title", "Unknown") if job else "Unknown"
         self.after(0, lambda t=title: self.log(
@@ -418,12 +530,14 @@ class DashboardWindow(tk.Toplevel):
 
     def _on_review_queue_ready(self, **kw):
         """Open the batch review panel when all platforms finish."""
+        self._bump_activity("review queue ready")
         queue = kw.get("queue", [])
         if not queue:
             return
         self.after(0, lambda q=list(queue): self._open_batch_review(q))
 
     def _on_application_started(self, **kw):
+        self._bump_activity("filling form")
         job = kw.get("job")
         resume = kw.get("resume", "")
         title = getattr(job, "title", "Unknown") if job else "Unknown"
@@ -432,6 +546,7 @@ class DashboardWindow(tk.Toplevel):
         ))
 
     def _on_application_complete(self, **kw):
+        self._bump_activity("submitting")
         app = kw.get("application")
         job = kw.get("job")
         if app:
@@ -449,23 +564,27 @@ class DashboardWindow(tk.Toplevel):
                 ))
 
     def _on_platform_error(self, **kw):
+        self._bump_activity("platform error")
         key = kw.get("platform", "")
         error = kw.get("error", "Unknown error")
         self.after(0, lambda: self._update_platform(key, "Error", STATUS_ERROR))
         self.after(0, lambda: self.log(f"[{key.title()}] Error: {error}", "error"))
 
     def _on_platform_finished(self, **kw):
+        self._bump_activity("platform finished")
         key = kw.get("platform", "")
         self.after(0, lambda: self._update_platform(key, "Done", STATUS_SUCCESS))
         self.after(0, lambda: self.log(f"[{key.title()}] Finished.", "info"))
 
     def _on_captcha(self, **kw):
+        self._bump_activity("CAPTCHA")
         key = kw.get("platform", "")
         self.after(0, lambda: self.log(
             f"[{key.title()}] CAPTCHA detected -- stopping platform.", "error"
         ))
 
     def _on_evolution_triggers(self, **kw):
+        self._bump_activity("evolution check")
         triggers = kw.get("triggers", [])
         count = len(triggers) if isinstance(triggers, list) else 0
         self._gaps_found += count
@@ -475,6 +594,10 @@ class DashboardWindow(tk.Toplevel):
         ))
 
     def _on_run_finished_event(self, **kw):
+        self._bump_activity("done")
+        # Cooldown is meaningless after the run finishes — clear it so
+        # the footer doesn't display a stale countdown.
+        self._cooldown_until = None
         reason = kw.get("reason", "Complete")
         applied = kw.get("applied", self._applied)
         self.after(0, lambda: self.log(
@@ -486,12 +609,14 @@ class DashboardWindow(tk.Toplevel):
             self.after(0, self._on_run_finished)
 
     def _on_cycle_started(self, **kw):
+        self._bump_activity("cycle started")
         n = kw.get("cycle_number", 0)
         max_n = kw.get("max_cycles", 0)
         label = f"Cycle {n}" + (f" of {max_n}" if max_n else "")
         self.after(0, lambda: self.log(f"=== {label} ===", "info"))
 
     def _on_cycle_idle(self, **kw):
+        self._bump_activity("idling between cycles")
         secs = kw.get("seconds_until_next", 0)
         mins = max(1, secs // 60)
         refinement_only = kw.get("refinement_only", False)
@@ -515,12 +640,15 @@ class DashboardWindow(tk.Toplevel):
             ))
 
     def _on_cycle_resuming(self, **kw):
+        self._bump_activity("resuming cycle")
         n = kw.get("cycle_number", 0)
         self.after(0, lambda: self.log(
             f"Resuming after cycle {n}...", "info",
         ))
 
     def _on_continuous_finished(self, **kw):
+        self._bump_activity("done")
+        self._cooldown_until = None
         reason = kw.get("reason", "")
         total = kw.get("total_cycles", 0)
         self.after(0, lambda: self.log(
@@ -528,6 +656,19 @@ class DashboardWindow(tk.Toplevel):
             "info",
         ))
         self.after(0, self._on_run_finished)
+
+    def _on_cooldown_started(self, **kw):
+        """Anti-detect cooldown between applications. Sets the deadline
+        the 1Hz status ticker reads to render the live countdown.
+
+        Pipeline emits this with seconds=<float>. We record the future
+        monotonic timestamp instead of the duration so the ticker can
+        recompute remaining time on each tick without bookkeeping.
+        """
+        self._bump_activity("between applications")
+        seconds = float(kw.get("seconds", 0) or 0)
+        if seconds > 0:
+            self._cooldown_until = time.monotonic() + seconds
 
     # ------------------------------------------------------------------
     # UI update helpers (must be called on main thread)
@@ -619,6 +760,95 @@ class DashboardWindow(tk.Toplevel):
         if self._timer_id:
             self.after_cancel(self._timer_id)
             self._timer_id = None
+
+    # ------------------------------------------------------------------
+    # Status ticker (1 Hz) — runs continuously while dashboard is open
+    # ------------------------------------------------------------------
+
+    def _on_status_tick(self) -> None:
+        """Refresh the title-bar status pill + footer cooldown / activity
+        labels every second.
+
+        This is the heart of the runtime-visibility feature. Three event
+        handlers feed three pieces of state — _last_activity_at,
+        _cooldown_until, _current_activity — and this single tick is the
+        only place that turns those into pixels. Doing it here (instead
+        of inside each handler) means the countdown refreshes smoothly
+        even when nothing else is happening, which is the failure mode
+        users actually saw: pipeline silent for 90s during a cooldown
+        but the dashboard hadn't repainted because no event fired.
+
+        Self-reschedules via self.after(1000, ...). The id is captured
+        in self._status_tick_id so _on_close can cancel it cleanly.
+        """
+        now = time.monotonic()
+        try:
+            # 1. Cooldown countdown — only visible while the deadline
+            #    is in the future. Clears the label string when the
+            #    cooldown elapses so the footer doesn't accumulate
+            #    stale text.
+            if self._cooldown_until is not None and now < self._cooldown_until:
+                remaining = self._cooldown_until - now
+                self._cooldown_label.configure(
+                    text=f"Cooldown: {_format_countdown(remaining)}",
+                    fg=TEXT_LIGHT,
+                )
+            else:
+                self._cooldown_label.configure(text="")
+                # Clear the deadline so subsequent ticks don't re-test
+                # an already-expired timestamp.
+                if self._cooldown_until is not None and now >= self._cooldown_until:
+                    self._cooldown_until = None
+
+            # 2. Last-activity stamp — always visible during a run, red
+            #    if the gap exceeds STUCK_THRESHOLD_SECONDS so the user
+            #    can spot a hang at a glance.
+            age = now - self._last_activity_at
+            if self._running:
+                color = DANGER_TEXT if age > STUCK_THRESHOLD_SECONDS else TEXT_MUTED
+                self._last_activity_label.configure(
+                    text=f"Last activity: {_format_age(age)}",
+                    fg=color,
+                )
+            else:
+                self._last_activity_label.configure(text="")
+
+            # 3. Title-bar status pill — derived from the three signals
+            #    above. Order of priority:
+            #       cooldown active     → "Idle (cooldown Xm left)"
+            #       activity stale      → "Stuck? — last update Xm ago"
+            #       otherwise           → "Working — <activity>"
+            if self._running:
+                if self._cooldown_until is not None and now < self._cooldown_until:
+                    rem = self._cooldown_until - now
+                    self._status_pill.configure(
+                        text=f"Idle (cooldown {_format_countdown(rem)})",
+                        fg=TEXT_LIGHT,
+                    )
+                elif age > STUCK_THRESHOLD_SECONDS:
+                    self._status_pill.configure(
+                        text=f"Stuck? — last update {_format_age(age)}",
+                        fg=DANGER_TEXT,
+                    )
+                else:
+                    self._status_pill.configure(
+                        text=f"Working — {self._current_activity}",
+                        fg=TEXT_LIGHT,
+                    )
+            else:
+                # Outside an active run, show the terminal state set by
+                # the last lifecycle event ("done", "stopped").
+                self._status_pill.configure(
+                    text=self._current_activity,
+                    fg=TEXT_LIGHT,
+                )
+        except tk.TclError:
+            # Window was destroyed mid-tick — let it die quietly.
+            return
+
+        # Reschedule. Stored id is cancelled in _on_close so a closed
+        # dashboard doesn't keep firing into a dead Tk root.
+        self._status_tick_id = self.after(1000, self._on_status_tick)
 
     # ------------------------------------------------------------------
     # Run management
@@ -757,6 +987,8 @@ class DashboardWindow(tk.Toplevel):
     def _on_run_finished(self) -> None:
         """Called when the run completes (on main thread)."""
         self._running = False
+        self._cooldown_until = None
+        self._current_activity = "done"
         self._stop_timer()
         self._title_label.configure(text="Auto Applier -- Complete")
         self.title("Auto Applier -- Complete")
@@ -842,6 +1074,8 @@ class DashboardWindow(tk.Toplevel):
                 "Stop requested — will stop after the current application finishes.",
                 "warning",
             )
+            self._current_activity = "stopped"
+            self._cooldown_until = None
             if self._engine is not None:
                 try:
                     self._engine.request_stop()
@@ -852,4 +1086,13 @@ class DashboardWindow(tk.Toplevel):
     def _on_close(self) -> None:
         """Close the dashboard window."""
         self._stop_timer()
+        # Cancel the 1Hz status ticker — otherwise it keeps firing
+        # self.after callbacks against a destroyed widget tree and
+        # spams TclError noise into the worker thread.
+        if self._status_tick_id is not None:
+            try:
+                self.after_cancel(self._status_tick_id)
+            except Exception:
+                pass
+            self._status_tick_id = None
         self.destroy()
