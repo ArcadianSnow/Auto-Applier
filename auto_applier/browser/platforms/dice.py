@@ -326,12 +326,20 @@ class DicePlatform(JobPlatform):
 
         Replaces the generic wait_for_manual_login to use URL-based
         detection. Polls every 2 seconds for ``timeout`` seconds.
-        Logs progress so the user sees the tool isn't stuck.
+        Logs progress so the user sees the tool isn't stuck. Fires
+        a Windows toast on entry so the user notices even if their
+        focus is on a different window.
         """
         import time
+        from auto_applier.notify import notify_user
         logger.info(
             "Waiting for manual login on Dice (URL-based, timeout=%ds)...",
             timeout,
+        )
+        notify_user(
+            "Auto Applier — Dice login needed",
+            "Dice is asking you to log in before applying. Complete "
+            f"the sign-in in the open browser window within {timeout}s.",
         )
         start = time.monotonic()
         last_log_url = ""

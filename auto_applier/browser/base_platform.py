@@ -430,6 +430,20 @@ class JobPlatform(ABC):
             "a transient Cloudflare JS challenge...",
             self.display_name, retry_seconds,
         )
+        # Fire a desktop toast so the user knows we're paused. Best-
+        # effort; no fallback if it fails. The notify helper has its
+        # own per-message cooldown so back-to-back checks don't spam.
+        try:
+            from auto_applier.notify import notify_user
+            notify_user(
+                f"Auto Applier — {self.display_name} CAPTCHA",
+                "A CAPTCHA or anti-bot challenge appeared. The "
+                f"program is waiting up to {retry_seconds:.0f}s for it "
+                "to clear on its own. If it persists, switch to the "
+                "browser window and solve it manually.",
+            )
+        except Exception:
+            pass
         # asyncio.get_event_loop() is deprecated in 3.12+ when called
         # from inside a running coroutine — use get_running_loop() to
         # get the loop we're already running on.
@@ -480,6 +494,16 @@ class JobPlatform(ABC):
             timeout,
             len(selectors),
         )
+        # Best-effort desktop toast so the user knows we're paused.
+        try:
+            from auto_applier.notify import notify_user
+            notify_user(
+                f"Auto Applier — {self.display_name} login needed",
+                f"Please complete the sign-in in the open browser "
+                f"window within {timeout}s.",
+            )
+        except Exception:
+            pass
         start = time.monotonic()
         while time.monotonic() - start < timeout:
             if check_url_pattern and check_url_pattern in page.url:
