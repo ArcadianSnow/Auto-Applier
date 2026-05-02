@@ -251,12 +251,36 @@ def make_scrollable(parent: tk.Widget) -> tuple[tk.Canvas, ttk.Frame]:
     # ------------------------------------------------------------------
     def _scroll_focused_into_view(event):
         # Only react if the focused widget is a descendant of our inner.
+        # Critical guard: Tk fires <FocusIn> on the underlying Toplevel
+        # whenever a modal dialog (messagebox.askyesno, custom Toplevel)
+        # opens or closes. If we don't filter those out, we read
+        # winfo_rooty() against a dialog living elsewhere on screen
+        # and end up auto-scrolling the canvas to the bottom. Reject
+        # any event whose widget is itself a Toplevel, or anything not
+        # actually rooted in `inner`.
         widget = event.widget
+        if widget is None:
+            return
+        # Toplevel windows (root, dialogs, messagebox) are NEVER
+        # descendants of our inner frame — short-circuit immediately.
+        try:
+            if isinstance(widget, (tk.Tk, tk.Toplevel)):
+                return
+        except Exception:
+            return
         try:
             cur = widget
             while cur is not None and cur is not inner:
                 cur = cur.master
             if cur is not inner:
+                return
+        except Exception:
+            return
+        # Belt-and-suspenders: if widget shares no toplevel with our
+        # canvas, skip (e.g. the focus event came from a separate
+        # window altogether).
+        try:
+            if widget.winfo_toplevel() is not canvas.winfo_toplevel():
                 return
         except Exception:
             return

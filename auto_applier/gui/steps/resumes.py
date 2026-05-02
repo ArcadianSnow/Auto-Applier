@@ -1,4 +1,5 @@
 """Step 3: Multi-resume manager."""
+import re
 import tkinter as tk
 from tkinter import ttk, filedialog, simpledialog, messagebox
 from pathlib import Path
@@ -47,7 +48,11 @@ class ResumesStep(ttk.Frame):
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical")
         self.tree = ttk.Treeview(
             list_frame,
-            columns=("status", "label", "filename"),
+            # "conversion" column is a small hint for .docx/.txt resumes —
+            # the upload pipeline auto-converts them to PDF and caches in
+            # data/resumes/.converted/. Users were confused why their
+            # .docx file appeared as a PDF on job sites; this surfaces it.
+            columns=("status", "label", "filename", "conversion"),
             show="headings",
             height=10,
             yscrollcommand=scrollbar.set,
@@ -55,9 +60,13 @@ class ResumesStep(ttk.Frame):
         self.tree.heading("status", text="Status")
         self.tree.heading("label", text="Label")
         self.tree.heading("filename", text="File")
+        self.tree.heading("conversion", text="Upload")
         self.tree.column("status", width=80, anchor="center", stretch=False)
-        self.tree.column("label", width=200, anchor="w", stretch=False)
-        self.tree.column("filename", width=380, anchor="w", stretch=True)
+        self.tree.column("label", width=180, anchor="w", stretch=False)
+        self.tree.column("filename", width=300, anchor="w", stretch=True)
+        # Tooltip-sized hint — kept narrow on purpose so it doesn't
+        # double row height or push the file column off-screen.
+        self.tree.column("conversion", width=170, anchor="w", stretch=False)
         # Color-code by status. tag-based styling.
         self.tree.tag_configure("ok", foreground=ACCENT)
         self.tree.tag_configure("bad", foreground=DANGER)
@@ -177,11 +186,52 @@ class ResumesStep(ttk.Frame):
             else:
                 status = "✗ Not saved"
                 tag = "bad"
+            conversion = self._conversion_hint(path, label, ext)
             self.tree.insert(
                 "", "end", iid=str(idx),
-                values=(status, label, filename),
+                values=(status, label, filename, conversion),
                 tags=(tag,),
             )
+
+    def _conversion_hint(
+        self, source_path: str, label: str, ext: str,
+    ) -> str:
+        """Return a short hint about whether the resume gets uploaded
+        as a converted PDF.
+
+        Rules:
+        * .pdf  -> empty string (the same file goes up, no hint needed)
+        * .docx / .txt with cached PDF present -> "(uploaded as PDF)"
+        * .docx / .txt with no cache yet       -> "(will convert to PDF on first run)"
+
+        The cache path mirrors :func:`auto_applier.resume.pdf_converter
+        ._cached_pdf_path`: the source stem is sanitized via the same
+        regex so the hint matches what the upload pipeline actually
+        consumes. We check both the original-filename stem and the
+        materialized "<label>.docx" stem because the form filler uploads
+        the file from RESUMES_DIR (named after the label), but a user
+        re-adding a resume before validate() ran will still see the
+        original file path here.
+        """
+        ext_lower = (ext or "").lower()
+        if ext_lower not in {".docx", ".txt"}:
+            return ""
+        from auto_applier.config import CONVERTED_RESUMES_DIR
+        candidates = []
+        try:
+            src_stem = Path(source_path).stem
+            if src_stem:
+                candidates.append(src_stem)
+        except (OSError, ValueError):
+            pass
+        if label:
+            candidates.append(label)
+        for stem in candidates:
+            safe_stem = re.sub(r"[^a-zA-Z0-9._-]", "_", stem)
+            cached = CONVERTED_RESUMES_DIR / f"{safe_stem}.pdf"
+            if cached.exists():
+                return "(uploaded as PDF)"
+        return "(will convert to PDF on first run)"
 
     def _selected_index(self) -> int | None:
         """Return the index of the highlighted treeview row, or None."""

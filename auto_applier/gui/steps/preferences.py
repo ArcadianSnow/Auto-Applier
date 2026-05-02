@@ -385,12 +385,18 @@ class TitleSuggesterDialog(tk.Toplevel):
     ) -> None:
         super().__init__(parent)
         self._target_var = target_var
+        # Each suggestion may carry a display marker (e.g. "(your input)")
+        # so the listbox row text != the title we add to the field. Keep
+        # the canonical title list parallel to the listbox.
         self._suggestions: list[str] = []
+        # Last seed used for Generate — kept so we can still show the
+        # seed in the listbox even when the LLM call fails.
+        self._last_seed: str = ""
 
         self.title("Suggest related job titles")
         self.configure(bg=BG)
-        self.geometry("520x460")
-        self.minsize(420, 360)
+        self.geometry("520x500")
+        self.minsize(420, 380)
 
         self._build_ui()
 
@@ -470,6 +476,22 @@ class TitleSuggesterDialog(tk.Toplevel):
         sb.pack(side="right", fill="y")
         self._listbox.pack(side="left", fill="both", expand=True)
 
+        # Status line — every Add/Generate writes here so the user
+        # gets confirmation that picks were merged in. Lives between
+        # the listbox and the action buttons so it's visible right
+        # after the user clicks Add.
+        self._status_var = tk.StringVar(value="")
+        self._status_label = tk.Label(
+            self,
+            textvariable=self._status_var,
+            font=FONT_SMALL,
+            bg=BG,
+            fg=TEXT_LIGHT,
+            wraplength=460,
+            justify="left",
+        )
+        self._status_label.pack(anchor="w", padx=PAD_X, pady=(0, 4))
+
         # Action buttons
         btn_row = tk.Frame(self, bg=BG)
         btn_row.pack(fill="x", padx=PAD_X, pady=(0, PAD_Y))
@@ -480,8 +502,11 @@ class TitleSuggesterDialog(tk.Toplevel):
             state="disabled",
         )
         self._add_btn.pack(side="left")
+        # Renamed Cancel -> Close because the dialog now stays open
+        # across multiple Add clicks instead of auto-closing on the
+        # first add. "Close when done" is the new mental model.
         ttk.Button(
-            btn_row, text="Cancel",
+            btn_row, text="Close",
             command=self.destroy,
         ).pack(side="right")
 
@@ -495,9 +520,11 @@ class TitleSuggesterDialog(tk.Toplevel):
             self._show_status_in_listbox("Enter a job title first.")
             return
 
+        self._last_seed = seed
         self._generate_btn.configure(state="disabled")
         self._add_btn.configure(state="disabled")
         self._show_status_in_listbox("Generating...")
+        self._set_status("")
 
         threading.Thread(
             target=self._worker, args=(seed,), daemon=True,
@@ -552,27 +579,96 @@ class TitleSuggesterDialog(tk.Toplevel):
             self._generate_btn.configure(state="normal")
         except tk.TclError:
             return  # window already closed
+
+        seed = (self._last_seed or "").strip()
+        # Seed is always addable as long as the user typed one — even
+        # when the LLM falls over. Only suppress the seed if it's
+        # already in the user's existing search-keywords list (case-
+        # insensitive), since adding it again would be a no-op.
+        existing_lower = {
+            t.strip().lower()
+            for t in self._target_var.get().split(",")
+            if t.strip()
+        }
+        include_seed = bool(seed) and seed.lower() not in existing_lower
+
         if not ok:
-            self._show_status_in_listbox(
-                "Couldn't get suggestions — is Ollama running? "
-                "Check `cli doctor`.",
-            )
+            # LLM down: seed-only fallback so the user still gets
+            # something to click. Matches the dialog's promise that
+            # "you can still add your seed title."
+            if include_seed:
+                self._populate_results(
+                    [seed], seed=seed,
+                    status_msg=(
+                        "Couldn't get adjacents, but you can still "
+                        "add your seed title."
+                    ),
+                )
+            else:
+                self._show_status_in_listbox(
+                    "Couldn't get suggestions — is Ollama running? "
+                    "Check `cli doctor`.",
+                )
             return
-        if not titles:
+
+        if not titles and not include_seed:
             self._show_status_in_listbox(
                 "No suggestions returned for that title.",
             )
             return
-        self._suggestions = titles
-        self._listbox.delete(0, tk.END)
-        for t in titles:
-            self._listbox.insert(tk.END, t)
-        self._add_btn.configure(state="normal")
+
+        # Compose final list: seed first (if not already in field),
+        # then LLM-returned adjacents. The worker already deduped the
+        # seed out of the LLM list using a lowercase-keyed set, so
+        # there's no double-add risk here.
+        composed: list[str] = []
+        if include_seed:
+            composed.append(seed)
+        composed.extend(titles)
+        self._populate_results(composed, seed=seed if include_seed else "")
 
     def _show_status_in_listbox(self, msg: str) -> None:
         self._suggestions = []
         self._listbox.delete(0, tk.END)
         self._listbox.insert(tk.END, msg)
+
+    def _populate_results(
+        self, titles: list[str], seed: str = "",
+        status_msg: str = "",
+    ) -> None:
+        """Render the listbox + matching ``self._suggestions``.
+
+        ``self._suggestions[i]`` always holds the canonical title that
+        will be added to the keywords field; the listbox display row
+        may carry a "(your input)" tag for the seed entry so the user
+        can tell at a glance which row was their seed vs an LLM
+        adjacent. Selection model stays "extended" (multi-select).
+        """
+        self._suggestions = list(titles)
+        self._listbox.delete(0, tk.END)
+        for t in titles:
+            display = (
+                f"{t}    (your input)"
+                if seed and t.lower() == seed.lower()
+                else t
+            )
+            self._listbox.insert(tk.END, display)
+        self._add_btn.configure(
+            state="normal" if titles else "disabled",
+        )
+        if status_msg:
+            self._set_status(status_msg)
+
+    def _set_status(self, msg: str) -> None:
+        """Write a one-line status under the listbox.
+
+        Cleared when Generate is re-clicked so old messages don't
+        confuse the next batch.
+        """
+        try:
+            self._status_var.set(msg)
+        except tk.TclError:
+            pass  # window closed
 
     # ------------------------------------------------------------------
     # Append selected suggestions to the search-keywords field
@@ -581,6 +677,7 @@ class TitleSuggesterDialog(tk.Toplevel):
     def _on_add_selected(self) -> None:
         selected_indices = self._listbox.curselection()
         if not selected_indices:
+            self._set_status("Pick one or more titles in the list first.")
             return
         picks = [self._suggestions[i] for i in selected_indices
                  if 0 <= i < len(self._suggestions)]
@@ -593,9 +690,28 @@ class TitleSuggesterDialog(tk.Toplevel):
             t.strip() for t in existing_raw.split(",") if t.strip()
         ]
         seen_lower = {t.lower() for t in existing}
+        added = 0
         for pick in picks:
             if pick.lower() not in seen_lower:
                 existing.append(pick)
                 seen_lower.add(pick.lower())
+                added += 1
         self._target_var.set(", ".join(existing))
-        self.destroy()
+
+        # Stay open so the user can pick more titles or run another
+        # Generate without reopening the dialog. Clearing the listbox
+        # selection is the visual cue that the picks were committed.
+        try:
+            self._listbox.selection_clear(0, tk.END)
+        except tk.TclError:
+            pass
+        if added == 0:
+            self._set_status(
+                f"Selected {len(picks)} title(s) — already in your list. "
+                "Generate again or close when done."
+            )
+        else:
+            noun = "title" if added == 1 else "titles"
+            self._set_status(
+                f"Added {added} {noun}. Generate again or close when done."
+            )

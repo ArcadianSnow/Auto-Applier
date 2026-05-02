@@ -124,6 +124,48 @@ def _is_phantom_label(label: str) -> bool:
 _MIN_QUESTION_LEN = 8
 
 
+# Markers that ONLY appear in LLM prompt bodies, not real form-field
+# labels. If any of these appear, the "question" is actually a leaked
+# prompt context and must NOT be persisted to unanswered.json.
+# Live audit 2026-05-02 found a 1900-char "question" containing
+# "Resume:" + the candidate's full resume + "Job description:" + part
+# of a JD — the form_filler had passed the LLM prompt instead of the
+# field label to _record_unanswered. Defensive cap at the storage
+# layer so the bug can't pollute data even if the upstream caller
+# mis-passes again.
+_PROMPT_LEAK_MARKERS = (
+    "resume:\n", "resume:\r",
+    "job description:\n", "job description:\r",
+    "candidate profile:",
+    "applicant resume:",
+    "you are answering",
+    "you are filling",
+    "respond only with",
+    "respond ONLY with",
+    "json shape",
+    "available options",
+    "system_prompt",
+    "candidate's resume",
+)
+
+
+# Question categories the user explicitly rejected from the wizard's
+# unanswered queue: referral / "how did you hear about" variants.
+# These are per-application context (the form_filler answers them
+# at run time via SOURCE_QUESTION_KEYWORDS using the platform
+# display name), not gaps the user can usefully fill in advance.
+_USER_REJECTED_FRAGMENTS = (
+    "referred by an employee",
+    "referred by a current",
+    "employee referral",
+    "how did you hear about",
+    "where did you hear about",
+    "how did you find this",
+    "where did you find this",
+    "referral source",
+)
+
+
 def _load_answers_keys(answers_path) -> tuple[set[str], set[str]]:
     """Return (exact_keys_lower, exact_keys_lower) for answers.json.
 
@@ -199,8 +241,30 @@ def should_skip_unanswered(question: str, answers_path=None) -> bool:
         return True
     if len(trimmed) < _MIN_QUESTION_LEN:
         return True
+    # Cap — real form labels are rarely longer than a sentence.
+    # 2026-05-02 user audit found an entire LLM prompt body (with
+    # "Resume:" and "Job description:" sections) leaking into
+    # unanswered.json as a single "question" via some upstream
+    # call site that handed the prompt instead of the field label.
+    # Cap at 300 chars catches it regardless of which caller leaked.
+    if len(trimmed) > 300:
+        return True
     if _is_phantom_label(trimmed):
         return True
+
+    lowered = trimmed.lower()
+    # Prompt-leak markers — substrings that only appear in LLM
+    # context blobs, never in real form-field labels.
+    for marker in _PROMPT_LEAK_MARKERS:
+        if marker in lowered:
+            return True
+    # User-rejected categories (referral, "how did you hear") —
+    # per-application context that the form_filler resolves at
+    # run time via SOURCE_QUESTION_KEYWORDS, not gaps the user
+    # can answer in advance.
+    for fragment in _USER_REJECTED_FRAGMENTS:
+        if fragment in lowered:
+            return True
 
     if answers_path is None:
         from auto_applier.config import ANSWERS_FILE

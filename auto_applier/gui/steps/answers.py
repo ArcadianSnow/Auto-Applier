@@ -51,16 +51,25 @@ COMMON_QUESTIONS: list[tuple[str, str, list[str] | None]] = [
     ("What is your preferred work arrangement?", "dropdown", [
         "Remote", "Hybrid", "On-site", "No preference",
     ]),
-    ("Do you have experience with [specific tool]?", "entry", None),
+    # Removed "Do you have experience with [specific tool]?" — the
+    # placeholder shape doesn't get clearer with the AI assist, and
+    # the form_filler's per-job context-fill handles tool questions
+    # better at run time using the actual JD.
     ("What is your current employment status?", "dropdown", [
         "Employed", "Unemployed", "Student", "Freelance", "Other",
     ]),
     ("Are you open to contract positions?", "dropdown", ["Yes", "No"]),
-    ("How did you hear about this position?", "entry", None),
+    # Removed "How did you hear about this position?" — form_filler's
+    # _match_contextual auto-answers this at run time using the
+    # platform display name (Indeed/Dice/ZipRecruiter). Asking the
+    # user upfront just fights that auto-answer.
     ("Do you have any security clearances?", "entry", None),
     ("What languages do you speak?", "entry", None),
     ("Are you willing to undergo a background check?", "dropdown", ["Yes", "No"]),
-    ("Do you have a professional certification relevant to this role?", "entry", None),
+    # Removed "Do you have a professional certification relevant to
+    # this role?" — certifications come from the resume; the LLM
+    # context-fill at run time has the resume text, so a lossy
+    # upfront summary doesn't help.
     ("What is your notice period at your current job?", "entry", None),
 ]
 
@@ -181,53 +190,89 @@ class AnswersStep(ttk.Frame):
         Confirms first because the user may have meant to click "?"
         (AI assist) instead. Cleans the wizard's answer_vars mapping
         too so the eventual save doesn't ressurrect the entry.
+
+        The confirmation dialog is deferred via ``after(0, ...)``
+        because Tk's modal ``askyesno`` was eating the original click
+        when the wizard's outer modal had grab_set: the first ✕ click
+        registered, but the messagebox failed to surface, so the user
+        had to click again to actually see the dialog. Flushing
+        idle tasks first + scheduling the dialog past the click
+        handler resolves both that and the FocusIn auto-scroll
+        regression that fired against the messagebox toplevel.
         """
-        if not messagebox.askyesno(
-            "Remove question?",
-            f"Remove this question from your saved list?\n\n"
-            f"  {question[:200]}\n\n"
-            "It won't appear in this wizard again unless a future "
-            "application encounters it.",
-        ):
-            return
-        self._remove_unanswered_from_disk([question])
-        # Forget the StringVar so save_to_config doesn't write it back.
-        self.wizard.answer_vars.pop(question, None)
+        # Force pending UI updates to drain so the click that triggered
+        # us is fully processed before we yield to the modal.
         try:
-            row_widget.destroy()
+            self.update_idletasks()
         except Exception:
             pass
-        self._refresh_unanswered_count()
+
+        def _confirm() -> None:
+            if not messagebox.askyesno(
+                "Remove question?",
+                f"Remove this question from your saved list?\n\n"
+                f"  {question[:200]}\n\n"
+                "It won't appear in this wizard again unless a future "
+                "application encounters it.",
+                parent=self.winfo_toplevel(),
+            ):
+                return
+            self._remove_unanswered_from_disk([question])
+            # Forget the StringVar so save_to_config doesn't write it back.
+            self.wizard.answer_vars.pop(question, None)
+            try:
+                row_widget.destroy()
+            except Exception:
+                pass
+            self._refresh_unanswered_count()
+
+        # Defer past the current click handler so Tk doesn't swallow
+        # the first click while the messagebox modal is being built.
+        self.after(0, _confirm)
 
     def _clear_all_unanswered(self) -> None:
-        """Wipe data/unanswered.json + remove every new-question row."""
+        """Wipe data/unanswered.json + remove every new-question row.
+
+        Same defer-past-click pattern as ``_delete_unanswered`` so the
+        wizard's outer grab doesn't swallow the first click.
+        """
         try:
             current = self._load_unanswered()
         except Exception:
             current = []
         if not current:
             return
-        if not messagebox.askyesno(
-            "Clear all suggested questions?",
-            f"Remove all {len(current)} suggested questions from your "
-            "list?\n\nThey'll only reappear if future applications "
-            "encounter them.",
-        ):
-            return
-        self._remove_unanswered_from_disk(current)
-        # Drop StringVars for the cleared questions so they don't
-        # round-trip back into answers.json on save.
-        for q in current:
-            self.wizard.answer_vars.pop(q, None)
-        # Destroy the entire new-questions card so the section
-        # disappears cleanly. Reload-and-rebuild would also work but
-        # is heavier and would lose scroll position.
-        card = getattr(self, "_unanswered_card", None)
-        if card is not None:
-            try:
-                card.destroy()
-            except Exception:
-                pass
+
+        try:
+            self.update_idletasks()
+        except Exception:
+            pass
+
+        def _confirm() -> None:
+            if not messagebox.askyesno(
+                "Clear all suggested questions?",
+                f"Remove all {len(current)} suggested questions from your "
+                "list?\n\nThey'll only reappear if future applications "
+                "encounter them.",
+                parent=self.winfo_toplevel(),
+            ):
+                return
+            self._remove_unanswered_from_disk(current)
+            # Drop StringVars for the cleared questions so they don't
+            # round-trip back into answers.json on save.
+            for q in current:
+                self.wizard.answer_vars.pop(q, None)
+            # Destroy the entire new-questions card so the section
+            # disappears cleanly. Reload-and-rebuild would also work but
+            # is heavier and would lose scroll position.
+            card = getattr(self, "_unanswered_card", None)
+            if card is not None:
+                try:
+                    card.destroy()
+                except Exception:
+                    pass
+
+        self.after(0, _confirm)
 
     def _remove_unanswered_from_disk(self, questions: list[str]) -> None:
         """Delete listed questions from data/unanswered.json.
