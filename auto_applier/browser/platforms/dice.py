@@ -340,6 +340,7 @@ class DicePlatform(JobPlatform):
             "Auto Applier — Dice login needed",
             "Dice is asking you to log in before applying. Complete "
             f"the sign-in in the open browser window within {timeout}s.",
+            urgent=True,
         )
         start = time.monotonic()
         last_log_url = ""

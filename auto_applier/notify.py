@@ -36,15 +36,26 @@ _LAST_NOTIFY: dict[str, float] = {}
 _COOLDOWN_SECONDS = 30.0
 
 
-def notify_user(title: str, message: str, *, force: bool = False) -> bool:
+def notify_user(
+    title: str, message: str, *,
+    force: bool = False, urgent: bool = False,
+) -> bool:
     """Fire a desktop notification. Returns True on success, False
     on any failure (silent — caller never blocks on this).
 
     Per-(title+message) cooldown prevents spam: re-firing the same
     notification within 30s is a no-op unless ``force=True``.
+
+    ``urgent=True`` adds an audible beep + bypasses the cooldown so
+    user-blocking events (CAPTCHA, login walls) are never missed even
+    when Focus Assist silences toasts. The Windows toast itself can
+    take 1-2s to render via PowerShell; the beep is instant.
     """
     if not title:
         title = "Auto Applier"
+    if urgent:
+        force = True
+        _play_alert_sound()
     key = f"{title}::{message[:60]}"
     now = time.monotonic()
     if not force:
@@ -62,6 +73,45 @@ def notify_user(title: str, message: str, *, force: bool = False) -> bool:
     except Exception as exc:
         logger.debug("notify_user failed: %s", exc)
         return False
+
+
+def _play_alert_sound() -> None:
+    """Play a system alert sound to grab the user's attention.
+
+    Bypasses Focus Assist / Do Not Disturb on Windows, which silently
+    swallow toast notifications. The toast still fires (visual record)
+    but the beep guarantees the user notices a CAPTCHA / login wall
+    even if they're in another window.
+
+    Best-effort: failure is silent.
+    """
+    try:
+        if sys.platform.startswith("win"):
+            import winsound
+            # MB_ICONHAND = critical-stop sound. Reliably audible
+            # even when notifications are silenced.
+            winsound.MessageBeep(0x00000010)
+        elif sys.platform == "darwin":
+            subprocess.run(
+                ["afplay", "/System/Library/Sounds/Sosumi.aiff"],
+                timeout=3,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            # Linux — paplay if available, else fall back to bell
+            if shutil.which("paplay"):
+                subprocess.run(
+                    ["paplay", "/usr/share/sounds/freedesktop/stereo/dialog-warning.oga"],
+                    timeout=3,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                # Terminal bell — last resort
+                print("\a", end="", flush=True)
+    except Exception:
+        pass
 
 
 def _notify_windows(title: str, message: str) -> bool:

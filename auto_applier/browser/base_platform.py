@@ -419,6 +419,23 @@ class JobPlatform(ABC):
         if not await self.detect_captcha(page):
             return
 
+        # Fire URGENT notification (audible beep + toast) BEFORE any
+        # branch decision so the user gets the alert regardless of
+        # whether we abort immediately or retry. Previously the
+        # retry_seconds <= 0 branch raised without notifying, AND
+        # the retry branch's toast-only path got silenced by Focus
+        # Assist. Audible alert bypasses both.
+        try:
+            from auto_applier.notify import notify_user
+            notify_user(
+                f"Auto Applier — {self.display_name} CAPTCHA",
+                "Solve the CAPTCHA in the browser window NOW. "
+                "The application is paused.",
+                urgent=True,
+            )
+        except Exception:
+            pass
+
         if retry_seconds <= 0:
             raise CaptchaDetectedError(
                 f"CAPTCHA detected on {self.display_name}. "
@@ -430,20 +447,6 @@ class JobPlatform(ABC):
             "a transient Cloudflare JS challenge...",
             self.display_name, retry_seconds,
         )
-        # Fire a desktop toast so the user knows we're paused. Best-
-        # effort; no fallback if it fails. The notify helper has its
-        # own per-message cooldown so back-to-back checks don't spam.
-        try:
-            from auto_applier.notify import notify_user
-            notify_user(
-                f"Auto Applier — {self.display_name} CAPTCHA",
-                "A CAPTCHA or anti-bot challenge appeared. The "
-                f"program is waiting up to {retry_seconds:.0f}s for it "
-                "to clear on its own. If it persists, switch to the "
-                "browser window and solve it manually.",
-            )
-        except Exception:
-            pass
         # asyncio.get_event_loop() is deprecated in 3.12+ when called
         # from inside a running coroutine — use get_running_loop() to
         # get the loop we're already running on.
@@ -494,13 +497,16 @@ class JobPlatform(ABC):
             timeout,
             len(selectors),
         )
-        # Best-effort desktop toast so the user knows we're paused.
+        # Audible + visible toast — login waits are user-blocking and
+        # Focus Assist mode silences toast-only notifications. Urgent
+        # path adds a system beep that bypasses Focus Assist.
         try:
             from auto_applier.notify import notify_user
             notify_user(
                 f"Auto Applier — {self.display_name} login needed",
                 f"Please complete the sign-in in the open browser "
                 f"window within {timeout}s.",
+                urgent=True,
             )
         except Exception:
             pass
