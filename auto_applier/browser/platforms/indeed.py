@@ -1890,6 +1890,64 @@ class IndeedPlatform(JobPlatform):
                 job.job_id, pre_url, pre_title[:80],
                 matched_selector, btn_info,
             )
+
+            # If submit is disabled, the review page has an unmet
+            # gate — usually an unchecked "I agree / I confirm /
+            # I certify" checkbox attached to the disclosure copy.
+            # Live run 2026-05-02 SUBMIT_UNCONFIRMED dump showed
+            # `disabled: True` while body text said "100% Please
+            # review your application" — i.e. all questions filled
+            # but a separate consent gate held submit closed.
+            # Try to satisfy the gate, then re-evaluate.
+            if btn_info.get("disabled"):
+                logger.warning(
+                    "Indeed: submit DISABLED job=%s — scanning for "
+                    "unchecked consent / agreement checkboxes",
+                    job.job_id,
+                )
+                checked = await self._check_consent_checkboxes(page)
+                if checked:
+                    # Re-fetch the button to get the live disabled state.
+                    try:
+                        await page.wait_for_function(
+                            f"""() => {{
+                                const b = document.querySelector(
+                                    '[data-testid="submit-application-button"], '
+                                    + 'button[name="submit-application"]'
+                                );
+                                return b && !b.disabled
+                                    && b.getAttribute('aria-disabled') !== 'true';
+                            }}""",
+                            timeout=3000,
+                        )
+                        logger.info(
+                            "Indeed: submit re-enabled after checking "
+                            "%d consent box(es) for %s",
+                            checked, job.job_id,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Indeed: checked %d consent box(es) but "
+                            "submit still disabled for %s — will "
+                            "click anyway to surface any remaining "
+                            "validation error",
+                            checked, job.job_id,
+                        )
+                    # Re-query target so the click goes to the live
+                    # element (the previous handle may be stale after
+                    # React re-renders the form).
+                    try:
+                        target = await page.query_selector(
+                            matched_selector
+                        )
+                    except Exception:
+                        pass
+                else:
+                    logger.warning(
+                        "Indeed: submit DISABLED job=%s — no consent "
+                        "checkboxes found to check",
+                        job.job_id,
+                    )
         else:
             # Try text-based fallback
             try:
@@ -2048,6 +2106,90 @@ class IndeedPlatform(JobPlatform):
             success=False,
             failure_reason="submit clicked but no success confirmation",
         )
+
+    async def _check_consent_checkboxes(self, page: Page) -> int:
+        """Find and check unchecked consent / agreement checkboxes.
+
+        On Indeed's review page the submit button can stay disabled
+        because a consent / certification / disclosure checkbox isn't
+        ticked — and these checkboxes aren't enumerated by our usual
+        form_field finder because they live in the page chrome (next
+        to the legal text, not in the questions module).
+
+        Strategy:
+          1. Find every visible unchecked input[type=checkbox] on
+             the page.
+          2. For each, walk up to its surrounding label / paragraph
+             and check the text for consent / agreement keywords.
+          3. If the keywords match, ``check()`` the box.
+
+        Returns the number of boxes checked. Conservative — only
+        clicks boxes where the surrounding text reads as a consent
+        statement. Won't click random unchecked checkboxes.
+        """
+        consent_keywords = (
+            "agree", "consent", "acknowledge", "certify", "confirm",
+            "authorize", "i understand", "accept the", "read and",
+            "above information", "true and accurate", "true and complete",
+            "terms of", "privacy policy", "background check",
+        )
+        try:
+            boxes = await page.query_selector_all(
+                "input[type='checkbox']:not(:checked)"
+            )
+        except Exception:
+            return 0
+
+        checked_count = 0
+        for box in boxes:
+            try:
+                if not await box.is_visible():
+                    continue
+            except Exception:
+                continue
+            try:
+                surrounding = (await box.evaluate(
+                    """(el) => {
+                        const bits = [];
+                        if (el.id) {
+                            const lbl = el.ownerDocument.querySelector(
+                                'label[for="' + el.id.replace(/"/g, '\\\\"') + '"]'
+                            );
+                            if (lbl) bits.push(lbl.innerText || '');
+                        }
+                        const wrap = el.closest('label');
+                        if (wrap) bits.push(wrap.innerText || '');
+                        // Walk up 5 levels for nearby disclosure text.
+                        let p = el.parentElement;
+                        for (let i = 0; i < 5 && p; i++) {
+                            const t = (p.innerText || '').trim();
+                            if (t && t.length < 600) {
+                                bits.push(t);
+                                break;
+                            }
+                            p = p.parentElement;
+                        }
+                        return bits.join(' | ').toLowerCase();
+                    }"""
+                )) or ""
+            except Exception:
+                surrounding = ""
+            if not any(kw in surrounding for kw in consent_keywords):
+                continue
+            try:
+                await box.check(timeout=3000)
+                checked_count += 1
+                logger.info(
+                    "Indeed: checked consent checkbox; "
+                    "surrounding text=%r",
+                    surrounding[:120],
+                )
+            except Exception as exc:
+                logger.debug(
+                    "Indeed: failed to check consent box "
+                    "(text=%r): %s", surrounding[:80], exc,
+                )
+        return checked_count
 
     async def _scan_visible_errors(self, page: Page) -> str:
         """Return the text of the first visible validation error, or ''."""

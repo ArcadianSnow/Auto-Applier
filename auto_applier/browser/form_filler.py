@@ -486,7 +486,34 @@ class FormFiller:
         validation rejected the form with a misleading "Select an
         option" error.
         """
+        # Work-authorization questions: skip the geographic personal_info
+        # keys (country / state / city / region / location). Live run
+        # 2026-05-02 hit "Are you legally authorized to work IN THE
+        # COUNTRY in which the job is located?" and the substring match
+        # on "country" returned "United States" → tried to apply that
+        # to a Yes/No radio → failed → form stuck. Work-auth questions
+        # are yes/no by intent; the country reference is just framing.
+        # Force fall-through to YES_NO_RULES / answers.json which have
+        # the real "Yes" answer for a US-citizen profile.
+        is_work_auth_question = any(
+            kw in label_lower for kw in (
+                "authorized to work",
+                "legally authorized",
+                "legal to work",
+                "eligible to work",
+                "permitted to work",
+                "right to work",
+                "sponsorship",
+                "visa",
+                "work permit",
+                "work auth",
+            )
+        )
         for keyword, config_key in PERSONAL_INFO_KEYS.items():
+            if is_work_auth_question and config_key in (
+                "country", "state", "city", "city_state",
+            ):
+                continue
             pattern = r"\b" + re.escape(keyword) + r"\b"
             if re.search(pattern, label_lower):
                 value = self.personal_info.get(config_key, "")
@@ -1797,8 +1824,78 @@ class FormFiller:
                 r"\b" + re.escape(needle) + r"\b", haystack,
             ))
 
-        best_idx = -1
-        best_score = 0.0
+        # Numeric-bucket pre-pass: when the answer is a bare integer
+        # (e.g. "6" for years of experience) AND the options look like
+        # numeric ranges ("1-3 years", "4-6 years", "7+", "10+"),
+        # find the bucket that CONTAINS the number and short-circuit
+        # the rest of the resolver. Without this the answer "6" scores
+        # 0 against all options, the resolver returns None, and the
+        # form dead-locks on the questions step. Live run 2026-05-02
+        # hit this at "How many years of experience do you have in
+        # data science...".
+        try:
+            numeric_answer = int(answer_lower.strip())
+        except (ValueError, AttributeError):
+            numeric_answer = None
+        if numeric_answer is not None:
+            # Parse each option for a range / N+ / single-N pattern.
+            range_pattern = re.compile(
+                r"(\d+)\s*(?:-|–|—|to|\s)\s*(\d+)"
+            )
+            plus_pattern = re.compile(r"(\d+)\s*\+")
+            less_than_pattern = re.compile(
+                r"(?:less than|<|under)\s*(\d+)", re.IGNORECASE
+            )
+            bucket_idx = -1
+            for opt in options:
+                text = (
+                    opt.get("label") or opt.get("value") or ""
+                ).strip().lower()
+                if not text:
+                    continue
+                m_range = range_pattern.search(text)
+                if m_range:
+                    lo, hi = int(m_range.group(1)), int(m_range.group(2))
+                    if lo <= numeric_answer <= hi:
+                        bucket_idx = opt["idx"]
+                        break
+                    continue
+                m_plus = plus_pattern.search(text)
+                if m_plus:
+                    threshold = int(m_plus.group(1))
+                    if numeric_answer >= threshold:
+                        bucket_idx = opt["idx"]
+                        # Keep scanning in case a tighter range matches
+                        # before the open-ended bucket. We only commit
+                        # to the plus-bucket if no exact range hit.
+                    continue
+                m_lt = less_than_pattern.search(text)
+                if m_lt:
+                    threshold = int(m_lt.group(1))
+                    if numeric_answer < threshold:
+                        bucket_idx = opt["idx"]
+                    continue
+            if bucket_idx >= 0:
+                logger.info(
+                    "radio resolver: numeric-bucket match for "
+                    "answer=%r → option[%d]=%r",
+                    answer, bucket_idx,
+                    options[bucket_idx].get("label", "")[:60],
+                )
+                # Skip directly to re-grab logic below by faking
+                # best_idx/score.
+                best_idx = bucket_idx
+                best_score = 1.0
+                # Fall through to the re-grab block at the bottom.
+                # (Other scoring loops below will still execute but
+                # never beat score=1.0.)
+            else:
+                best_idx = -1
+                best_score = 0.0
+        else:
+            best_idx = -1
+            best_score = 0.0
+
         for opt in options:
             text = (opt.get("label") or opt.get("value") or "").strip().lower()
             if not text:
