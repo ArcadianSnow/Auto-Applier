@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from auto_applier.config import RESUMES_DIR, PROFILES_DIR
-from auto_applier.resume.parser import extract_text
+from auto_applier.resume.parser import extract_text, extract_text_via_cache
 from auto_applier.llm.router import LLMRouter
 from auto_applier.llm.prompts import (
     RESUME_SELECT, SCORE_DIMENSIONS, SKILL_EXTRACT_RESUME,
@@ -218,8 +218,26 @@ class ResumeManager:
                     raise
             logger.info("Copied resume to %s", dest)
 
-        # Parse text
-        raw_text = extract_text(dest)
+        # Build the PDF cache eagerly, while we know the file isn't
+        # locked (the user just added it via the wizard). Future
+        # text reads + uploads will both prefer the cache, so the
+        # user can later open the original in Word/Acrobat without
+        # disrupting runs. Cache build happens via ensure_pdf which
+        # also handles already-PDF inputs (copies them to .converted
+        # for path uniformity). Failure is non-fatal — text
+        # extraction below falls back to the original.
+        try:
+            from auto_applier.resume.pdf_converter import ensure_pdf_sync
+            ensure_pdf_sync(dest)
+        except Exception as exc:
+            logger.debug(
+                "PDF cache build failed for %s: %s — will fall back "
+                "to original on text reads.", dest, exc,
+            )
+
+        # Parse text via cache when available — survives the user
+        # opening the original in Word/Acrobat after this point.
+        raw_text = extract_text_via_cache(dest)
 
         # Pass 1: save a minimal profile immediately. The scoring
         # pipeline only truly needs ``raw_text`` — skills improve

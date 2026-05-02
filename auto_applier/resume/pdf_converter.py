@@ -44,7 +44,33 @@ async def ensure_pdf(resume_path: str | Path) -> Path:
 
     suffix = src.suffix.lower()
     if suffix == ".pdf":
-        return src
+        # Always make a working copy under .converted/ even when input
+        # is already PDF. Two reasons:
+        #   1. Read/write code paths stay uniform — every consumer
+        #      (text extraction for scoring, set_input_files for
+        #      upload) reads from .converted/ and never touches the
+        #      original file. So if the user opens the original in
+        #      Adobe Acrobat, that lock can't disrupt a run.
+        #   2. The cache is mtime-keyed, so editing the source
+        #      replaces the cache automatically.
+        cached = _cached_pdf_path(src)
+        if _cache_is_fresh(src, cached):
+            return cached
+        try:
+            import shutil
+            CONVERTED_RESUMES_DIR.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, cached)
+            logger.info(
+                "Cached PDF resume: %s → %s", src.name, cached,
+            )
+            return cached
+        except Exception as exc:
+            logger.warning(
+                "Failed to cache PDF resume %s (%s) — uploading "
+                "original. Keep the file out of Acrobat to avoid "
+                "lock issues.", src, exc,
+            )
+            return src
 
     if suffix not in (".docx", ".txt"):
         logger.warning(
