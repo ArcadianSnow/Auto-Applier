@@ -107,6 +107,14 @@ JOB_LOCATION_SELECTORS = [
 
 # Apply button on job detail page
 APPLY_BUTTON_SELECTORS = [
+    # Modern Indeed-React (2026): the apply button has a hash-suffix
+    # testid like data-testid="<sha256>-test" and class names from
+    # emotion CSS (e.g. css-1neivp9 e8ju0x50). Neither is stable
+    # enough to target directly. The text-based selectors below are
+    # the resilient fallbacks. A friend's run on 2026-05-02 hit
+    # STUCK_FORM stage=viewjob on every job because the button was
+    # this hash-testid variant and our selectors all missed; only
+    # text-match would have caught it.
     "button#indeedApplyButton",
     "button[id*='indeedApply']",
     ".jobsearch-IndeedApplyButton-newDesign",
@@ -116,6 +124,20 @@ APPLY_BUTTON_SELECTORS = [
     "a.ia-IndeedApplyButton",
     "button[aria-label*='Apply']",
     "button[aria-label*='apply']",
+    # Text-based fallbacks — stable across UI rewrites because they
+    # match the rendered text, not the DOM structure. Order matters:
+    # most-specific text first so we don't grab a generic "Apply"
+    # link in a sidebar.
+    "button:has-text('Apply with Indeed')",
+    "button:has-text('Apply now')",
+    "button:has-text('Apply Now')",
+    "a:has-text('Apply with Indeed')",
+    "a:has-text('Apply now')",
+    # Last resort — any button whose only text is "Apply" (case
+    # insensitive). The :scope-text trick keeps it from grabbing
+    # buttons that contain "Apply" as part of a longer string.
+    "button:text-is('Apply')",
+    "a:text-is('Apply')",
 ]
 
 # Job description on the detail page

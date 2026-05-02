@@ -86,10 +86,60 @@ def start_run_logging(debug_console: bool = False) -> Path:
         sh.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
         root.addHandler(sh)
 
-    logging.getLogger(__name__).info(
-        "Run logging enabled. Debug output: %s", log_path,
-    )
+    log = logging.getLogger(__name__)
+    log.info("Run logging enabled. Debug output: %s", log_path)
+    # Stamp the build identity so audits know which code produced
+    # the log — friend's logs were ambiguous about whether they
+    # included recent fixes. Tries (in order) git commit hash from
+    # the source checkout, then a packaged VERSION file. Falls
+    # back to "(unknown)" so a missing git binary never breaks
+    # logging.
+    log.info("Run version: %s", _detect_version())
     return log_path
+
+
+def _detect_version() -> str:
+    """Best-effort build identity for log stamping.
+
+    1. ``git rev-parse --short HEAD`` from PROJECT_ROOT — most
+       precise; works when the user is running from a git checkout.
+    2. ``VERSION`` text file at PROJECT_ROOT — for distributions
+       built without a git directory (PyInstaller bundles, zip
+       installs).
+    3. ``"(unknown)"`` if neither is available.
+
+    Output also includes a ``-dirty`` suffix when the working tree
+    has uncommitted changes. Diagnoses two real-world cases:
+    "did the friend update?" (commit drift) and "did they edit
+    something locally?" (dirty flag).
+    """
+    import subprocess
+    from auto_applier.config import PROJECT_ROOT
+    try:
+        sha = subprocess.run(
+            ["git", "-C", str(PROJECT_ROOT), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if sha.returncode == 0 and sha.stdout.strip():
+            ver = sha.stdout.strip()
+            # Check for uncommitted changes — fast porcelain query.
+            dirty = subprocess.run(
+                ["git", "-C", str(PROJECT_ROOT), "status",
+                 "--porcelain", "--untracked-files=no"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if dirty.returncode == 0 and dirty.stdout.strip():
+                ver += "-dirty"
+            return ver
+    except Exception:
+        pass
+    try:
+        version_file = PROJECT_ROOT / "VERSION"
+        if version_file.exists():
+            return version_file.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    return "(unknown)"
 
 
 def current_log_path() -> Path | None:
