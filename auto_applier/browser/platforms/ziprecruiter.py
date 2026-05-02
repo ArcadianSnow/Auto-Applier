@@ -1001,8 +1001,62 @@ class ZipRecruiterPlatform(JobPlatform):
         ZR dashboard showed "Application Incomplete". Never trust
         a missing form as evidence of success.
         """
+        # 1-click apply detection: ZR's "Quick Apply" submits the
+        # application instantly when the user has a complete profile,
+        # without showing any form. The page transitions, the apply
+        # is recorded server-side, and our walker sees no form fields
+        # to fill. Live run 2026-05-02 17:14: 8 walker steps with 0
+        # real fields each, marked as Apply FAILED ("Exceeded maximum
+        # form steps"), but the user confirmed the job appeared in
+        # ZR's "My Jobs" page — the application HAD submitted.
+        #
+        # Check _check_success and the URL BEFORE entering the
+        # multi-step walk. If either fires, the apply already
+        # completed via the 1-click path and we return immediately.
+        # Brief wait first so the page has time to settle after the
+        # apply click that brought us here.
+        try:
+            await random_delay(1.0, 2.0)
+        except Exception:
+            await asyncio.sleep(1.5)
+        try:
+            if await self._check_success(page):
+                logger.info(
+                    "ZipRecruiter: 1-click apply detected for %s "
+                    "(success-detected before form walk)",
+                    job.job_id,
+                )
+                return self._build_result(success=True, dry_run=dry_run)
+        except Exception:
+            pass
+        # URL-based 1-click detection — ZR redirects to confirmation
+        # routes immediately on instant apply.
+        try:
+            cur_url = page.url.lower()
+        except Exception:
+            cur_url = ""
+        if any(p in cur_url for p in (
+            "/apply/successful", "/apply/confirmation",
+            "/apply/thank", "/post-apply", "/thanks",
+            "/applied",
+        )):
+            logger.info(
+                "ZipRecruiter: 1-click apply URL match for %s "
+                "(url=%s)",
+                job.job_id, cur_url,
+            )
+            return self._build_result(success=True, dry_run=dry_run)
+
         any_real_fields_filled = False
         empty_form_steps = 0  # consecutive steps with 0 real fields
+        # Track the URL we entered the walker on so we can detect
+        # "URL changed to non-form page after no fields ever
+        # appeared" as a 1-click apply that just took an extra
+        # second to land.
+        try:
+            walk_start_url = page.url
+        except Exception:
+            walk_start_url = ""
 
         for step in range(MAX_FORM_STEPS):
             logger.info(
@@ -1105,6 +1159,25 @@ class ZipRecruiterPlatform(JobPlatform):
                             "submission confirmation (likely "
                             "incomplete fields rejected silently)"
                         ),
+                    )
+            elif not any_real_fields_filled and real_fields_on_step == 0:
+                # 1-click apply tail: no fields ever appeared, and
+                # this step is also empty. ZR's instant-apply may
+                # take 1-3 cycles to settle. Re-check _check_success
+                # each step. If at step 3+ we still have nothing AND
+                # _check_success doesn't fire AND the URL hasn't
+                # moved meaningfully off the entry URL, we'll fall
+                # through to the MAX_FORM_STEPS bail at the end —
+                # which now also gets a "probable 1-click success"
+                # check (see below).
+                if await self._check_success(page):
+                    logger.info(
+                        "ZipRecruiter: 1-click apply confirmed for "
+                        "%s on step %d (URL/banner)",
+                        job.job_id, step + 1,
+                    )
+                    return self._build_result(
+                        success=True, dry_run=dry_run,
                     )
             else:
                 empty_form_steps = 0
@@ -1243,7 +1316,28 @@ class ZipRecruiterPlatform(JobPlatform):
                     )
                 await random_delay(1.5, 3.0)
 
-        # Exceeded max steps
+        # Exceeded max steps. Disambiguate two cases:
+        #
+        # A. We filled SOMETHING but couldn't reach submit — that's
+        #    a real failure (form too long or our walker got lost).
+        # B. We never had any field to fill across all 8 steps —
+        #    this is the 1-click apply pattern. ZR submitted the
+        #    job server-side as soon as we clicked apply, and our
+        #    walker spun on a job-search page that has no apply
+        #    form to fill. Live run 2026-05-02 17:14: "Business
+        #    Analyst - Presentation Expert" hit this — recorded as
+        #    failed but actually appeared in the user's "My Jobs"
+        #    page. Treat case B as probable success so the CSV
+        #    matches reality.
+        if not any_real_fields_filled:
+            logger.warning(
+                "ZipRecruiter: 1-click apply probable success for %s "
+                "— %d empty steps with no fields ever appearing; "
+                "treating as success (verify in My Jobs if uncertain)",
+                job.job_id, MAX_FORM_STEPS,
+            )
+            return self._build_result(success=True, dry_run=dry_run)
+
         logger.warning(
             "ZipRecruiter: Exceeded %d form steps for %s",
             MAX_FORM_STEPS,
