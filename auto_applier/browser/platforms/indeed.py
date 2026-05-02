@@ -1685,33 +1685,7 @@ class IndeedPlatform(JobPlatform):
                         job.job_id,
                     )
                     return self._build_result(success=True, dry_run=True)
-                clicked = await self.safe_click(
-                    page, FORM_SUBMIT_SELECTORS, timeout=500,
-                )
-                if not clicked:
-                    clicked = await self._click_nav_button_by_text(
-                        page, ("submit application", "submit your application", "submit"),
-                    )
-                if not clicked:
-                    return self._build_result(
-                        success=False,
-                        failure_reason="submit button not found on review page",
-                    )
-                await random_delay(2.0, 4.0)
-                if await self._check_success(page):
-                    logger.info(
-                        "Indeed: Submitted application for %s", job.job_id,
-                    )
-                    return self._build_result(success=True, dry_run=False)
-                logger.warning(
-                    "Indeed: Submit clicked for %s but no success "
-                    "indicator appeared — treating as failed",
-                    job.job_id,
-                )
-                return self._build_result(
-                    success=False,
-                    failure_reason="submit clicked but no success confirmation",
-                )
+                return await self._submit_review_step(page, job)
 
             # Regular step — click Continue and wait for the URL to
             # actually change. If it doesn't, surface any visible
@@ -1844,6 +1818,311 @@ class IndeedPlatform(JobPlatform):
             pass
 
         return False
+
+    async def _submit_review_step(self, page: Page, job: Job):
+        """Submit the application from the review page with full diagnostics.
+
+        Replaces the previous one-shot click + 4-second check with:
+
+        1. **Pre-click instrumentation** — log which selector matched,
+           the button's outerHTML, current URL, page title, and any
+           visible required fields still empty. If submit fails, this
+           tells us WHY without needing another live run.
+        2. **Confirmation modal handler** — Indeed sometimes shows a
+           "Submit your application?" modal after the first click;
+           handle it before declaring success or failure.
+        3. **15s polling for success** — _check_success once at
+           every second instead of a single shot 4s in. Indeed's
+           post-apply redirect can take 5-10s on slower connections.
+           Also detects URL change as probable-success.
+        4. **Validation-error detection** — visible ``[role=alert]``
+           or error-class element on the review page after click =
+           definite failure with the actual error text in the result.
+        5. **SUBMIT_UNCONFIRMED dump on exhaustion** — full diagnostic:
+           URL, title, body snippet, button list, error elements.
+        """
+        import asyncio as _asyncio
+        from auto_applier.storage.models import Job  # noqa: F401
+
+        try:
+            pre_url = page.url
+        except Exception:
+            pre_url = "?"
+        try:
+            pre_title = await page.title()
+        except Exception:
+            pre_title = "?"
+
+        # Pre-click instrumentation: which selector matches, what's
+        # the button text/testid/disabled state, and is anything
+        # visibly required-but-empty on the review page right now?
+        matched_selector = ""
+        target = None
+        for sel in FORM_SUBMIT_SELECTORS:
+            try:
+                el = await page.query_selector(sel)
+                if not el:
+                    continue
+                if not await el.is_visible():
+                    continue
+                target = el
+                matched_selector = sel
+                break
+            except Exception:
+                continue
+
+        if target is not None:
+            try:
+                btn_info = await target.evaluate(
+                    """(el) => ({
+                        text: (el.innerText || '').trim().substring(0, 80),
+                        disabled: el.disabled || el.getAttribute('aria-disabled') === 'true',
+                        testid: el.getAttribute('data-testid') || '',
+                        type: el.type || '',
+                        outer: (el.outerHTML || '').substring(0, 300),
+                    })"""
+                )
+            except Exception:
+                btn_info = {}
+            logger.info(
+                "Indeed: pre-submit job=%s url=%s title=%r selector=%r "
+                "button=%s",
+                job.job_id, pre_url, pre_title[:80],
+                matched_selector, btn_info,
+            )
+        else:
+            # Try text-based fallback
+            try:
+                clicked_text = await self._click_nav_button_by_text(
+                    page,
+                    ("submit application", "submit your application",
+                     "submit"),
+                )
+            except Exception:
+                clicked_text = False
+            if not clicked_text:
+                logger.warning(
+                    "Indeed: SUBMIT_NO_BUTTON job=%s url=%s — no "
+                    "matching submit button found",
+                    job.job_id, pre_url,
+                )
+                return self._build_result(
+                    success=False,
+                    failure_reason="submit button not found on review page",
+                )
+            logger.info(
+                "Indeed: pre-submit (text-fallback) job=%s url=%s "
+                "title=%r",
+                job.job_id, pre_url, pre_title[:80],
+            )
+            return await self._wait_for_submit_outcome(page, job, pre_url)
+
+        # Click the submit button
+        try:
+            await target.click(timeout=4000)
+        except Exception as exc:
+            logger.warning(
+                "Indeed: submit click raised (%s); retrying with "
+                "force=True", exc,
+            )
+            try:
+                await target.click(force=True, timeout=2000)
+            except Exception as exc2:
+                logger.warning(
+                    "Indeed: SUBMIT_CLICK_FAILED job=%s err=%s",
+                    job.job_id, exc2,
+                )
+                return self._build_result(
+                    success=False,
+                    failure_reason=f"submit click failed: {exc2}",
+                )
+
+        return await self._wait_for_submit_outcome(page, job, pre_url)
+
+    async def _wait_for_submit_outcome(
+        self, page: Page, job: Job, pre_url: str,
+    ) -> "ApplyResult":  # noqa: F821
+        """After a submit click, poll up to 15s for success/failure.
+
+        Three terminal states:
+          - success: _check_success returns True
+          - probable success: URL changed away from review-module to
+            anything that's NOT another /review-module page and not a
+            /auth or /captcha gate
+          - failure: visible validation error appears on the review
+            page
+
+        On exhaustion, dump SUBMIT_UNCONFIRMED diagnostic and return
+        a structured failure with as much context as we can capture.
+        """
+        import asyncio as _asyncio
+
+        # First, try to handle a confirmation modal that some Indeed
+        # apply flows show after the initial click. The modal has its
+        # own "Submit" / "Yes, submit" button and the original click
+        # only opened the modal.
+        try:
+            await _asyncio.sleep(1.2)
+            modal_btn = await page.query_selector(
+                "div[role='dialog'] button:has-text('Submit'), "
+                "div[role='dialog'] button:has-text('Yes, submit'), "
+                "div[role='dialog'] button:has-text('Confirm'), "
+                "[aria-modal='true'] button:has-text('Submit')"
+            )
+            if modal_btn:
+                try:
+                    if await modal_btn.is_visible():
+                        logger.info(
+                            "Indeed: confirmation modal detected; "
+                            "clicking modal-submit for %s", job.job_id,
+                        )
+                        await modal_btn.click(timeout=3000)
+                except Exception as exc:
+                    logger.debug(
+                        "Indeed: modal-submit click failed: %s", exc,
+                    )
+        except Exception:
+            pass
+
+        # Polling loop — up to 15s, 1s cadence.
+        deadline = _asyncio.get_event_loop().time() + 15.0
+        last_url = pre_url
+        while _asyncio.get_event_loop().time() < deadline:
+            # Strong success signal
+            try:
+                if await self._check_success(page):
+                    logger.info(
+                        "Indeed: Submitted application for %s "
+                        "(success-detected)", job.job_id,
+                    )
+                    return self._build_result(success=True, dry_run=False)
+            except Exception:
+                pass
+
+            # Validation error?
+            err_text = await self._scan_visible_errors(page)
+            if err_text:
+                logger.warning(
+                    "Indeed: SUBMIT_VALIDATION_ERROR job=%s text=%r",
+                    job.job_id, err_text[:200],
+                )
+                return self._build_result(
+                    success=False,
+                    failure_reason=(
+                        f"submit blocked by validation: {err_text[:120]}"
+                    ),
+                )
+
+            # URL-changed-only signal (weaker, kept after explicit
+            # success/error checks). If URL moved off review-module
+            # to something that isn't another review/captcha/auth
+            # page, treat as probable success — Indeed's confirmation
+            # page can sometimes lack our known selectors but the
+            # navigation itself is the signal.
+            try:
+                cur_url = page.url
+            except Exception:
+                cur_url = pre_url
+            if cur_url != last_url:
+                last_url = cur_url
+            if (
+                cur_url != pre_url
+                and "review-module" not in cur_url
+                and "/auth" not in cur_url
+                and "/login" not in cur_url
+                and "captcha" not in cur_url.lower()
+            ):
+                logger.warning(
+                    "Indeed: SUBMIT_PROBABLE_SUCCESS job=%s "
+                    "url=%s — navigation away from review without "
+                    "explicit success banner; treating as success",
+                    job.job_id, cur_url,
+                )
+                return self._build_result(success=True, dry_run=False)
+
+            await _asyncio.sleep(1.0)
+
+        # Exhausted — dump full diagnostic
+        await self._dump_submit_unconfirmed(page, job, pre_url)
+        return self._build_result(
+            success=False,
+            failure_reason="submit clicked but no success confirmation",
+        )
+
+    async def _scan_visible_errors(self, page: Page) -> str:
+        """Return the text of the first visible validation error, or ''."""
+        error_selectors = [
+            "[role='alert']:not([aria-hidden='true'])",
+            "[class*='error-message']",
+            "[class*='ErrorMessage']",
+            "[class*='validation-error']",
+            "[data-testid*='error']",
+            ".css-error",
+        ]
+        for sel in error_selectors:
+            try:
+                els = await page.query_selector_all(sel)
+            except Exception:
+                continue
+            for el in els:
+                try:
+                    if not await el.is_visible():
+                        continue
+                    text = (await el.inner_text()).strip()
+                except Exception:
+                    continue
+                if text and len(text) >= 5:
+                    return text
+        return ""
+
+    async def _dump_submit_unconfirmed(
+        self, page: Page, job: Job, pre_url: str,
+    ) -> None:
+        """Log everything we can capture about why submit didn't confirm."""
+        try:
+            cur_url = page.url
+        except Exception:
+            cur_url = "?"
+        try:
+            title_text = await page.title()
+        except Exception:
+            title_text = "?"
+        try:
+            body_text = (await page.inner_text("body"))[:500]
+        except Exception:
+            body_text = "?"
+        try:
+            btns = await page.evaluate("""() => {
+                return [...document.querySelectorAll('button, a[role=button], [role=button]')]
+                    .filter(el => el.offsetParent !== null)
+                    .slice(0, 12)
+                    .map(el => ({
+                        text: (el.innerText || '').trim().substring(0, 50),
+                        disabled: el.disabled || el.getAttribute('aria-disabled') === 'true',
+                        testid: el.getAttribute('data-testid') || '',
+                    }));
+            }""")
+        except Exception:
+            btns = []
+        try:
+            errors = await page.evaluate("""() => {
+                const sels = "[role='alert'], [class*='error'], [class*='Error']";
+                return [...document.querySelectorAll(sels)]
+                    .filter(el => el.offsetParent !== null)
+                    .slice(0, 6)
+                    .map(el => (el.innerText || '').trim().substring(0, 120));
+            }""")
+        except Exception:
+            errors = []
+        import json as _json
+        logger.warning(
+            "SUBMIT_UNCONFIRMED job=%s pre_url=%s post_url=%s "
+            "title=%r body_snippet=%r buttons=%s errors=%s",
+            job.job_id, pre_url, cur_url, title_text[:80],
+            body_text.replace("\n", " ")[:300],
+            _json.dumps(btns)[:600],
+            _json.dumps(errors)[:400],
+        )
 
     async def _check_success(self, page: Page) -> bool:
         """Check if application submission succeeded.
