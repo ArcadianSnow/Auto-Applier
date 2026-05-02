@@ -306,7 +306,21 @@ async def apply_to_job(
         except Exception:
             pass
 
-    # Random delay between applications
-    await random_delay(MIN_DELAY_BETWEEN_APPLICATIONS, MAX_DELAY_BETWEEN_APPLICATIONS)
+    # Random delay between applications — anti-detection pacing.
+    # Log INFO line on real applies so the dashboard shows "cooldown
+    # in progress" instead of going silent for 60-180s. User
+    # reported that post-apply quiet "looked stuck" when in fact
+    # it was just the cooldown running.
+    if status == "applied":
+        logger.info(
+            "Cooldown: sleeping %.0f-%.0fs before next application "
+            "(anti-detection pacing)",
+            MIN_DELAY_BETWEEN_APPLICATIONS,
+            MAX_DELAY_BETWEEN_APPLICATIONS,
+        )
+    await random_delay(
+        MIN_DELAY_BETWEEN_APPLICATIONS,
+        MAX_DELAY_BETWEEN_APPLICATIONS,
+    )
 
     return app

@@ -1701,6 +1701,7 @@ class IndeedPlatform(JobPlatform):
                 logger.info(
                     "Indeed: Application success detected for %s", job.job_id,
                 )
+                await self._dismiss_post_apply_overlays(page)
                 return self._build_result(success=True, dry_run=False)
 
             # Review module → submit.
@@ -2082,6 +2083,7 @@ class IndeedPlatform(JobPlatform):
                         "Indeed: Submitted application for %s "
                         "(success-detected)", job.job_id,
                     )
+                    await self._dismiss_post_apply_overlays(page)
                     return self._build_result(success=True, dry_run=False)
             except Exception:
                 pass
@@ -2125,6 +2127,7 @@ class IndeedPlatform(JobPlatform):
                     "explicit success banner; treating as success",
                     job.job_id, cur_url,
                 )
+                await self._dismiss_post_apply_overlays(page)
                 return self._build_result(success=True, dry_run=False)
 
             await _asyncio.sleep(1.0)
@@ -2135,6 +2138,86 @@ class IndeedPlatform(JobPlatform):
             success=False,
             failure_reason="submit clicked but no success confirmation",
         )
+
+    async def _dismiss_post_apply_overlays(self, page: Page) -> None:
+        """Close Indeed's post-apply survey / "rate your experience"
+        modals so the page is in a clean state when the next job
+        starts.
+
+        After a successful submit, Indeed often shows a follow-up
+        survey ("How was your application experience?", "Did you
+        finish?", "Help us improve"). User reported that the program
+        "seemed stuck" after a real submission — actual cause was
+        the engine's between-applications cooldown (60-180s
+        random_delay) running while the browser sat on an
+        undismissed survey. The cooldown is normal; the dismissal
+        prevents the survey from interfering with the next job's
+        navigation AND makes the page visibly transition to a clean
+        state so it's clear the apply landed.
+
+        Best-effort. Failures are silent — the engine moves on
+        regardless. Tries common close/skip text and structural
+        selectors; the first match wins.
+        """
+        # Wait briefly so the survey has time to render after the
+        # success page resolves. Indeed's modal often appears 1-2s
+        # after the post-apply redirect.
+        try:
+            await random_delay(0.8, 1.5)
+        except Exception:
+            await asyncio.sleep(1.0)
+
+        dismiss_selectors = [
+            # Generic close buttons in dialogs / modals
+            "[role='dialog'] button[aria-label*='Close' i]",
+            "[role='dialog'] button[aria-label*='Dismiss' i]",
+            "[aria-modal='true'] button[aria-label*='Close' i]",
+            "[aria-modal='true'] button[aria-label*='Dismiss' i]",
+            # Indeed-specific testids
+            "button[data-testid='ExitLinkWithModalComponent-exitButton']",
+            "button[data-testid='close-survey']",
+            "button[data-testid='dismiss-survey']",
+            # Text-based catches — order matters: "No thanks" before
+            # "No" to avoid bare-No matching
+            "button:has-text('No thanks')",
+            "button:has-text('Maybe later')",
+            "button:has-text('Skip survey')",
+            "button:has-text('Skip for now')",
+            "button:has-text('Skip')",
+            "button:has-text('Not now')",
+            "button:has-text('Dismiss')",
+            "button:has-text('Close')",
+        ]
+        for sel in dismiss_selectors:
+            try:
+                el = await page.query_selector(sel)
+                if not el:
+                    continue
+                if not await el.is_visible():
+                    continue
+                logger.info(
+                    "Indeed: dismissing post-apply overlay via %s",
+                    sel,
+                )
+                try:
+                    await el.click(timeout=2000)
+                except Exception:
+                    try:
+                        await el.click(force=True, timeout=2000)
+                    except Exception:
+                        continue
+                # Give the modal a moment to close before any
+                # subsequent action.
+                try:
+                    await random_delay(0.3, 0.8)
+                except Exception:
+                    await asyncio.sleep(0.5)
+                return
+            except Exception:
+                continue
+        # No matching dismiss control found — that's fine. Indeed
+        # may not have shown a survey for this job. The page will
+        # be navigated away by the next iteration's goto regardless.
 
     async def _check_consent_checkboxes(self, page: Page) -> int:
         """Find and check unchecked consent / agreement checkboxes.
