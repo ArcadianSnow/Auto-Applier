@@ -45,6 +45,51 @@ _PHANTOM_LABEL_PATTERNS = (
 )
 
 
+def _clean_compound_label(raw: str) -> str:
+    """Reduce a multi-line wrapper-derived label to its actionable line.
+
+    When a single ``<label>`` wraps an entire fieldset (Indeed's
+    questions module pattern), ``inner_text()`` returns multiple
+    lines stacked together — section heading, helper paragraph,
+    actual question, asterisk, options. The actual question is
+    almost always the LAST non-empty line.
+
+    Live-run example that motivated this helper::
+
+        "Mobile Number\\n\\nProvide valid phone numbers to allow \\n\\n
+         Recruiters to contact you.\\n\\nCountry *"
+
+    The element was a SELECT with country options; the LLM saw
+    "Mobile Number" first and answered with a phone number. Cleaning
+    the label to just "Country *" gets the right answer the first
+    time.
+
+    Conservative — only kicks in when there's an actual newline AND
+    multiple non-empty lines. Single-line labels untouched. If the
+    last line is bare punctuation chrome (``*``, ``(required)``),
+    fall back to the line before it.
+    """
+    if not raw or "\n" not in raw:
+        return raw
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return raw
+    last = lines[-1]
+    # Skip pure chrome lines (`*`, `(required)`, `required`).
+    chrome_pattern = re.compile(
+        r"^[\*\s]+$|^\(required\)$|^required$",
+        re.IGNORECASE,
+    )
+    while lines and chrome_pattern.match(last):
+        lines.pop()
+        if not lines:
+            break
+        last = lines[-1]
+    if not lines:
+        return raw
+    return last
+
+
 def _is_phantom_label(label: str) -> bool:
     """Return True for labels that look like form chrome, not a question.
 
@@ -252,6 +297,14 @@ async def _classify_element(
     el: ElementHandle, label: str, page: Page
 ) -> FormField | None:
     """Classify an element into a FormField with type and options."""
+    # Reduce compound multi-line wrapper labels to the actionable
+    # line BEFORE phantom-label and personal-info matching run on
+    # them. A label like "Mobile Number\n\n...helper text...\n\n
+    # Country *" should be treated as just "Country *" for every
+    # downstream consumer (form_filler keyword match, LLM prompt,
+    # answers.json fuzzy match, FIELD_RESULT log line).
+    label = _clean_compound_label(label)
+
     try:
         tag = await el.evaluate("el => el.tagName.toLowerCase()")
         input_type = (await el.get_attribute("type") or "text").lower()

@@ -410,6 +410,10 @@ class FormFiller:
                 result["answer"] = candidate
                 _log_result()
                 return True
+            # Apply failed — dump the element's outerHTML so the next
+            # diagnosis cycle can see WHY (e.g. detected as text but
+            # the underlying element is a hidden checkbox sibling).
+            await self._dump_failed_element(field, candidate, source)
             # Apply failed — continue down the chain instead of giving up.
 
         # Priority 4: LLM generation
@@ -429,6 +433,7 @@ class FormFiller:
                 result["answer"] = llm_answer
                 _log_result()
                 return True
+            await self._dump_failed_element(field, llm_answer, "LLM")
 
         # Priority 4.5: Neutral fallback for free-text fields only.
         # When Ollama exhausts and returns empty on a required textarea,
@@ -1101,17 +1106,22 @@ class FormFiller:
 
         Selection rules, in order:
           1. First visible input classified as ``resume`` wins.
-          2. Else first visible ``unknown`` input wins, with a WARN
-             log so misclassifications stay visible in run logs.
-          3. Else, if there is exactly one visible file input on the
-             page (any classification — including ``cover_letter``),
-             upload to it with a stronger WARN. Rationale: when the
-             page only has one slot, the heading text near it might
-             be misleading ("Submit your application" classified as
-             nothing, "Add a cover letter or resume" misclassified
-             as cover_letter), and dead-locking on a stuck upload is
-             worse than uploading to a single visible slot.
-          4. Else return ``None``.
+          2. If no visible ``resume`` input exists but a HIDDEN
+             ``resume`` input does, upload there. Rationale: modern
+             web apps (Indeed, Workday, Greenhouse, Lever) overlay
+             a styled card / "Select file" button on top of a hidden
+             ``<input type=file>``. ``set_input_files()`` works on
+             hidden inputs just fine, and the live run on
+             2026-05-02 dead-locked Indeed's resume-selection step
+             three times because we required visible=True and
+             therefore never uploaded anything.
+          3. Else first visible ``unknown`` input wins, with a WARN.
+          4. Else, if there is exactly one visible file input on
+             the page (any classification — including
+             ``cover_letter``), upload to it with a stronger WARN.
+             Rationale: when the page only has one slot, nearby
+             chrome text might be misleading.
+          5. Else return ``None``.
 
         Always logs every classified input it saw at debug level so
         we can diagnose stuck-upload reports without re-running.
@@ -1145,13 +1155,31 @@ class FormFiller:
         visible_inputs = [
             (inp, kind) for inp, kind, vis in seen if vis
         ]
+        hidden_inputs = [
+            (inp, kind) for inp, kind, vis in seen if not vis
+        ]
 
-        # Rule 1: resume-classified wins.
+        # Rule 1: visible resume-classified wins.
         for inp, kind in visible_inputs:
             if kind == "resume":
                 return inp
 
-        # Rule 2: unknown.
+        # Rule 2: hidden resume-classified — common on modern UIs
+        # (Indeed, Workday, Greenhouse) where the file input is
+        # behind a styled card. set_input_files() works on hidden
+        # inputs.
+        for inp, kind in hidden_inputs:
+            if kind == "resume":
+                logger.info(
+                    "%s: only hidden file input matched 'resume' "
+                    "— uploading anyway. Normal for sites that "
+                    "overlay file inputs with custom UI (Indeed, "
+                    "Workday, Greenhouse).",
+                    platform_name,
+                )
+                return inp
+
+        # Rule 3: visible unknown.
         for inp, kind in visible_inputs:
             if kind == "unknown":
                 logger.warning(
@@ -1161,7 +1189,7 @@ class FormFiller:
                 )
                 return inp
 
-        # Rule 3: single visible file input regardless of class.
+        # Rule 4: single visible file input regardless of class.
         if len(visible_inputs) == 1:
             inp, kind = visible_inputs[0]
             logger.warning(
@@ -1172,14 +1200,13 @@ class FormFiller:
             )
             return inp
 
-        # Rule 4: nothing safe — bail.
-        if visible_inputs:
-            kinds = ", ".join(k for _, k in visible_inputs)
-            logger.warning(
-                "%s: %d visible file input(s) but none claim resume "
-                "(kinds: %s). Skipping upload.",
-                platform_name, len(visible_inputs), kinds,
-            )
+        # Rule 5: nothing safe — bail.
+        all_kinds = [k for _, k, _ in seen]
+        logger.warning(
+            "%s: %d file input(s) on page (kinds: %s) but none safe "
+            "to upload to. Skipping upload.",
+            platform_name, len(seen), ", ".join(all_kinds),
+        )
         return None
 
     @staticmethod
@@ -1977,6 +2004,36 @@ class FormFiller:
             if frag in lower:
                 return False
         return True
+
+    async def _dump_failed_element(
+        self, field: FormField, answer: str, source: str,
+    ) -> None:
+        """Log the element's outerHTML when apply_answer returned False.
+
+        When the form filler has a non-empty answer and the apply
+        step still fails, the most common cause is that the detected
+        element is the WRONG element — e.g. ``find_form_fields``
+        matched a label wrapper that resolved to a sibling text input
+        when the actual control is a hidden checkbox or a custom
+        widget two divs over. Dumping outerHTML at the point of
+        failure makes the next diagnosis a copy-paste away from a
+        fix instead of another live run.
+
+        Truncated to 400 chars so the run log stays readable.
+        """
+        try:
+            outer = await field.element.evaluate(
+                "el => el.outerHTML"
+            )
+        except Exception as exc:
+            outer = f"<could not capture: {exc}>"
+        outer = (outer or "")[:400]
+        logger.warning(
+            "FAILED_FILL label=%r type=%s source=%s answer=%r "
+            "element_html=%s",
+            field.label[:80], field.field_type, source,
+            answer[:60], outer,
+        )
 
     def _record_gap(self, field: FormField, job_id: str) -> None:
         """Record an unfilled field as a skill gap.
