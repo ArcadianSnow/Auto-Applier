@@ -8,15 +8,23 @@ from tkinter import ttk
 PRIMARY = "#2563EB"       # Blue
 PRIMARY_DARK = "#1D4ED8"
 PRIMARY_LIGHT = "#DBEAFE"
-ACCENT = "#10B981"        # Green
+ACCENT = "#10B981"        # Green (use as bg/solid fill — white-on-this passes 3:1 large only)
 ACCENT_DARK = "#059669"
-WARNING = "#F59E0B"       # Amber
-DANGER = "#EF4444"        # Red
+WARNING = "#F59E0B"       # Amber (use as bg/solid fill only)
+DANGER = "#EF4444"        # Red (use as bg/solid fill or hover only)
+# Foreground-on-white variants. The base ACCENT/WARNING/DANGER colors
+# are too light for text on a white card (fail WCAG AA at 4.5:1).
+# Use the *_TEXT variants whenever you'd otherwise render colored
+# text on BG_CARD or BG.
+ACCENT_TEXT = "#047857"   # ~4.66:1 on white
+WARNING_TEXT = "#B45309"  # ~4.79:1 on white
+DANGER_TEXT = "#DC2626"   # ~4.83:1 on white (was hover-only; promoted to general fg)
 BG = "#F8FAFC"            # Light gray background
 BG_CARD = "#FFFFFF"       # White card background
 TEXT = "#1E293B"          # Dark slate text
-TEXT_LIGHT = "#64748B"    # Lighter text
-TEXT_MUTED = "#94A3B8"    # Muted text
+TEXT_LIGHT = "#64748B"    # Lighter text (also reused as TEXT_MUTED — see below)
+TEXT_MUTED = "#64748B"    # Muted text — bumped from #94A3B8 (~3.0:1, fails AA)
+                          #               to #64748B (~4.83:1, passes AA)
 BORDER = "#E2E8F0"        # Light border
 BORDER_FOCUS = "#93C5FD"  # Blue border on focus
 
@@ -68,9 +76,13 @@ def apply_theme(root: tk.Tk) -> None:
     style.configure("Small.TLabel", font=FONT_SMALL, foreground=TEXT_LIGHT, background=BG)
     style.configure("CardSmall.TLabel", font=FONT_SMALL, foreground=TEXT_LIGHT, background=BG_CARD)
     style.configure("Muted.TLabel", font=FONT_SMALL, foreground=TEXT_MUTED, background=BG)
-    style.configure("Success.TLabel", foreground=ACCENT, background=BG_CARD, font=FONT_BODY)
-    style.configure("Danger.TLabel", foreground=DANGER, background=BG_CARD, font=FONT_BODY)
-    style.configure("Warning.TLabel", foreground=WARNING, background=BG_CARD, font=FONT_BODY)
+    # Foreground on card bg — use the AA-compliant *_TEXT variants
+    # so colored status labels are still readable. The base
+    # ACCENT/WARNING/DANGER values stay reserved for solid button
+    # backgrounds (where the text is white).
+    style.configure("Success.TLabel", foreground=ACCENT_TEXT, background=BG_CARD, font=FONT_BODY)
+    style.configure("Danger.TLabel", foreground=DANGER_TEXT, background=BG_CARD, font=FONT_BODY)
+    style.configure("Warning.TLabel", foreground=WARNING_TEXT, background=BG_CARD, font=FONT_BODY)
 
     # Buttons
     style.configure("TButton", font=FONT_BODY, padding=(16, 8))

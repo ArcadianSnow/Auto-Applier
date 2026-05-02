@@ -9,6 +9,7 @@ from pathlib import Path
 
 from auto_applier.gui.styles import (
     BG, BG_CARD, PRIMARY, PRIMARY_LIGHT, ACCENT, DANGER, WARNING,
+    ACCENT_TEXT, DANGER_TEXT, WARNING_TEXT,
     TEXT, TEXT_LIGHT, TEXT_MUTED, BORDER,
     STATUS_IDLE, STATUS_RUNNING, STATUS_SUCCESS, STATUS_ERROR,
     FONT_HEADING, FONT_SUBHEADING, FONT_BODY, FONT_SMALL, FONT_MONO,
@@ -114,9 +115,12 @@ class DashboardWindow(tk.Toplevel):
 
         dry_run = self.config.get("dry_run", False)
         if dry_run:
+            # WARNING_TEXT (#B45309) is the AA-compliant amber for fg
+            # on the white card; the base WARNING (#F59E0B) failed
+            # contrast for users with low vision / Narrator users.
             tk.Label(
                 header, text="DRY RUN", font=FONT_BUTTON,
-                fg=WARNING, bg=BG_CARD,
+                fg=WARNING_TEXT, bg=BG_CARD,
             ).pack(side="right", padx=(0, 12))
 
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
@@ -217,11 +221,14 @@ class DashboardWindow(tk.Toplevel):
         self._log_text.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # Configure text tags for colored log entries
+        # Configure text tags for colored log entries. Use *_TEXT
+        # variants for the colored tags — the log text is rendered on
+        # BG_CARD (white), and the base ACCENT/WARNING/DANGER values
+        # don't pass WCAG AA contrast at small font sizes.
         self._log_text.tag_configure("info", foreground=TEXT)
-        self._log_text.tag_configure("success", foreground=ACCENT)
-        self._log_text.tag_configure("warning", foreground=WARNING)
-        self._log_text.tag_configure("error", foreground=DANGER)
+        self._log_text.tag_configure("success", foreground=ACCENT_TEXT)
+        self._log_text.tag_configure("warning", foreground=WARNING_TEXT)
+        self._log_text.tag_configure("error", foreground=DANGER_TEXT)
         self._log_text.tag_configure("score", foreground=PRIMARY)
         self._log_text.tag_configure("timestamp", foreground=TEXT_MUTED)
 
@@ -527,12 +534,27 @@ class DashboardWindow(tk.Toplevel):
     # ------------------------------------------------------------------
 
     def log(self, message: str, tag: str = "info") -> None:
-        """Append a timestamped message to the activity log."""
+        """Append a timestamped message to the activity log.
+
+        Auto-scroll only when the user is already pinned to (or near)
+        the bottom. If they've scrolled up to read history, leave them
+        there — yanking the viewport back to the tail breaks Narrator
+        and any user trying to read older entries during a long run.
+        """
+        # Sample the scroll position BEFORE inserting. yview() returns
+        # (top, bottom) in 0..1 range; >= 0.98 means "essentially at
+        # the bottom".
+        try:
+            pinned_to_bottom = self._log_text.yview()[1] >= 0.98
+        except tk.TclError:
+            pinned_to_bottom = True
+
         self._log_text.configure(state="normal")
         ts = datetime.now().strftime("%H:%M:%S")
         self._log_text.insert("end", f"[{ts}] ", "timestamp")
         self._log_text.insert("end", f"{message}\n", tag)
-        self._log_text.see("end")
+        if pinned_to_bottom:
+            self._log_text.see("end")
         self._log_text.configure(state="disabled")
 
     def _update_platform(self, key: str, status: str, color: str) -> None:

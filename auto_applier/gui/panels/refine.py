@@ -52,6 +52,14 @@ class RefinePanel(tk.Toplevel):
         self._build_ui()
         self.after(50, self._load)
 
+        # Modal behavior — Windows otherwise lets the dashboard cover
+        # this Toplevel as soon as it gains focus. Mirror the pattern
+        # used by JobReviewPanel.
+        self.transient(parent)
+        self.grab_set()
+        self.focus_set()
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
     # ------------------------------------------------------------------
     # Layout
     # ------------------------------------------------------------------

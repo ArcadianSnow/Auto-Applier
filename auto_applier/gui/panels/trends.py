@@ -33,6 +33,13 @@ class TrendsPanel(tk.Toplevel):
         self._build_ui()
         self.after(50, self._reload)
 
+        # Modal behavior — keep the trends popup on top of the
+        # dashboard. Mirror JobReviewPanel.
+        self.transient(parent)
+        self.grab_set()
+        self.focus_set()
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
     # ------------------------------------------------------------------
     # UI
     # ------------------------------------------------------------------

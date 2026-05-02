@@ -20,7 +20,8 @@ from tkinter import ttk, messagebox
 
 from auto_applier.gui.styles import (
     BG, BG_CARD, BORDER, PRIMARY, TEXT, TEXT_LIGHT, TEXT_MUTED,
-    FONT_HEADING, FONT_SUBHEADING, FONT_BODY, FONT_SMALL, FONT_MONO,
+    FONT_HEADING, FONT_SUBHEADING, FONT_BODY, FONT_BUTTON,
+    FONT_SMALL, FONT_MONO,
     PAD_X, PAD_Y, make_scrollable,
 )
 
@@ -48,6 +49,14 @@ class AlmostPanel(tk.Toplevel):
         self._build_ui()
         # Defer load until window is shown so the panel paints quickly
         self.after(50, self._load_data)
+
+        # Modal behavior — without this, Windows happily hides the
+        # popup behind the dashboard the moment the user clicks it.
+        # Mirror the pattern used by JobReviewPanel.
+        self.transient(parent)
+        self.grab_set()
+        self.focus_set()
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
 
     # ------------------------------------------------------------------
     # Layout

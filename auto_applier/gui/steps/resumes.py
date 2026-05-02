@@ -491,8 +491,13 @@ class ResumesStep(ttk.Frame):
         from auto_applier.config import RESUMES_DIR
         try:
             RESUMES_DIR.mkdir(parents=True, exist_ok=True)
-            import os
-            os.startfile(str(RESUMES_DIR))  # noqa: SIM115 — Windows-only
+            import os, sys, subprocess
+            if sys.platform == "win32":
+                os.startfile(str(RESUMES_DIR))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.run(["open", str(RESUMES_DIR)], check=False)
+            else:
+                subprocess.run(["xdg-open", str(RESUMES_DIR)], check=False)
         except Exception as exc:
             messagebox.showerror(
                 "Couldn't open folder",

@@ -1,6 +1,9 @@
 """Step 4: Personal information form."""
+import re
 import tkinter as tk
 from tkinter import ttk, messagebox
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 from auto_applier.gui.styles import (
     BG, BG_CARD, PRIMARY, TEXT, TEXT_LIGHT, BORDER,
@@ -117,6 +120,10 @@ class PersonalStep(ttk.Frame):
             ("first_name", "First Name"),
             ("last_name", "Last Name"),
             ("email", "Email"),
+            ("city", "City"),
+            ("state", "State / Province"),
+            ("zip_code", "ZIP / Postal Code"),
+            ("country", "Country"),
         ]:
             if not self.wizard.data[key].get().strip():
                 missing.append(label)
@@ -125,6 +132,15 @@ class PersonalStep(ttk.Frame):
             messagebox.showwarning(
                 "Required Fields",
                 f"Please fill in: {', '.join(missing)}",
+                parent=self.wizard,
+            )
+            return False
+
+        email_value = self.wizard.data["email"].get().strip()
+        if email_value and not _EMAIL_RE.match(email_value):
+            messagebox.showwarning(
+                "Invalid Email",
+                "That doesn't look like a valid email — typo?",
                 parent=self.wizard,
             )
             return False

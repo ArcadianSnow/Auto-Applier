@@ -66,6 +66,7 @@ class LLMSetupStep(ttk.Frame):
                 ),
                 parent=self.wizard,
             )
+            return False
         return True
 
     def _build(self) -> None:

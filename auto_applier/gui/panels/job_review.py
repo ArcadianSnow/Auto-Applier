@@ -5,6 +5,7 @@ from typing import Callable
 
 from auto_applier.gui.styles import (
     BG, BG_CARD, PRIMARY, ACCENT, DANGER, WARNING,
+    ACCENT_TEXT, DANGER_TEXT, WARNING_TEXT,
     TEXT, TEXT_LIGHT, TEXT_MUTED, BORDER,
     STATUS_SUCCESS, STATUS_ERROR,
     FONT_HEADING, FONT_SUBHEADING, FONT_BODY, FONT_SMALL, FONT_MONO,
@@ -126,8 +127,24 @@ class JobReviewPanel(tk.Toplevel):
         )
         score_card.pack(side="left")
 
+        # Textual qualifier so users with color-vision deficiencies
+        # still get the signal — white-on-amber especially fails
+        # contrast for the mid-band, so the word carries the meaning.
+        try:
+            score_num = int(score_val)
+        except (TypeError, ValueError):
+            score_num = 0
+        if score_num >= 7:
+            score_label = "GOOD MATCH"
+        elif score_num >= 4:
+            score_label = "BORDERLINE"
+        else:
+            score_label = "WEAK"
+
         tk.Label(
-            score_card, text=f"{score_val}/10", font=("Segoe UI", 18, "bold"),
+            score_card,
+            text=f"{score_label} {score_val}/10",
+            font=("Segoe UI", 18, "bold"),
             fg="white", bg=score_color,
         ).pack(side="left")
 
@@ -234,7 +251,7 @@ class JobReviewPanel(tk.Toplevel):
 
             tk.Label(
                 match_card, text=f"Matched Skills ({len(matched)})",
-                font=FONT_SUBHEADING, fg=ACCENT, bg=BG_CARD,
+                font=FONT_SUBHEADING, fg=ACCENT_TEXT, bg=BG_CARD,
             ).pack(anchor="w", pady=(0, 4))
 
             for skill in matched:
@@ -242,7 +259,7 @@ class JobReviewPanel(tk.Toplevel):
                 row.pack(fill="x", pady=1)
                 tk.Label(
                     row, text=f"  +  {skill}", font=FONT_BODY,
-                    fg=ACCENT, bg=BG_CARD, anchor="w",
+                    fg=ACCENT_TEXT, bg=BG_CARD, anchor="w",
                 ).pack(anchor="w")
 
         # Missing skills
@@ -255,7 +272,7 @@ class JobReviewPanel(tk.Toplevel):
 
             tk.Label(
                 miss_card, text=f"Missing Skills ({len(missing)})",
-                font=FONT_SUBHEADING, fg=DANGER, bg=BG_CARD,
+                font=FONT_SUBHEADING, fg=DANGER_TEXT, bg=BG_CARD,
             ).pack(anchor="w", pady=(0, 4))
 
             for skill in missing:
@@ -263,7 +280,7 @@ class JobReviewPanel(tk.Toplevel):
                 row.pack(fill="x", pady=1)
                 tk.Label(
                     row, text=f"  -  {skill}", font=FONT_BODY,
-                    fg=DANGER, bg=BG_CARD, anchor="w",
+                    fg=DANGER_TEXT, bg=BG_CARD, anchor="w",
                 ).pack(anchor="w")
 
         # Description preview (truncated)

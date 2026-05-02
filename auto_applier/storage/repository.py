@@ -349,6 +349,22 @@ def update_followups_for_job(
         return updated
 
 
+def cancel_followups_for(job_id: str, source: str) -> int:
+    """Cancel pending follow-ups for a given (job_id, source) pair.
+
+    Marks every Followup row matching the pair where ``status ==
+    'pending'`` to ``status = 'cancelled'`` and returns the count
+    cancelled. Used when an application is later re-classified to
+    ``failed`` or ``skipped`` so we don't fire 7/14/21-day reminders
+    for a job we never actually applied to. Doesn't change schemas
+    and isn't auto-called from the engine yet — exposed as a manual
+    cleanup tool.
+    """
+    return update_followups_for_job(
+        job_id, new_status="cancelled", source=source,
+    )
+
+
 def get_todays_application_count(
     include_dry_run: bool = False, source: str = "",
 ) -> int:

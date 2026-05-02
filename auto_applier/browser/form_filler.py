@@ -2291,6 +2291,16 @@ class FormFiller:
         "work authorization",
         "authorized to work",
         "require sponsorship", "visa sponsorship",
+        "visa",
+        "us citizen", "u.s. citizen",
+        "permanent resident",
+        # Education credentialing — degree-checks aren't skills
+        "bachelor's degree", "bachelors degree",
+        "master's degree", "masters degree",
+        "ph.d", "phd",
+        "diploma",
+        # Employment-status compliance — not a skill
+        "employed with", "currently employed",
         # Salary / compensation — handled by smart_fallback
         "desired salary", "expected salary",
         "salary expectation",
@@ -2312,6 +2322,15 @@ class FormFiller:
         "referred by",
     )
 
+    # Label-prefix patterns rejected as non-skill. Substring matching
+    # in _NON_SKILL_LABEL_FRAGMENTS is too greedy for these (every
+    # short stem like "do you" appears in genuine skill questions),
+    # so we anchor them to the start of the (lowered, stripped) label.
+    _NON_SKILL_LABEL_PREFIXES = (
+        "are you currently",
+        "do you have a ",
+    )
+
     @classmethod
     def _is_skill_shaped(cls, label: str) -> bool:
         """True if the field label looks like a skill / experience question.
@@ -2321,6 +2340,10 @@ class FormFiller:
         no matter what other words appear.
         """
         lower = label.lower()
+        stripped = lower.lstrip()
+        for prefix in cls._NON_SKILL_LABEL_PREFIXES:
+            if stripped.startswith(prefix):
+                return False
         for frag in cls._NON_SKILL_LABEL_FRAGMENTS:
             if frag in lower:
                 return False

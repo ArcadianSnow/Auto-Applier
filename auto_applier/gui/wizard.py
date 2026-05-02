@@ -100,6 +100,16 @@ class WizardApp(tk.Tk):
         self.current_step = 0
         self._show_step(0)
 
+        # Keyboard navigation — let the user advance/retreat through
+        # the wizard without ever touching the mouse. Bound on the
+        # toplevel so any focused child still triggers them, except
+        # Text widgets which intercept Return for newline insertion
+        # (none of the wizard steps use multi-line Text fields, so
+        # this is safe today).
+        self.bind("<Return>", self._on_return_key)
+        self.bind("<Escape>", self._on_escape_key)
+        self.bind("<Destroy>", self._on_destroy_unbind, add="+")
+
     # ------------------------------------------------------------------
     # Variable initialization
     # ------------------------------------------------------------------
@@ -389,6 +399,88 @@ class WizardApp(tk.Tk):
         else:
             self.btn_next.pack(side="left")
             self.btn_next.configure(text="Next")
+
+        # Focus the first interactive widget on the new step. A step
+        # can override by setting `_first_field` to a specific widget;
+        # otherwise we walk the children tree looking for the first
+        # Entry/Combobox/Spinbox/Button. Last-resort fallback is the
+        # Next button so Return-to-advance always has something to
+        # land on.
+        self.after_idle(lambda s=step: self._focus_first_widget(s))
+
+    def _focus_first_widget(self, step) -> None:
+        """Move keyboard focus into *step*'s first input widget."""
+        target = getattr(step, "_first_field", None)
+        if target is None:
+            target = self._find_first_focusable(step)
+        if target is None:
+            target = self.btn_next
+        try:
+            target.focus_set()
+        except tk.TclError:
+            # Widget may have been destroyed mid-transition; ignore.
+            pass
+
+    @staticmethod
+    def _find_first_focusable(parent: tk.Widget):
+        """Depth-first search for the first input-y widget in *parent*."""
+        focusable_classes = ("TEntry", "TCombobox", "TSpinbox", "TButton",
+                             "Entry", "Combobox", "Spinbox", "Button",
+                             "Text", "Checkbutton", "TCheckbutton")
+        try:
+            children = parent.winfo_children()
+        except tk.TclError:
+            return None
+        for child in children:
+            cls = child.winfo_class()
+            if cls in focusable_classes:
+                return child
+            nested = WizardApp._find_first_focusable(child)
+            if nested is not None:
+                return nested
+        return None
+
+    def _on_return_key(self, event):
+        """Advance the wizard when Return is pressed.
+
+        Skip if the user is in a Text widget (they probably want a
+        newline) or already on the Next button (Return triggers it
+        natively via ttk's invoke binding — letting both fire would
+        double-advance).
+        """
+        widget = event.widget if event is not None else None
+        try:
+            cls = widget.winfo_class() if widget is not None else ""
+        except tk.TclError:
+            cls = ""
+        if cls == "Text":
+            return None
+        if widget is self.btn_next:
+            return None
+        # Don't advance from the last step (no Next button packed).
+        if self.current_step >= len(self.steps) - 1:
+            return None
+        self._on_next()
+        return "break"
+
+    def _on_escape_key(self, event):
+        """Go back when Escape is pressed (no-op on first step)."""
+        if self.current_step == 0:
+            return None
+        self._on_back()
+        return "break"
+
+    def _on_destroy_unbind(self, event):
+        """Release keyboard bindings when the wizard window goes away."""
+        # Tk fires <Destroy> for every child too — only unbind when
+        # the toplevel itself is being torn down.
+        if event.widget is not self:
+            return
+        for seq in ("<Return>", "<Escape>"):
+            try:
+                self.unbind(seq)
+            except tk.TclError:
+                pass
 
     def _on_next(self) -> None:
         """Validate current step and advance."""

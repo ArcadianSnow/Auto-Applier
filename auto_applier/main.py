@@ -1,6 +1,7 @@
 """CLI entry point for Auto Applier v2."""
 import asyncio
 import json
+import sys
 from collections import Counter
 
 import click
@@ -168,6 +169,10 @@ def _on_cycle_idle(**kw):
 def _on_continuous_finished(**kw):
     reason = kw.get("reason", "")
     total = kw.get("total_cycles", 0)
+    applied = kw.get("applied", 0)
+    skipped = kw.get("skipped", 0)
+    failed = kw.get("failed", 0)
+    dry_run = kw.get("dry_run", False)
     click.echo(
         f"\nContinuous mode finished after {total} cycle(s). {reason}"
     )
@@ -185,16 +190,8 @@ def _print_run_explainer(applied: int, skipped: int, failed: int, dry_run: bool)
     Tells the user: what the counts mean, and what to do next.
     Pulls recent Application records for a "why were these skipped"
     breakdown so the user isn't guessing.
-
-    Wrapped in a broad try/except at the end because EventEmitter
-    silently swallows handler exceptions. A bug here would make the
-    whole novice summary disappear without any error to investigate.
     """
-    try:
-        _run_explainer_body(applied, skipped, failed, dry_run)
-    except Exception as exc:
-        # Surface the error so we can debug, but don't crash the run.
-        click.echo(f"\n(explainer error: {exc})", err=True)
+    _run_explainer_body(applied, skipped, failed, dry_run)
 
 
 def _run_explainer_body(applied: int, skipped: int, failed: int, dry_run: bool) -> None:
@@ -367,6 +364,26 @@ def run(
 
     if platform:
         config["enabled_platforms"] = [platform]
+
+    # Fail-fast on empty configuration. Without these, the engine
+    # silently runs but does nothing — leaving novice users staring
+    # at a green prompt wondering why the tool didn't apply to anything.
+    from auto_applier.config import PROFILES_DIR as _PROFILES_DIR
+    _missing = []
+    if not config.get("search_keywords"):
+        _missing.append("search keywords")
+    if not config.get("enabled_platforms"):
+        _missing.append("enabled platforms")
+    if not sorted(_PROFILES_DIR.glob("*.json")):
+        _missing.append("resumes")
+    if _missing:
+        click.echo(
+            f"No {', '.join(_missing)} configured. Run "
+            "`python -m auto_applier` to complete the wizard, or "
+            "`python -m auto_applier --cli doctor` to see what's missing.",
+            err=True,
+        )
+        sys.exit(1)
 
     # Resolve the effective per-platform cap for this session.
     #

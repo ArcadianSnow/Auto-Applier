@@ -443,7 +443,7 @@ def check_disk_space() -> CheckResult:
     if free_gb < 1.0:
         return CheckResult(
             "Disk space", FAIL, f"only {free_gb:.1f} GB free",
-            fix="Free at least 2 GB — browser profile and LLM cache grow over time",
+            fix="Free at least 1 GB to proceed; 2 GB recommended — browser profile and LLM cache grow over time",
         )
     if free_gb < 2.0:
         return CheckResult(

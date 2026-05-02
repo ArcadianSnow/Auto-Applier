@@ -63,8 +63,9 @@ class SitesStep(ttk.Frame):
             self,
             text=(
                 "Check the boxes for sites where you already have an "
-                "account. Not sure? Start with just LinkedIn — you can "
-                "always add more later."
+                "account. Not sure? Start with just Indeed for your first "
+                "run — it has the most jobs and the smoothest auto-apply "
+                "flow."
             ),
             style="Small.TLabel",
         ).pack(anchor="w", padx=PAD_X, pady=(0, PAD_Y))

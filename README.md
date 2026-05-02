@@ -1,6 +1,6 @@
 # Auto Applier
 
-AI-assisted job-application automation for Indeed, Dice, and ZipRecruiter. Runs locally on your machine. Scores each posting against your resume, fills the form, and submits — with you watching the browser the whole time.
+AI-assisted job-application automation for Indeed, Dice, ZipRecruiter, and LinkedIn (discovery-only — surfaces high-score jobs but never auto-submits — see manual-apply panel). Runs locally on your machine. Scores each posting against your resume, fills the form, and submits — with you watching the browser the whole time.
 
 > **Status**: dry-run validated across all three platforms. Real runs work but are bound by anti-bot rate limits — see *How fast it goes* below.
 
