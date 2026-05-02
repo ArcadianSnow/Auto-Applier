@@ -565,6 +565,78 @@ class FormFiller:
             )
             return default.isoformat()
 
+        # Conditional "If not [X], do you [Y]?" questions. Live run
+        # 2026-05-02 hit "If not a US Citizen, do you have a non-
+        # academic visa that permits you to work in the US?" which
+        # got the wrong answer because the LLM defaulted to a
+        # conservative "No" without grasping the conditional. For
+        # a US-citizen profile, the correct answer is "No" — they
+        # don't have a visa BECAUSE they don't need one. Generic
+        # rule: if the question's "if not [X]" matches a fact the
+        # candidate IS, answer "No" (the conditional doesn't apply
+        # to them).
+        conditional = self._answer_conditional_not_applicable(
+            label_lower, field,
+        )
+        if conditional:
+            return conditional
+
+        return ""
+
+    def _answer_conditional_not_applicable(
+        self, label_lower: str, field: FormField,
+    ) -> str:
+        """Match "If not [trait], do you [Y]?" → "No" when candidate
+        is [trait].
+
+        Only fires on yes/no-shaped fields (radio, checkbox) or short
+        select fields where Yes/No is a likely option. Returns "" if
+        the conditional clause doesn't appear, or if we can't tell
+        whether the candidate satisfies the trait.
+        """
+        if field.field_type not in ("radio", "checkbox", "select"):
+            return ""
+        # Need to find an "if not X, ..." or "if you are not X, ..."
+        # clause to inspect.
+        m = re.search(
+            r"if (?:you are )?not (?:a |an )?"
+            r"(us citizen|u\.s\. citizen|citizen|permanent resident|"
+            r"green card holder|green card|authorized to work)"
+            r"[,;:.]?",
+            label_lower,
+        )
+        if not m:
+            return ""
+        trait = m.group(1)
+        # Map the matched trait to the personal_info attribute that
+        # confirms it. work_auth: "US Citizen" / "Permanent Resident" /
+        # "Green Card" all imply work-authorized; bare "citizen" =
+        # citizen-shaped status.
+        work_auth = (self.personal_info.get("work_auth") or "").lower()
+        if not work_auth:
+            return ""
+        candidate_is_trait = False
+        if "citizen" in trait:
+            candidate_is_trait = "citizen" in work_auth
+        elif "permanent resident" in trait or "green card" in trait:
+            candidate_is_trait = (
+                "permanent resident" in work_auth
+                or "green card" in work_auth
+                or "lpr" in work_auth
+            )
+        elif "authorized to work" in trait:
+            candidate_is_trait = (
+                "citizen" in work_auth
+                or "permanent resident" in work_auth
+                or "authorized" in work_auth
+                or "green card" in work_auth
+            )
+        if candidate_is_trait:
+            logger.debug(
+                "Conditional N/A match: candidate IS %r → No "
+                "(question: %s)", trait, label_lower[:80],
+            )
+            return "No"
         return ""
 
     def _check_prior_employment(self) -> str:
@@ -703,6 +775,22 @@ class FormFiller:
                 "integer and nothing else."
             )
 
+        # For free-text fields, detect any maxlength / character cap
+        # so we don't produce text the form will silently reject. Live
+        # run 2026-05-02 generated multi-paragraph cover-letter-style
+        # text into a 250-char "Why are you interested?" textarea;
+        # the form truncated mid-word and Continue stayed disabled.
+        char_cap = 0
+        if field.field_type in ("text", "textarea"):
+            char_cap = await self._read_char_cap(field)
+            if char_cap > 0:
+                prompt_text += (
+                    f"\n\nHARD LIMIT: This answer must be no more than "
+                    f"{char_cap} characters total — including spaces. "
+                    f"Be concise. Prefer 1-2 short sentences over a "
+                    f"paragraph."
+                )
+
         try:
             response = await self.router.complete(
                 prompt=prompt_text,
@@ -714,11 +802,100 @@ class FormFiller:
             # Reject empty or uncertain answers
             if not answer or answer.lower() in ("n/a", "none", "unknown", ""):
                 return ""
+            # Post-trim if the LLM ignored the cap. Sentence-aware
+            # trim — find the last sentence boundary that still fits,
+            # otherwise hard-truncate. A rejected mid-word answer is
+            # worse than a clean 1-sentence one.
+            if char_cap > 0 and len(answer) > char_cap:
+                trimmed = self._sentence_aware_trim(answer, char_cap)
+                logger.info(
+                    "LLM answer for '%s' overshot cap (%d > %d) — "
+                    "trimmed to %d chars",
+                    field.label[:60], len(answer), char_cap,
+                    len(trimmed),
+                )
+                answer = trimmed
             logger.debug("LLM generated answer for '%s': %.50s...", field.label, answer)
             return answer
         except Exception as exc:
             logger.warning("LLM answer generation failed for '%s': %s", field.label, exc)
             return ""
+
+    async def _read_char_cap(self, field: FormField) -> int:
+        """Discover the field's character cap via maxlength or visible
+        counter text. Returns 0 if no cap is found.
+
+        Two sources:
+          1. ``maxlength`` attribute on the input/textarea
+          2. Visible "X / N characters" counter near the field
+             (matches "X / N", "X of N", "Max N characters",
+             "(N max)", etc.)
+        """
+        try:
+            ml = await field.element.get_attribute("maxlength")
+        except Exception:
+            ml = None
+        if ml:
+            try:
+                cap = int(ml)
+                if cap > 0:
+                    return cap
+            except ValueError:
+                pass
+        # Walk up to find a visible counter sibling.
+        try:
+            counter_text = (await field.element.evaluate(
+                """(el) => {
+                    let p = el.parentElement;
+                    for (let i = 0; i < 4 && p; i++) {
+                        const t = (p.innerText || '').trim();
+                        if (t && t.length < 800) return t;
+                        p = p.parentElement;
+                    }
+                    return '';
+                }"""
+            )) or ""
+        except Exception:
+            counter_text = ""
+        if not counter_text:
+            return 0
+        for pattern in (
+            r"(?:max(?:imum)?[:\s]*)(\d{2,5})\s*(?:character|char)",
+            r"(\d{1,5})\s*(?:character|char)\s*(?:limit|max)",
+            r"\(\s*max\s*(\d{2,5})\s*\)",
+            r"\b(\d{1,5})\s*characters?\s*max\b",
+            r"(?:\b0\s*/\s*)(\d{2,5})\b",
+            r"(?:\bof\s+)(\d{2,5})\s*characters?",
+        ):
+            m = re.search(pattern, counter_text, re.IGNORECASE)
+            if m:
+                try:
+                    cap = int(m.group(1))
+                    if 20 <= cap <= 50000:  # sanity range
+                        return cap
+                except ValueError:
+                    continue
+        return 0
+
+    @staticmethod
+    def _sentence_aware_trim(text: str, cap: int) -> str:
+        """Trim ``text`` to fit within ``cap`` chars at a sentence
+        boundary. Falls back to a hard char-truncate with an ellipsis
+        when no sentence ending fits."""
+        if len(text) <= cap:
+            return text
+        # Find the last sentence-ending punctuation within the cap.
+        chunk = text[:cap]
+        for end in (". ", "! ", "? ", ".\n", "!\n", "?\n"):
+            idx = chunk.rfind(end)
+            if idx > 0:
+                # Keep the punctuation, drop the trailing space/newline.
+                return chunk[: idx + 1].rstrip()
+        # No sentence boundary — break at the last word and add ellipsis.
+        space_idx = chunk.rfind(" ")
+        if space_idx > 0 and (cap - space_idx) < 20:
+            return chunk[:space_idx].rstrip()
+        return chunk[: cap - 1].rstrip()
 
     # ------------------------------------------------------------------
     # Neutral fallback for dead-locked required fields
