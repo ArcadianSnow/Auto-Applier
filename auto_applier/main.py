@@ -1639,6 +1639,94 @@ def reset_history(yes: bool):
     click.echo("\nDone. Dry runs will now see every job as fresh.")
 
 
+@cli.command("prune-failed")
+@click.option(
+    "--dry-run", is_flag=True,
+    help="Preview what would be removed without writing the file",
+)
+@click.option(
+    "--yes", is_flag=True,
+    help="Skip the confirmation prompt",
+)
+def prune_failed(dry_run: bool, yes: bool):
+    """Remove status='failed' rows from data/applications.csv.
+
+    Failed rows used to dedup-poison future runs: a job that hit
+    "form stuck" in a buggy build was permanently locked out of
+    dedup, so even after fixing the bug the program would skip
+    that job as "already processed." That's now fixed at the dedup
+    layer (failed rows are no longer counted), but the historical
+    rows still clutter the CSV and the dashboard.
+
+    This command surgically removes ONLY status='failed' rows.
+    Real applications (status='applied'), manual-apply skips
+    (status='skipped'), and dry-runs (status='dry_run') are
+    untouched. Backups go to data/.backups/ before any write.
+    """
+    from shutil import copy2
+    from datetime import datetime, timezone
+    import csv as _csv
+    from auto_applier.config import APPLICATIONS_CSV, BACKUP_DIR
+
+    if not APPLICATIONS_CSV.exists():
+        click.echo("No applications.csv to prune.")
+        return
+
+    rows: list[dict] = []
+    fieldnames: list[str] = []
+    with open(APPLICATIONS_CSV, "r", newline="", encoding="utf-8") as f:
+        reader = _csv.DictReader(f)
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+
+    if not rows:
+        click.echo("applications.csv is empty.")
+        return
+
+    failed = [r for r in rows if (r.get("status") or "").strip() == "failed"]
+    keep = [r for r in rows if r not in failed]
+
+    click.echo(f"applications.csv: {len(rows)} total, "
+               f"{len(failed)} failed (would remove), "
+               f"{len(keep)} kept.")
+    if not failed:
+        click.echo("Nothing to prune.")
+        return
+
+    # Show a few examples so the user can sanity-check.
+    click.echo("\nExamples (up to 8):")
+    for r in failed[:8]:
+        title = (r.get("job_id") or "")[:30]
+        reason = (r.get("failure_reason") or "")[:80]
+        click.echo(f"  - {title}  ({reason})")
+
+    if dry_run:
+        click.echo("\n--dry-run: no file changes made.")
+        return
+
+    if not yes:
+        if not click.confirm(
+            f"\nRemove {len(failed)} failed row(s)? "
+            "(real applies and skips are NOT touched)",
+            default=False,
+        ):
+            click.echo("Aborted.")
+            return
+
+    # Backup before write.
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    backup = BACKUP_DIR / f"applications.{ts}.before_prune_failed.csv"
+    copy2(APPLICATIONS_CSV, backup)
+    click.echo(f"Backup: {backup}")
+
+    with open(APPLICATIONS_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = _csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(keep)
+    click.echo(f"Removed {len(failed)} failed row(s).")
+
+
 @cli.command("prune-unanswered")
 @click.option(
     "--dry-run", is_flag=True,

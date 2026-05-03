@@ -180,23 +180,46 @@ def load_all(model_type: Type[T]) -> list[T]:
     return records
 
 
+# Statuses that count as "processed — don't try this job again":
+#   applied        — submitted and accepted
+#   dry_run        — submitted in dry-run; we know the apply path works
+#   skipped        — external link / ghost / low score / discovery-only;
+#                    we made a deliberate choice not to apply
+#
+# Status NOT counted:
+#   failed         — our code or the site broke; the job is retryable
+#                    once we ship a fix. Yesterday's run had ~20 failed
+#                    rows per keyword from the broken Indeed apply path
+#                    (form stuck on viewjob) — those poisoned today's
+#                    discovery, with already_applied filtering out
+#                    every job we'd already mis-attempted. Excluding
+#                    failed here means a fixed apply path immediately
+#                    re-discovers those jobs as fresh.
+_DEDUP_STATUSES = frozenset({"applied", "dry_run", "skipped"})
+
+
 def job_already_processed(job_id: str, source: str) -> bool:
-    """Return True if any Application exists for this (job_id, source).
+    """Return True if any non-failed Application exists for this
+    (job_id, source).
 
-    "Processed" covers every terminal state the scoring pipeline can
-    reach: applied, dry_run, skipped (low score / ghost / external /
-    discovery-only). The job has already been seen and graded, so
-    re-running scoring in a subsequent cycle would just burn LLM time
-    for the same verdict.
+    "Processed" covers terminal states the scoring pipeline can
+    reach with a deliberate verdict: applied, dry_run, skipped
+    (low score / ghost / external / discovery-only). Failed
+    rows are NOT processed — they represent a broken attempt
+    that should be retried once the underlying bug is fixed.
 
-    Unscored Jobs in jobs.csv — those scraped but never picked up by
-    the engine's inner loop (e.g. because the per-platform budget was
-    hit mid-batch in an earlier cycle) — intentionally do NOT dedupe
-    here. Continuous mode needs to be able to come back to them next
-    cycle.
+    Unscored Jobs in jobs.csv — those scraped but never picked up
+    by the engine's inner loop (e.g. because the per-platform
+    budget was hit mid-batch in an earlier cycle) — intentionally
+    do NOT dedupe here. Continuous mode needs to be able to come
+    back to them next cycle.
     """
     for app in load_all(Application):
-        if app.job_id == job_id and app.source == source:
+        if (
+            app.job_id == job_id
+            and app.source == source
+            and app.status in _DEDUP_STATUSES
+        ):
             return True
     return False
 
@@ -207,25 +230,39 @@ job_already_applied = job_already_processed
 
 
 def processed_pairs() -> set[tuple[str, str]]:
-    """Return every (job_id, source) pair with any Application row.
+    """Return every (job_id, source) pair with a NON-FAILED Application.
 
     Batch-friendly companion to ``job_already_processed``. Call once
     per batch and check pair membership in-memory instead of
     re-reading applications.csv per job.
+
+    Failed rows are excluded — they're transient bug evidence, not
+    a permanent verdict on the job.
     """
-    return {(a.job_id, a.source) for a in load_all(Application)}
+    return {
+        (a.job_id, a.source)
+        for a in load_all(Application)
+        if a.status in _DEDUP_STATUSES
+    }
 
 
 def processed_canonical_hashes() -> set[str]:
-    """Return canonical_hashes of Jobs that have at least one Application.
+    """Return canonical_hashes of Jobs that have at least one
+    non-failed Application.
 
     Batch-friendly companion to ``job_seen_canonically``. Joins
-    jobs → applications so unscored jobs don't dedupe — which is
-    required for continuous-run mode where cycle 1 may only score
-    the first 3 of 99 scraped jobs and cycle 2 must be free to reach
-    the remaining 96.
+    jobs → applications so unscored jobs don't dedupe — required
+    for continuous-run mode where cycle 1 may only score the first
+    3 of 99 scraped jobs and cycle 2 must be free to reach the
+    remaining 96.
+
+    Excludes failed rows so a transient bug or one-off platform
+    glitch can't permanently lock a job out of dedup.
     """
-    processed_ids = {a.job_id for a in load_all(Application)}
+    processed_ids = {
+        a.job_id for a in load_all(Application)
+        if a.status in _DEDUP_STATUSES
+    }
     return {
         j.canonical_hash
         for j in load_all(Job)
