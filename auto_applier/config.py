@@ -43,12 +43,27 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 
 # Known-good Ollama model options shown in the wizard dropdown.
 # Listed fastest-to-biggest. Users can still type a custom tag.
+#
+# Hardware tiers (rough; YMMV with quantization):
+#   8 GB RAM, no GPU            -> phi-4-mini, gemma4:e2b
+#   16 GB RAM, no GPU           -> qwen3:4b, phi-4-mini
+#   16 GB RAM, RTX 3060+ (8 GB) -> qwen3:8b, gemma4:e4b (default)
+#   32 GB RAM, RTX 3080+ (10GB) -> gemma4:e4b, qwen3:14b
+#   64 GB RAM, RTX 4090 (24 GB) -> gemma4:31b, qwen3:32b
 OLLAMA_MODEL_PRESETS = [
-    "gemma4:e2b",   # ~2.3B effective, text+image+audio, 128k ctx, CPU-friendly
-    "gemma4:e4b",   # ~4.5B effective, text+image+audio, 128k ctx, DEFAULT
-    "gemma4:31b",   # Full Gemma 4, 256k ctx, needs beefy hardware
-    "gemma3:4b",    # Legacy fallback if Gemma 4 unavailable
-    "llama3.1:8b",  # Legacy fallback (v1 default)
+    # 2026-Q1 additions (per Tier 4 research): Phi-4-mini for 8 GB
+    # rigs, Qwen 3 family for general-purpose at every tier.
+    "phi-4-mini",   # ~3.8B Microsoft, strong reasoning, runs on 8 GB RAM CPU-only
+    "qwen3:4b",     # Dense 4B, 262k context, beats Gemma 4 e4b on coding
+    "qwen3:8b",     # Dense 8B, recommended for RTX 3060+ (8 GB VRAM)
+    "qwen3:14b",    # Dense 14B, RTX 3080+ (10 GB VRAM)
+    # Gemma 4 family — current default tier
+    "gemma4:e2b",   # ~2.3B effective MoE, multimodal, 128k ctx, CPU-friendly
+    "gemma4:e4b",   # ~4.5B effective MoE, multimodal, 128k ctx, DEFAULT
+    "gemma4:31b",   # Full Gemma 4, 256k ctx, RTX 4090 / Mac M-series only
+    # Legacy fallbacks — kept for users on Ollama < 0.8 (no Gemma 4)
+    "gemma3:4b",
+    "llama3.1:8b",
 ]
 
 # Rate limiting / anti-detection defaults

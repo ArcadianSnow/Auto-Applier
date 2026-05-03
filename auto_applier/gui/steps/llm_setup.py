@@ -165,11 +165,17 @@ class LLMSetupStep(ttk.Frame):
         ).pack(side="left", padx=(8, 0))
         from auto_applier.gui.tooltip import attach_help_icon
         attach_help_icon(adv_row, (
-            "Most people should leave this as 'gemma4:e4b' (the default). "
-            "Pick 'gemma4:e2b' if your computer has less than 16 GB of "
-            "memory, or 'gemma4:31b' if you have a powerful gaming PC. "
-            "The tool works fine with any of these — the larger ones are "
-            "just a bit smarter at reading job descriptions."
+            "Most people should leave this as 'gemma4:e4b' (the default).\n\n"
+            "Hardware tiers (rough guide):\n"
+            " • 8 GB RAM, no GPU: 'phi-4-mini' or 'gemma4:e2b'\n"
+            " • 16 GB RAM, no GPU: 'qwen3:4b' or 'phi-4-mini'\n"
+            " • 16 GB RAM + 8 GB GPU: 'qwen3:8b' or 'gemma4:e4b'\n"
+            " • 32 GB RAM + 10 GB GPU: 'gemma4:e4b' or 'qwen3:14b'\n"
+            " • 64 GB RAM + 24 GB GPU: 'gemma4:31b' or 'qwen3:32b'\n\n"
+            "Qwen 3 has slightly better coding/reasoning than Gemma 4 at "
+            "the same size; Gemma 4 has stronger multimodal support. The "
+            "tool works fine with any of these — larger models are just "
+            "a bit smarter at reading job descriptions."
         ), bg=BG_CARD).pack(side="left", padx=(6, 0))
 
         # --- Step 4: Verify ---
