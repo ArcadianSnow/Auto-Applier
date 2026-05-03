@@ -23,10 +23,30 @@ def _run(coro):
 # ------------------------------------------------------------------
 
 class TestCheckSuccess:
+    """Dice success detection. Tightened in Tier 4 review follow-up:
+    only strong full-sentence phrases match. Loose fragments like
+    'you have applied' / 'successfully applied' / 'application sent'
+    are rejected because they false-matched My Jobs sidebar chrome
+    and post-apply email templates that load via XHR.
+    """
+
+    def test_success_by_url_pattern(self):
+        platform = _make_platform()
+        page = MagicMock()
+        page.url = "https://www.dice.com/jobs/apply/success?id=abc"
+        page.inner_text = AsyncMock(return_value="stuff")
+
+        async def do():
+            with patch.object(platform, "safe_query", return_value=None):
+                return await platform._check_success(page)
+
+        assert _run(do()) is True
+
     def test_success_by_selector(self):
         platform = _make_platform()
         el = MagicMock()
         page = MagicMock()
+        page.url = "https://www.dice.com/job-detail/123"
         page.inner_text = AsyncMock(return_value="stuff")
 
         async def do():
@@ -35,10 +55,13 @@ class TestCheckSuccess:
 
         assert _run(do()) is True
 
-    def test_success_by_phrase(self):
+    def test_success_by_strong_phrase(self):
         platform = _make_platform()
         page = MagicMock()
-        page.inner_text = AsyncMock(return_value="Thank you for applying! Application submitted.")
+        page.url = "https://www.dice.com/job-detail/123"
+        page.inner_text = AsyncMock(
+            return_value="Your application has been submitted to Acme."
+        )
 
         async def do():
             with patch.object(platform, "safe_query", return_value=None):
@@ -46,9 +69,40 @@ class TestCheckSuccess:
 
         assert _run(do()) is True
 
+    def test_loose_you_have_applied_rejected(self):
+        """My Jobs sidebar chrome used to false-match success."""
+        platform = _make_platform()
+        page = MagicMock()
+        page.url = "https://www.dice.com/jobs/myjobs"
+        page.inner_text = AsyncMock(
+            return_value="Jobs you have applied to: 12 in the last 30 days."
+        )
+
+        async def do():
+            with patch.object(platform, "safe_query", return_value=None):
+                return await platform._check_success(page)
+
+        assert _run(do()) is False
+
+    def test_loose_successfully_applied_rejected(self):
+        """Post-apply email template that XHRs in used to false-match."""
+        platform = _make_platform()
+        page = MagicMock()
+        page.url = "https://www.dice.com/job-detail/123"
+        page.inner_text = AsyncMock(
+            return_value="Recently successfully applied candidates: see analytics."
+        )
+
+        async def do():
+            with patch.object(platform, "safe_query", return_value=None):
+                return await platform._check_success(page)
+
+        assert _run(do()) is False
+
     def test_no_success(self):
         platform = _make_platform()
         page = MagicMock()
+        page.url = "https://www.dice.com/job-detail/123"
         page.inner_text = AsyncMock(return_value="Complete all required fields.")
 
         async def do():

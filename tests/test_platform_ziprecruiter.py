@@ -24,10 +24,30 @@ def _run(coro):
 # ------------------------------------------------------------------
 
 class TestCheckSuccess:
+    """ZR success detection. Tightened in Tier 4 review follow-up:
+    only strong full-sentence phrases match; loose fragments like
+    'congratulations' and 'you've applied' are rejected because
+    they false-matched ZR sidebar/profile chrome.
+    """
+
+    def test_success_by_url_pattern(self):
+        """URL match is the cheapest, strongest signal."""
+        platform = _make_platform()
+        page = MagicMock()
+        page.url = "https://www.ziprecruiter.com/apply/successful?jid=abc"
+        page.inner_text = AsyncMock(return_value="stuff")
+
+        async def do():
+            with patch.object(platform, "safe_query", return_value=None):
+                return await platform._check_success(page)
+
+        assert _run(do()) is True
+
     def test_success_by_selector(self):
         platform = _make_platform()
         el = MagicMock()
         page = MagicMock()
+        page.url = "https://www.ziprecruiter.com/job/123"
         page.inner_text = AsyncMock(return_value="stuff")
 
         async def do():
@@ -36,10 +56,13 @@ class TestCheckSuccess:
 
         assert _run(do()) is True
 
-    def test_success_by_phrase(self):
+    def test_success_by_strong_phrase(self):
         platform = _make_platform()
         page = MagicMock()
-        page.inner_text = AsyncMock(return_value="Congratulations! You've applied.")
+        page.url = "https://www.ziprecruiter.com/job/123"
+        page.inner_text = AsyncMock(
+            return_value="Your application has been submitted!"
+        )
 
         async def do():
             with patch.object(platform, "safe_query", return_value=None):
@@ -47,20 +70,40 @@ class TestCheckSuccess:
 
         assert _run(do()) is True
 
-    def test_application_received(self):
+    def test_loose_congratulations_rejected(self):
+        """Profile-completion banner used to false-match success."""
         platform = _make_platform()
         page = MagicMock()
-        page.inner_text = AsyncMock(return_value="Your application received!")
+        page.url = "https://www.ziprecruiter.com/profile"
+        page.inner_text = AsyncMock(
+            return_value="Congratulations on completing your profile!"
+        )
 
         async def do():
             with patch.object(platform, "safe_query", return_value=None):
                 return await platform._check_success(page)
 
-        assert _run(do()) is True
+        assert _run(do()) is False
+
+    def test_loose_youve_applied_rejected(self):
+        """Sidebar 'Applied' badges in search results used to false-match."""
+        platform = _make_platform()
+        page = MagicMock()
+        page.url = "https://www.ziprecruiter.com/jobs/search"
+        page.inner_text = AsyncMock(
+            return_value="See jobs you've applied to in the sidebar."
+        )
+
+        async def do():
+            with patch.object(platform, "safe_query", return_value=None):
+                return await platform._check_success(page)
+
+        assert _run(do()) is False
 
     def test_no_success(self):
         platform = _make_platform()
         page = MagicMock()
+        page.url = "https://www.ziprecruiter.com/job/123"
         page.inner_text = AsyncMock(return_value="Fill out required fields.")
 
         async def do():

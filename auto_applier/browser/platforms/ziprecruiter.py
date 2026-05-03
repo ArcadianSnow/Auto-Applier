@@ -1337,16 +1337,68 @@ class ZipRecruiterPlatform(JobPlatform):
         #    form to fill. Live run 2026-05-02 17:14: "Business
         #    Analyst - Presentation Expert" hit this — recorded as
         #    failed but actually appeared in the user's "My Jobs"
-        #    page. Treat case B as probable success so the CSV
-        #    matches reality.
+        #    page.
+        #
+        # Case B requires CORROBORATION before we declare success.
+        # The bare "8 empty steps" count alone could also be reached
+        # by: a login wall the walker didn't recognize, a profile-
+        # completion interstitial, or a dead browser context showing
+        # a stale page. We need at least one of:
+        #   - URL matches a post-apply route (most reliable)
+        #   - URL moved away from the entry URL onto a non-job /
+        #     non-search route (probable navigation to confirmation)
+        # If neither holds, fail and let the user verify on My Jobs
+        # rather than silently mark applied.
         if not any_real_fields_filled:
-            logger.warning(
-                "ZipRecruiter: 1-click apply probable success for %s "
-                "— %d empty steps with no fields ever appearing; "
-                "treating as success (verify in My Jobs if uncertain)",
-                job.job_id, MAX_FORM_STEPS,
+            try:
+                final_url = page.url.lower()
+            except Exception:
+                final_url = ""
+            post_apply_match = any(p in final_url for p in (
+                "/apply/successful", "/apply/confirmation",
+                "/apply/thank", "/post-apply", "/thanks",
+                "/applied",
+            ))
+            # "Navigation away from entry URL onto something
+            # plausible" — entry was a search/job page, exit must
+            # NOT be another search/job/login/captcha page.
+            entry_lower = (walk_start_url or "").lower()
+            navigated_away = bool(
+                final_url
+                and entry_lower
+                and final_url != entry_lower
+                and "/job" not in final_url
+                and "/search" not in final_url
+                and "/jobs" not in final_url
+                and "/auth" not in final_url
+                and "/login" not in final_url
+                and "captcha" not in final_url
             )
-            return self._build_result(success=True, dry_run=dry_run)
+            if post_apply_match or navigated_away:
+                logger.warning(
+                    "ZipRecruiter: 1-click apply probable success "
+                    "for %s — %d empty steps with no fields and "
+                    "URL signal (%s); treating as success "
+                    "(verify in My Jobs if uncertain)",
+                    job.job_id, MAX_FORM_STEPS,
+                    "post-apply route" if post_apply_match
+                    else "navigated-away",
+                )
+                return self._build_result(success=True, dry_run=dry_run)
+            logger.warning(
+                "ZipRecruiter: ZR_EMPTY_NO_CORROBORATION job=%s — %d "
+                "empty steps with no fields, no post-apply URL match, "
+                "and no navigation-away from %s (final url=%s); "
+                "treating as failed so user can verify",
+                job.job_id, MAX_FORM_STEPS, walk_start_url, final_url,
+            )
+            return self._build_result(
+                success=False,
+                failure_reason=(
+                    "empty form walk with no submission corroboration "
+                    "(no post-apply URL, no navigation away)"
+                ),
+            )
 
         logger.warning(
             "ZipRecruiter: Exceeded %d form steps for %s",
@@ -1515,30 +1567,69 @@ class ZipRecruiterPlatform(JobPlatform):
         return False
 
     async def _check_success(self, page: Page) -> bool:
-        """Check if application submission succeeded."""
+        """Check if application submission succeeded.
+
+        Strong signals only — mirrors the Indeed tightening from
+        8bb546c. The old phrase list included "you've applied",
+        "congratulations", and "application sent" which match ZR's
+        sidebar chrome ("Applied" badges in search results) and
+        profile pages ("Congratulations on completing your profile…")
+        — those produced false-success on jobs that were never
+        actually submitted.
+
+        Resolution order:
+
+        1. URL-pattern match — cheapest and strongest. ZR redirects
+           to ``/apply/successful``, ``/apply/confirmation``,
+           ``/apply/thank``, ``/post-apply``, ``/thanks``, or
+           ``/applied`` after a real submission.
+        2. Success selector visible — ``safe_query`` already filters
+           to ``state="visible"`` so an off-screen / hidden React
+           component pre-rendered in a closed accordion can't fire.
+        3. Strong full-sentence phrases only. No loose fragments.
+        """
+        # 1. URL-based signal (cheapest, strongest).
+        try:
+            url = page.url.lower()
+        except Exception:
+            url = ""
+        for pat in (
+            "/apply/successful",
+            "/apply/confirmation",
+            "/apply/thank",
+            "/post-apply",
+            "/thanks",
+            "/applied",
+        ):
+            if pat in url:
+                return True
+
+        # 2. Visible success selector.
         el = await self.safe_query(page, SUCCESS_SELECTORS, timeout=2000)
         if el:
             return True
 
-        # Check page text for success phrases
+        # 3. Strong phrases only — full-sentence confirmations that
+        # don't match sidebar/profile chrome. Removed: "you've
+        # applied" (sidebar 'Applied' badge), "congratulations"
+        # (profile completion banners), "application sent"
+        # (ambiguous), "successfully applied" (sidebar tooltip),
+        # "application received" (interview status pages).
         try:
             body_text = await page.inner_text("body")
             body_lower = body_text.lower()
-            success_phrases = [
-                "application submitted",
-                "your application has been submitted",
-                "successfully applied",
-                "application sent",
-                "you've applied",
-                "thank you for applying",
-                "congratulations",
-                "application received",
-            ]
-            for phrase in success_phrases:
-                if phrase in body_lower:
-                    return True
         except Exception:
-            pass
+            body_lower = ""
+        strong_phrases = [
+            "your application has been submitted",
+            "thank you for applying to",
+            "your application has been sent",
+            "we've received your application",
+            "application submitted successfully",
+        ]
+        for phrase in strong_phrases:
+            if phrase in body_lower:
+                return True
 
         return False
 

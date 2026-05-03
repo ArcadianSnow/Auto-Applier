@@ -1455,32 +1455,32 @@ class DicePlatform(JobPlatform):
                 # unblocks every subsequent click.
                 await self._wait_for_spinners_to_clear(page)
 
+                # Capture pre-submit URL so the outcome poller can
+                # detect navigation-away as probable success.
+                try:
+                    pre_url = page.url
+                except Exception:
+                    pre_url = ""
+
                 # Submit the application
                 clicked = await self.safe_click(
                     page, MODAL_SUBMIT_SELECTORS, timeout=3000
                 )
-                if clicked:
-                    await random_delay(2.0, 4.0)
-
-                    # Verify submission success
-                    if await self._check_success(page):
-                        logger.info(
-                            "Dice: Submitted application for %s", job.job_id
-                        )
-                        await self._close_modal(page)
-                        return self._build_result(success=True, dry_run=False)
-
-                    # Assume success if no error after clicking submit
-                    logger.info(
-                        "Dice: Submit clicked for %s (no explicit success indicator)",
-                        job.job_id,
-                    )
-                    return self._build_result(success=True, dry_run=False)
-                else:
+                if not clicked:
                     return self._build_result(
                         success=False,
                         failure_reason="Submit button not found on submit step",
                     )
+
+                # Hand off to the outcome poller. Replaces the old
+                # fall-through "assume success on no explicit signal"
+                # which was the same false-success pattern ZR was
+                # bitten by in 8bb546c. The poller waits up to 15s
+                # for either an explicit success banner, a visible
+                # validation error, or a navigation-away from the
+                # modal entry URL. On exhaustion it returns a clean
+                # failure so the user can verify on My Jobs.
+                return await self._wait_for_submit_outcome(page, job, pre_url)
 
             else:
                 # Wait for loading spinner to clear before clicking Next
@@ -1632,30 +1632,178 @@ class DicePlatform(JobPlatform):
         )
 
     async def _check_success(self, page: Page) -> bool:
-        """Check if application submission succeeded."""
+        """Check if application submission succeeded.
+
+        Strong signals only — mirrors the Indeed tightening. The old
+        phrase list ("you have applied", "successfully applied",
+        "application sent") matches Dice's My Jobs sidebar chrome
+        and post-apply email templates that load via XHR into the
+        page after navigation. Tightened to URL-pattern → visible
+        selector → strong full-sentence phrases.
+        """
+        # 1. URL-based signal (cheapest, strongest). Dice routes
+        # post-submit to /apply/success or /apply/confirmation /
+        # /post-apply / /thanks.
+        try:
+            url = page.url.lower()
+        except Exception:
+            url = ""
+        for pat in (
+            "/apply/success",
+            "/apply/confirmation",
+            "/post-apply",
+            "/postapply",
+            "/thanks",
+            "/applied",
+        ):
+            if pat in url:
+                return True
+
+        # 2. Visible success selector. ``safe_query`` already filters
+        # on ``state="visible"`` so an off-screen success-classed
+        # React component can't fire.
         el = await self.safe_query(page, SUCCESS_SELECTORS, timeout=2000)
         if el:
             return True
 
-        # Check page text for success phrases
+        # 3. Strong phrases only. Removed: "successfully applied",
+        # "application sent", "you have applied" (sidebar/email
+        # chrome).
         try:
             body_text = await page.inner_text("body")
             body_lower = body_text.lower()
-            success_phrases = [
-                "application submitted",
-                "your application has been submitted",
-                "successfully applied",
-                "application sent",
-                "thank you for applying",
-                "you have applied",
-            ]
-            for phrase in success_phrases:
-                if phrase in body_lower:
-                    return True
+        except Exception:
+            body_lower = ""
+        strong_phrases = [
+            "your application has been submitted",
+            "thank you for applying to",
+            "your application has been sent",
+            "we've received your application",
+            "application submitted successfully",
+        ]
+        for phrase in strong_phrases:
+            if phrase in body_lower:
+                return True
+
+        return False
+
+    async def _wait_for_submit_outcome(
+        self, page: Page, job: Job, pre_url: str,
+    ) -> "ApplyResult":  # noqa: F821
+        """After clicking Dice's modal Submit, poll up to 15s for an
+        explicit terminal state — same pattern as Indeed's
+        _wait_for_submit_outcome.
+
+        Three terminal states:
+          - success: ``_check_success`` returns True
+          - failure: ``_scan_validation_errors`` returns a visible
+            error string
+          - probable success: URL navigated away from the modal
+            entry URL onto a non-modal route that isn't auth /
+            captcha / login
+
+        On exhaustion, return a structured failure with
+        ``submit clicked but no confirmation`` so the manual-apply
+        panel surfaces the job and the CSV reflects truth. Borrowed
+        directly from indeed.py:_wait_for_submit_outcome to close
+        the same false-success family that bit ZR (8bb546c).
+        """
+        import asyncio as _asyncio
+
+        # Some Dice flows show a confirmation modal after the first
+        # Submit click. Try to dismiss via its own primary button.
+        try:
+            await _asyncio.sleep(1.0)
+            modal_btn = await page.query_selector(
+                "div[role='dialog'] button:has-text('Submit'), "
+                "div[role='dialog'] button:has-text('Yes, submit'), "
+                "div[role='dialog'] button:has-text('Confirm'), "
+                "[aria-modal='true'] button:has-text('Submit')"
+            )
+            if modal_btn:
+                try:
+                    if await modal_btn.is_visible():
+                        logger.info(
+                            "Dice: confirmation modal detected; "
+                            "clicking modal-submit for %s", job.job_id,
+                        )
+                        await modal_btn.click(timeout=3000)
+                except Exception as exc:
+                    logger.debug(
+                        "Dice: modal-submit click failed: %s", exc,
+                    )
         except Exception:
             pass
 
-        return False
+        loop = _asyncio.get_running_loop()
+        deadline = loop.time() + 15.0
+        while loop.time() < deadline:
+            # Strong success signal
+            try:
+                if await self._check_success(page):
+                    logger.info(
+                        "Dice: Submitted application for %s "
+                        "(success-detected)", job.job_id,
+                    )
+                    await self._close_modal(page)
+                    return self._build_result(success=True, dry_run=False)
+            except Exception:
+                pass
+
+            # Visible validation error?
+            err_text = await self._scan_validation_errors(page)
+            if err_text:
+                logger.warning(
+                    "Dice: SUBMIT_VALIDATION_ERROR job=%s text=%r",
+                    job.job_id, err_text[:200],
+                )
+                return self._build_result(
+                    success=False,
+                    failure_reason=(
+                        f"submit blocked by validation: {err_text[:120]}"
+                    ),
+                )
+
+            # URL-changed-away signal. Dice's modal lives on the
+            # job-detail page; a real submission either navigates
+            # to a confirmation route or closes the modal and
+            # redirects. If we left the entry URL onto something
+            # plausible, treat as probable success.
+            try:
+                cur_url = page.url
+            except Exception:
+                cur_url = pre_url
+            cur_lower = cur_url.lower()
+            if (
+                cur_url != pre_url
+                and "/auth" not in cur_lower
+                and "/login" not in cur_lower
+                and "captcha" not in cur_lower
+                and "/job-detail" not in cur_lower
+            ):
+                logger.warning(
+                    "Dice: SUBMIT_PROBABLE_SUCCESS job=%s url=%s — "
+                    "navigation away from modal entry without explicit "
+                    "success banner; treating as success",
+                    job.job_id, cur_url,
+                )
+                await self._close_modal(page)
+                return self._build_result(success=True, dry_run=False)
+
+            await _asyncio.sleep(1.0)
+
+        # Exhausted — return structured failure rather than silently
+        # claiming success. User can verify on Dice My Jobs.
+        logger.warning(
+            "Dice: SUBMIT_UNCONFIRMED job=%s — submit clicked but no "
+            "success/error/navigation in 15s; treating as failed so "
+            "user can verify",
+            job.job_id,
+        )
+        return self._build_result(
+            success=False,
+            failure_reason="submit clicked but no success confirmation",
+        )
 
     async def _handle_resume_upload(self, page: Page, resume_path: str) -> None:
         """Upload the resume to the RESUME slot specifically.
