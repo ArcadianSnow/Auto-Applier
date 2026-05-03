@@ -928,15 +928,25 @@ class ApplicationEngine:
                         break
                     if (job.job_id, platform_key) in seen_pairs:
                         continue
-                    pseudo_desc = (
-                        f"Job title: {job.title}\n"
-                        f"Company: {job.company}\n\n"
-                        "(Scored from title and company only — "
-                        "discovery-only platform.)"
-                    )
+                    # Prefer the real description when the adapter
+                    # populated one (ATS API platforms inline full
+                    # job descriptions in their search payload —
+                    # full-fidelity scoring is then free). Fall
+                    # back to the title+company pseudo description
+                    # for browser adapters that genuinely can't
+                    # navigate to detail pages (LinkedIn).
+                    if (job.description or "").strip():
+                        scoring_desc = job.description
+                    else:
+                        scoring_desc = (
+                            f"Job title: {job.title}\n"
+                            f"Company: {job.company}\n\n"
+                            "(Scored from title and company only — "
+                            "discovery-only platform.)"
+                        )
                     try:
                         job_score = await self.scorer.score(
-                            pseudo_desc, cli_mode=self.cli_mode,
+                            scoring_desc, cli_mode=self.cli_mode,
                         )
                     except Exception as exc:
                         logger.debug(
