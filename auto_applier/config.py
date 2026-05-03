@@ -47,6 +47,32 @@ OLLAMA_MIN_VERSION = "0.8.0"  # Minimum Ollama version for Gemma 4 support
 # story-bank) and writes the message to data/outreach/<job_id>.txt
 # for the user to copy/paste into LinkedIn. We never auto-send.
 DEFAULT_AUTO_OUTREACH = False
+
+# Whether the engine pre-tailors the resume for every apply.
+# Default ON per Phase 1 research:
+#   - 1M-application analysis: title-aligned/tailored resumes get
+#     ~3.5x interview rate.
+#   - Cross-2025 reports: tailored apps convert at ~3x mass apps.
+#   - Recruiter surveys (TopResume 2025): 63% want JD tailoring.
+# Cost: ~30-60s LLM call per apply on gemma4:e4b. Fits inside the
+# existing 60-180s anti-detect cooldown. Phase 2 (archetype-cached
+# tailoring during idle hours) will reduce per-apply cost to near
+# zero. Override with auto_tailor_resume:false in user_config.json.
+DEFAULT_AUTO_TAILOR_RESUME = True
+
+# Whether the engine pre-generates a tailored cover letter on every
+# AUTO_APPLY decision. Default ON per Phase 1 research:
+#   - 63% of recruiters explicitly want JD-tailored cover letters
+#     (TopResume 2025 survey); generic letters are now a NEGATIVE
+#     signal in semantic-era ATSes.
+#   - Cheap (~10-30s LLM call) per applied job, runs as background
+#     task so the apply loop doesn't wait.
+#   - Artifact at data/cover_letters/<job_id>/letter.txt is reusable
+#     across (a) form-fill on next cycle, (b) manual apply on ATS
+#     jobs, (c) outreach context.
+# Override via auto_cover_letter:false in user_config.json if a
+# user wants to opt out.
+DEFAULT_AUTO_COVER_LETTER = True
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 

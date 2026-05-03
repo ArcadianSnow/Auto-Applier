@@ -1199,11 +1199,28 @@ class ApplicationEngine:
                     APPLICATION_STARTED, job=job, resume=job_score.resume_label
                 )
 
+                # Phase 1.6: pre-apply resume tailoring. Per Phase 1
+                # research, tailored resumes have a 3-5x interview
+                # rate uplift (1M-app analysis). Cheap (~30-60s on
+                # gemma4:e4b) and fits inside the existing 60-180s
+                # anti-detect cooldown — Phase 2 will move this to
+                # archetype-cached pre-tailoring during idle hours
+                # for near-zero apply-time cost.
+                #
+                # Failure mode: returns the BASE resume path so a
+                # broken LLM / render never blocks the apply.
+                resume_path_for_apply = await self._tailor_resume_for_job(
+                    job=job,
+                    base_resume_path=str(resume_info.file_path),
+                    resume_text=resume_text,
+                    resume_label=job_score.resume_label,
+                )
+
                 # Apply
                 app = await apply_to_job(
                     platform=platform,
                     job=job,
-                    resume_path=str(resume_info.file_path),
+                    resume_path=resume_path_for_apply,
                     resume_text=resume_text,
                     resume_label=job_score.resume_label,
                     personal_info=personal_info,
@@ -1258,6 +1275,26 @@ class ApplicationEngine:
                         ),
                         name=f"story-gen:{job.job_id}",
                     ))
+                    # Cover letter generation. ON by default per
+                    # Phase 1 research (recruiter surveys: 63% want
+                    # tailoring; generic letters are negative signal).
+                    # Cheap LLM call (~10-30s), saves a tailored
+                    # artifact at data/cover_letters/<job_id>/letter.txt
+                    # that's useful for: (a) form-fill path on next
+                    # cycle, (b) manual apply on ATS jobs, (c) outreach
+                    # context. Skips re-generation if the form_filler
+                    # already produced one during the apply flow.
+                    from auto_applier.config import DEFAULT_AUTO_COVER_LETTER
+                    if self.config.get(
+                        "auto_cover_letter", DEFAULT_AUTO_COVER_LETTER,
+                    ):
+                        self._background_tasks.append(asyncio.create_task(
+                            self._generate_cover_letter_for_job(
+                                resume_text=resume_text,
+                                job=job,
+                            ),
+                            name=f"cover-letter:{job.job_id}",
+                        ))
                     # Optional outreach generation. Off by default —
                     # involves messaging real humans on a third-party
                     # platform, so we don't enable it without the
@@ -1323,6 +1360,220 @@ class ApplicationEngine:
         except Exception as exc:
             logger.warning(
                 "Story generation failed for %s @ %s (job_id=%s): %s",
+                job.title[:50], job.company[:40], job.job_id, exc,
+            )
+
+    async def _tailor_resume_for_job(
+        self,
+        job,
+        base_resume_path: str,
+        resume_text: str,
+        resume_label: str,
+    ) -> str:
+        """Pre-apply resume tailoring (Phase 1.6).
+
+        Generates a per-job tailored resume PDF (and DOCX sibling)
+        and returns the path to the tailored PDF so the apply path
+        uploads the tailored version instead of the base resume.
+
+        Fail-soft: returns ``base_resume_path`` (the original) on
+        any error — disabled by config, missing dependencies, LLM
+        unavailable, render failure, etc. The apply must NEVER fail
+        because tailoring did.
+
+        Caches by ``job.job_id`` so re-runs of the same job (e.g.
+        continuous-mode cycle 2 if cycle 1 failed at apply step)
+        skip the LLM call. Cache hit = file > 1KB at the canonical
+        path.
+        """
+        from auto_applier.config import DEFAULT_AUTO_TAILOR_RESUME
+        if not self.config.get("auto_tailor_resume", DEFAULT_AUTO_TAILOR_RESUME):
+            return base_resume_path
+
+        from pathlib import Path
+        try:
+            from auto_applier.resume.tailor import (
+                ResumeTailor, render_html, render_pdf, render_docx,
+                save_tailored_json, tailored_pdf_path, tailored_docx_path,
+            )
+        except Exception as exc:
+            logger.debug("Tailor: import failed (%s); using base resume", exc)
+            return base_resume_path
+
+        try:
+            pdf_path = tailored_pdf_path(job.job_id)
+        except Exception:
+            return base_resume_path
+
+        # Cache hit — already tailored for this job.
+        try:
+            if pdf_path.exists() and pdf_path.stat().st_size > 1000:
+                logger.info(
+                    "Tailor: cache hit for %s @ %s -> %s",
+                    job.title[:50], job.company[:40], pdf_path,
+                )
+                return str(pdf_path)
+        except Exception:
+            pass
+
+        # Generate.
+        try:
+            tailor = ResumeTailor(self.router)
+            tailored = await tailor.tailor(
+                resume_text=resume_text or "",
+                job_description=job.description or "",
+                company_name=job.company or "",
+                job_title=job.title or "",
+                job_id=job.job_id,
+                resume_label=resume_label,
+            )
+            if tailored is None:
+                logger.warning(
+                    "Tailor: LLM returned no tailored resume for %s @ %s "
+                    "— falling back to base resume",
+                    job.title[:50], job.company[:40],
+                )
+                return base_resume_path
+
+            # Resolve user contact info for the rendered header.
+            name, contact = self._candidate_header_for_render()
+
+            html = render_html(tailored, name=name, contact=contact)
+            pdf_ok = await render_pdf(html, pdf_path)
+            # DOCX is best-effort — Phase 1 Workday/Taleo win when it
+            # works, but we never fall back to base just because DOCX
+            # failed; PDF is still the upload artifact.
+            try:
+                docx_path = tailored_docx_path(job.job_id)
+                await render_docx(tailored, docx_path, name=name, contact=contact)
+            except Exception as docx_exc:
+                logger.debug("Tailor: DOCX render skipped: %s", docx_exc)
+            # Persist the structured tailored JSON next to the PDF.
+            try:
+                save_tailored_json(tailored)
+            except Exception:
+                pass
+
+            if pdf_ok:
+                logger.info(
+                    "Tailor: rendered %s @ %s -> %s",
+                    job.title[:50], job.company[:40], pdf_path,
+                )
+                return str(pdf_path)
+            logger.warning(
+                "Tailor: PDF render failed for %s @ %s — falling back to base",
+                job.title[:50], job.company[:40],
+            )
+            return base_resume_path
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Tailor: unexpected failure for %s @ %s: %s — using base",
+                job.title[:50], job.company[:40], exc,
+            )
+            return base_resume_path
+
+    def _candidate_header_for_render(self) -> tuple[str, str]:
+        """Read candidate name + contact from user_config for render
+        headers. Returns (name, contact_line) with safe fallbacks."""
+        try:
+            from auto_applier.config import USER_CONFIG_FILE
+            import json as _json
+            if not USER_CONFIG_FILE.exists():
+                return ("Candidate", "")
+            data = _json.loads(USER_CONFIG_FILE.read_text(encoding="utf-8"))
+            personal = data.get("personal_info", {}) or {}
+            first = (personal.get("first_name") or "").strip()
+            last = (personal.get("last_name") or "").strip()
+            full = (personal.get("name") or "").strip()
+            name = f"{first} {last}".strip() if (first or last) else (full or "Candidate")
+            contact_parts = [
+                (personal.get("email") or "").strip(),
+                (personal.get("phone") or "").strip(),
+                (personal.get("city_state") or "").strip(),
+                (personal.get("linkedin_url") or "").strip(),
+            ]
+            contact = " | ".join(p for p in contact_parts if p)
+            return (name, contact)
+        except Exception:
+            return ("Candidate", "")
+
+    async def _generate_cover_letter_for_job(
+        self,
+        resume_text: str,
+        job,
+    ) -> None:
+        """Background-task body for cover letter generation.
+
+        Pre-generates a JD-tailored cover letter on every successful
+        apply and saves it to data/cover_letters/<job_id>/letter.txt.
+        Per Phase 1 research, recruiters explicitly want tailored
+        letters; generic ones now read as negative signal.
+
+        Idempotent: if the form_filler already created a letter for
+        this job during the apply flow, we skip — no need to spend
+        another LLM call producing a near-duplicate. Detection by
+        directory existence (form_filler creates the per-job dir
+        when it renders the PDF).
+
+        Failure is silent (logged at WARNING). Cover-letter issues
+        must never affect the run's applied/failed counts.
+        """
+        try:
+            from auto_applier.config import COVER_LETTERS_DIR
+            from auto_applier.resume.cover_letter import CoverLetterWriter
+
+            # Sanitize job_id for filesystem use — ATS-shaped IDs
+            # can contain slashes etc.
+            safe_id = "".join(
+                c if c.isalnum() or c in "-_." else "_"
+                for c in (job.job_id or "unknown")
+            )[:120]
+            out_dir = COVER_LETTERS_DIR / safe_id
+            out_path = out_dir / "letter.txt"
+
+            # Skip if a letter already exists (form_filler may have
+            # produced one during the apply flow). We don't compare
+            # contents — just trust that an existing letter is fine.
+            if out_path.exists() and out_path.stat().st_size > 100:
+                logger.debug(
+                    "Cover letter: skip (already exists at %s)", out_path,
+                )
+                return
+
+            writer = CoverLetterWriter(self.router)
+            letter = await writer.generate(
+                resume_text=resume_text,
+                job_description=job.description,
+                company_name=job.company,
+                job_title=job.title,
+            )
+            if not letter:
+                logger.warning(
+                    "Cover letter: empty result for %s @ %s (job_id=%s) — "
+                    "LLM may be down or content-filtered.",
+                    job.title[:50], job.company[:40], job.job_id,
+                )
+                return
+
+            out_dir.mkdir(parents=True, exist_ok=True)
+            header = (
+                f"# Cover letter (auto-generated)\n"
+                f"# Job: {job.title} @ {job.company}\n"
+                f"# URL: {job.url}\n"
+                f"# Edit before sending if needed.\n\n"
+            )
+            out_path.write_text(header + letter + "\n", encoding="utf-8")
+            logger.info(
+                "Cover letter: wrote draft for %s @ %s -> %s",
+                job.title[:50], job.company[:40], out_path,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Cover letter generation failed for %s @ %s (job_id=%s): %s",
                 job.title[:50], job.company[:40], job.job_id, exc,
             )
 
