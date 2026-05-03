@@ -300,8 +300,36 @@ class DicePlatform(JobPlatform):
 
         return await self._wait_for_dice_login(page, timeout=300)
 
+    # Recognized POST-LOGIN dice paths. The 2026-05-03 17:20:25 race
+    # showed that "any non-auth dice URL" was too permissive — a
+    # transient dice.com redirect URL during a Paradox.ai handoff
+    # (FedEx's external chatbot interview platform) briefly looked
+    # logged-in, then immediately navigated to fedex.paradox.ai.
+    # Subsequent goto(job.url) hit ERR_ABORTED.
+    #
+    # New rule: URL must match one of these specific post-login paths
+    # AND have no auth fragment AND have settled (no JS-redirect in
+    # flight, see _wait_for_dice_login).
+    _LOGGED_IN_URL_PATTERNS = (
+        "/job-detail/",
+        "/dashboard",
+        "/my-jobs",
+        "/profile",
+        "/job-applications/",
+        "/start-apply",
+        "/saved-jobs",
+        "/job-search",   # search results page (default landing post-login)
+    )
+
     async def _dice_url_indicates_logged_in(self, page: Page) -> bool:
-        """True when the page is on dice.com and NOT on an auth page.
+        """True when the page is on a recognized post-login Dice URL.
+
+        Tightened 2026-05-03 after a race condition where a transient
+        dice.com URL was briefly satisfying "any non-auth dice URL"
+        before a JS redirect carried the page to an external chatbot
+        host (Paradox.ai). The looser predicate caused ``Login
+        detected`` to fire for an off-host URL and the subsequent
+        ``page.goto(job.url)`` aborted.
 
         Tries to dismiss any common popups first so subsequent flows
         (apply click) aren't blocked. Popup dismissal is best-effort.
@@ -311,13 +339,42 @@ class DicePlatform(JobPlatform):
         except Exception:
             return False
 
+        # Off-host = definitely not logged in to Dice. The browser
+        # might be in the middle of a multi-stage redirect to a
+        # third-party ATS / chatbot — wait for it to settle.
         if "dice.com" not in url:
             return False
         if any(pat in url for pat in self._AUTH_URL_PATTERNS):
             return False
+        # Must match a known post-login path. "Anywhere on dice.com
+        # that isn't auth" is too loose because Dice's apply flow
+        # passes through transient pages we don't fully model.
+        if not any(pat in url for pat in self._LOGGED_IN_URL_PATTERNS):
+            return False
 
-        # We're on a dice.com page that isn't an auth page — almost
-        # certainly logged in. Dismiss any popups before proceeding.
+        # Recheck after a brief settle — if the page is mid-navigation,
+        # the URL we read could be stale by the time the caller acts
+        # on our return value. Wait for ``load`` to confirm we're
+        # actually parked here, then re-verify.
+        try:
+            await page.wait_for_load_state("load", timeout=3000)
+        except Exception:
+            pass
+        try:
+            url2 = (page.url or "").lower()
+        except Exception:
+            return False
+        if "dice.com" not in url2:
+            # Page navigated away during the settle — was a transient
+            # redirect, NOT a stable logged-in state.
+            return False
+        if any(pat in url2 for pat in self._AUTH_URL_PATTERNS):
+            return False
+        if not any(pat in url2 for pat in self._LOGGED_IN_URL_PATTERNS):
+            return False
+
+        # We're on a recognized post-login Dice URL that's settled.
+        # Dismiss any popups before proceeding.
         await self._dismiss_common_popups(page)
         return True
 
@@ -342,6 +399,16 @@ class DicePlatform(JobPlatform):
         # checks at 5s mark.
         notify_grace_s = 5.0
         notified = False
+        # Track when the page first leaves dice.com — sustained
+        # off-host means the apply was outsourced to an external
+        # chatbot / ATS (Paradox.ai for FedEx, etc.) and the user
+        # has effectively left the Dice flow. We bail to manual-
+        # apply rather than declare login complete, which prevents
+        # the 17:20:25 race where a transient dice.com redirect URL
+        # was briefly recognized as logged-in before the page
+        # navigated away.
+        off_host_since: float | None = None
+        OFF_HOST_BAIL_SECONDS = 6.0
         start = time.monotonic()
         last_log_url = ""
         while time.monotonic() - start < timeout:
@@ -357,7 +424,38 @@ class DicePlatform(JobPlatform):
                     logger.debug("Dice login wait: still at %s", cur_url)
                     last_log_url = cur_url
             except Exception:
-                pass
+                cur_url = ""
+            # Off-host bail: if the page navigated away from
+            # dice.com and stays away for OFF_HOST_BAIL_SECONDS,
+            # the user has been routed to a third-party ATS /
+            # chatbot. Treat as "Dice handed off control" — return
+            # False so the caller routes to manual-apply, NOT True.
+            try:
+                cur_url_lower = (cur_url or "").lower()
+            except Exception:
+                cur_url_lower = ""
+            on_dice = bool(cur_url_lower) and "dice.com" in cur_url_lower
+            if not on_dice and cur_url_lower:
+                if off_host_since is None:
+                    off_host_since = time.monotonic()
+                    logger.debug(
+                        "Dice login wait: off-host detected (url=%s) — "
+                        "will bail in %.0fs if still off-host",
+                        cur_url, OFF_HOST_BAIL_SECONDS,
+                    )
+                elif time.monotonic() - off_host_since >= OFF_HOST_BAIL_SECONDS:
+                    logger.warning(
+                        "Dice login wait: page sustained off-host "
+                        "(url=%s) for %.0fs — Dice handed off to a "
+                        "third-party ATS / chatbot. Aborting login "
+                        "wait so caller routes to manual-apply.",
+                        cur_url, OFF_HOST_BAIL_SECONDS,
+                    )
+                    return False
+            else:
+                # Back on dice.com → reset the timer in case the page
+                # is doing a multi-stage redirect that bounces.
+                off_host_since = None
             # Deferred urgent notify — fire once, after the grace
             # window confirms this isn't a stored-cookie auto-resolve.
             if not notified and (time.monotonic() - start) >= notify_grace_s:
