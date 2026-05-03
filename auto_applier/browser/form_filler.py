@@ -22,7 +22,7 @@ from playwright.async_api import Page
 from auto_applier.browser.anti_detect import human_fill, random_delay
 from auto_applier.browser.selector_utils import FormField
 from auto_applier.config import ANSWERS_FILE, UNANSWERED_FILE
-from auto_applier.llm.prompts import FORM_FILL
+from auto_applier.llm.prompts import ANSWER_FROM_HINT, FORM_FILL
 from auto_applier.llm.router import LLMRouter
 from auto_applier.resume.cover_letter import CoverLetterWriter
 from auto_applier.storage.dedup import normalize_company
@@ -223,6 +223,16 @@ NOTICE_PERIOD_KEYWORDS = [
     "weeks of notice required",
     "weeks notice",
 ]
+
+# Marker prefix on answers.json values that designates a saved answer
+# as a context-aware HINT rather than a literal fill value. Chat-dialog
+# users can opt-in to save open-ended replies (e.g. "Why do you want
+# this role?") with this prefix; at apply time the form_filler asks
+# the LLM to adapt the hint to the LIVE form question using the
+# resume + JD + company. Plain (no-prefix) answers keep the existing
+# literal-fill path. See ANSWER_FROM_HINT in llm/prompts.py.
+HINT_PREFIX = "_hint: "
+
 
 # Default start-date offset used when a form asks for the earliest
 # date the candidate can begin. Two weeks is the conventional notice
@@ -478,6 +488,30 @@ class FormFiller:
                 continue
             if not candidate:
                 continue
+            # Hint resolution: when answers.json gave us a value flagged
+            # with the HINT_PREFIX marker, treat it as the candidate's
+            # intent and adapt it to the LIVE question with resume + JD
+            # context. Falls back to the bare hint text on LLM failure
+            # (better than nothing — still encodes user intent).
+            if source == "answers.json" and isinstance(candidate, str) \
+                    and candidate.startswith(HINT_PREFIX):
+                hint_text = candidate[len(HINT_PREFIX):].strip()
+                logger.debug(
+                    "  answers.json gave hint → resolving via LLM: %r",
+                    hint_text[:80],
+                )
+                resolved = await self._resolve_template_answer(
+                    hint_text, field.label, field,
+                )
+                if resolved:
+                    candidate = resolved
+                    source = "answers.json+hint"
+                else:
+                    # LLM declined or failed — fall through to bare
+                    # hint text. The hint itself was written by the
+                    # user, so it's at least honest signal.
+                    candidate = hint_text
+                    source = "answers.json+hint(bare)"
             if not self._answer_fits_field(field, candidate):
                 logger.debug(
                     "  %s gave %r but it doesn't fit %s field — skipping",
@@ -930,6 +964,73 @@ class FormFiller:
                 "Fuzzy answers.json match for '%s' (%.0f%%)", label, best_ratio * 100
             )
         return best_match
+
+    # ------------------------------------------------------------------
+    # Hint resolution — context-aware answer from a saved hint
+    # ------------------------------------------------------------------
+
+    async def _resolve_template_answer(
+        self, hint: str, label: str, field: FormField,
+    ) -> str:
+        """Adapt a saved hint to the LIVE form question.
+
+        ``hint`` is the raw user-saved guidance (already stripped of the
+        ``_hint:`` prefix). ``label`` is the live form-field label.
+        Returns the resolved answer string, or "" on LLM failure / when
+        the LLM judges the hint inapplicable to the live question.
+
+        The router cache keys on the full prompt text — different live
+        questions for the same hint produce different prompts and so
+        different cache entries. The caller is responsible for falling
+        back to the bare hint text when this returns "".
+        """
+        if not hint:
+            return ""
+        prompt_text = ANSWER_FROM_HINT.format(
+            hint=hint,
+            question=label,
+            company_name=self.company_name or "(not specified)",
+            resume_text=(self.resume_text or "")[:2000],
+            job_description=(self.job_description or "")[:1500],
+        )
+        try:
+            payload = await self.router.complete_json(
+                prompt=prompt_text,
+                system_prompt=ANSWER_FROM_HINT.system,
+                temperature=0.2,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Hint resolution failed for label=%r hint=%r: %s",
+                label[:60], hint[:60], exc,
+            )
+            return ""
+        # complete_json returns a dict directly. Some test mocks may
+        # return a response-shaped object with .text — be defensive.
+        if not isinstance(payload, dict):
+            raw = getattr(payload, "text", "") or ""
+            try:
+                payload = json.loads(raw) if raw else None
+            except Exception:
+                payload = None
+        if not isinstance(payload, dict):
+            logger.debug(
+                "Hint resolution returned non-dict payload for %r",
+                label[:60],
+            )
+            return ""
+        answer = (payload.get("answer") or "").strip()
+        if not answer:
+            logger.debug(
+                "Hint resolution declined (empty answer) for %r",
+                label[:60],
+            )
+            return ""
+        logger.info(
+            "  hint→answer: %r → %r for '%s'",
+            hint[:50], answer[:60], label[:60],
+        )
+        return answer
 
     # ------------------------------------------------------------------
     # Priority 3: LLM Generation

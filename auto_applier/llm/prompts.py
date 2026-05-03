@@ -637,3 +637,46 @@ ANSWER_CHAT = PromptTemplate(
         "on its own line."
     ),
 )
+
+
+# ------------------------------------------------------------------
+# Context-aware hint resolution (answers.json _hint: prefix)
+# ------------------------------------------------------------------
+
+# Open-ended questions (e.g. "Why do you want this role?") rarely have
+# a single literal answer that fits every job. Live feedback 2026-05-01:
+# "for an open ended question like the specific tools and certificates
+# for this role, we need to make sure that the applier knows how to
+# read the answer and knows what context to use it in." So instead of
+# saving a literal one-size-fits-all answer in answers.json, the user
+# can save a HINT (intent + key talking points). At apply time, the
+# form_filler asks the LLM to adapt that hint to the LIVE form question
+# using the resume + JD + company. The hint guides; the LLM specifies.
+ANSWER_FROM_HINT = PromptTemplate(
+    system=(
+        "You write a job-application answer by adapting the candidate's "
+        "saved hint to the specific live question. Rules:\n"
+        "- Treat the hint as the candidate's INTENT, not a literal "
+        "script. Reword it so it directly answers the live question "
+        "and references the specific company/role where relevant.\n"
+        "- Specificity beats generality — pull concrete details from "
+        "the resume and the job description that support the hint.\n"
+        "- Never invent skills, employers, dates, or outcomes that "
+        "aren't on the resume.\n"
+        "- Keep it short: 1-3 sentences for textareas, a single value "
+        "for single-line text fields. Match the candidate's voice "
+        "(first person, direct).\n"
+        "- If the hint genuinely cannot be applied honestly to this "
+        "question (wrong topic entirely, hint contradicts the resume, "
+        "etc.), set answer to an empty string.\n"
+        "Respond ONLY with this JSON (no preamble, no code fences):\n"
+        '{"answer": str}'
+    ),
+    template=(
+        "Saved hint (candidate's intent):\n{hint}\n\n"
+        "Live form question:\n{question}\n\n"
+        "Company being applied to: {company_name}\n\n"
+        "Resume:\n{resume_text}\n\n"
+        "Job description:\n{job_description}"
+    ),
+)

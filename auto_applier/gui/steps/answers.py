@@ -46,6 +46,48 @@ SUGGESTED_LINE_RE = re.compile(
 )
 
 
+# Substrings that mark a question as "open-ended-shaped" — meaning a
+# single literal answer rarely fits every job, but a context-aware hint
+# adapted at apply time WOULD work. Mirrored loosely from form_filler's
+# _OPEN_ENDED_PATTERNS but tuned for the chat-dialog's save-as-hint
+# button: we want fewer false positives here (showing the button on a
+# yes/no question would be confusing), so we ALSO require a trailing
+# question mark before the button is shown.
+_OPEN_ENDED_HINT_FRAGMENTS = (
+    "why",
+    "tell us",
+    "describe",
+    "interest",
+    "motivat",
+    "what would you",
+    "how would you",
+    "what excites",
+    "your goals",
+)
+
+
+def _is_open_ended_shape(question: str) -> bool:
+    """True when the question looks like a free-form prompt that
+    benefits from a context-aware hint rather than a literal answer.
+
+    Heuristic (must satisfy BOTH):
+    - Ends in a question mark (after stripping whitespace).
+    - Contains at least one open-ended fragment from
+      ``_OPEN_ENDED_HINT_FRAGMENTS``.
+
+    Returns False for short / non-question labels like "Email" or
+    "Are you authorized to work?" (the latter ends in "?" but doesn't
+    match any open-ended fragment — yes/no by intent).
+    """
+    if not question:
+        return False
+    trimmed = question.strip()
+    if not trimmed.endswith("?"):
+        return False
+    lowered = trimmed.lower()
+    return any(frag in lowered for frag in _OPEN_ENDED_HINT_FRAGMENTS)
+
+
 def _extract_suggested(text: str) -> str:
     """Pull the proposed answer out of a chat reply.
 
@@ -613,6 +655,13 @@ class ChatAssistDialog(tk.Toplevel):
         self._resume_text: str | None = None
         self._candidate_profile: str | None = None
         self._placeholder = _find_placeholder(question)
+        # Whether this question is shaped like an open-ended prompt
+        # ("Why do you want this role?", "What interests you about us?")
+        # — those benefit from a context-aware hint that the form_filler
+        # adapts to each specific job at apply time, not a literal one-
+        # size-fits-all answer. Drives whether the second action button
+        # ("Save as context-aware hint") is shown.
+        self._is_open_ended = _is_open_ended_shape(question)
 
         self.title("AI assist — chat about this answer")
         self.configure(bg=BG)
@@ -802,6 +851,32 @@ class ChatAssistDialog(tk.Toplevel):
             state="disabled",
         )
         self._use_btn.pack(side="left")
+        # Second save button — context-aware hint. Only shown for
+        # open-ended-shaped questions WITHOUT a placeholder template.
+        # Saves the suggestion with a `_hint:` prefix so the form
+        # filler adapts it to the specific job at apply time using
+        # the resume + JD as context (vs a literal one-size answer).
+        self._hint_btn: ttk.Button | None = None
+        if self._is_open_ended and self._placeholder is None:
+            self._hint_btn = ttk.Button(
+                btn_row, text="Save as context-aware hint",
+                command=self._on_save_as_hint,
+                state="disabled",
+            )
+            self._hint_btn.pack(side="left", padx=(8, 0))
+            # Tk's ttk.Button doesn't support a tooltip natively, but
+            # a tiny help label below the row keeps the affordance
+            # discoverable without extra widgets / event bindings.
+            tk.Label(
+                self, bg=BG, fg=TEXT_MUTED, font=FONT_SMALL,
+                justify="left", wraplength=680,
+                text=(
+                    "Hint mode: saves this as guidance. The form "
+                    "filler will adapt it to the specific job at "
+                    "apply time using your resume + the job "
+                    "description."
+                ),
+            ).pack(anchor="w", padx=PAD_X, pady=(0, PAD_Y))
         ttk.Button(
             btn_row, text="Close",
             command=self._on_close,
@@ -1042,6 +1117,17 @@ class ChatAssistDialog(tk.Toplevel):
                 # the literal save is suppressed.
                 if not self._placeholder:
                     self._use_btn.configure(state="normal")
+                    # The "Save as context-aware hint" sibling
+                    # follows the same enable rules — non-empty
+                    # suggestion AND not a placeholder template.
+                    # Visibility (whether the button exists at all)
+                    # was already gated on open-ended shape during
+                    # _build_ui; here we only enable.
+                    if self._hint_btn is not None:
+                        try:
+                            self._hint_btn.configure(state="normal")
+                        except tk.TclError:
+                            pass
             # No SUGGESTED parsed — leave previous suggestion (if any)
             # in place. The user can still hit "Use this answer" with
             # whatever the last good suggestion was.
@@ -1145,6 +1231,28 @@ class ChatAssistDialog(tk.Toplevel):
         if not self._current_suggestion:
             return
         self._answer_var.set(self._current_suggestion)
+        self._on_close()
+
+    def _on_save_as_hint(self) -> None:
+        """Save the current suggestion with a `_hint: ` prefix.
+
+        At apply time, ``form_filler._match_answers`` returns this
+        prefixed value; ``fill_field`` detects the prefix and routes to
+        ``_resolve_template_answer`` which adapts the hint to the LIVE
+        form question using the candidate's resume + the job
+        description + the company. This makes open-ended saved answers
+        ("Why do you want this role?") job-specific instead of a one-
+        size-fits-all literal.
+        """
+        if not self._current_suggestion:
+            return
+        # Don't double-prefix if the suggestion somehow already starts
+        # with the marker (e.g. user re-opened the dialog after a hint
+        # save and the chat re-emitted the saved value).
+        prefixed = self._current_suggestion
+        if not prefixed.startswith("_hint: "):
+            prefixed = f"_hint: {prefixed}"
+        self._answer_var.set(prefixed)
         self._on_close()
 
     def _on_close(self) -> None:
