@@ -206,7 +206,6 @@ PROMPT_LEAK_MARKERS: tuple[str, ...] = (
     "you are answering",
     "you are filling",
     "respond only with",
-    "respond ONLY with",
     "json shape",
     "available options",
     "system_prompt",
@@ -343,11 +342,9 @@ def is_prompt_leak(label: str) -> bool:
     """Return True if ``label`` contains an LLM-prompt-body marker.
 
     Substring scan against :data:`PROMPT_LEAK_MARKERS` against the
-    lower-cased label. NOTE: markers in :data:`PROMPT_LEAK_MARKERS`
-    that contain upper-case characters (e.g. ``"respond ONLY with"``)
-    are by design unreachable — they mirror the original tuple verbatim
-    so behaviour is identical to the pre-consolidation implementation.
-    Don't "fix" them by lowering the needle; leave the casing alone.
+    lower-cased label. All markers in :data:`PROMPT_LEAK_MARKERS`
+    must be lower-case — the input is lower-cased before comparison,
+    so any upper-case needle would be unreachable.
     """
     if not label:
         return False

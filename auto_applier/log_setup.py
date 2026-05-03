@@ -172,8 +172,11 @@ def _detect_version() -> str:
         if sha.returncode == 0 and sha.stdout.strip():
             sha_short = sha.stdout.strip()
             # Compute the date-based component from today's commit count.
-            # `--date=short` gives YYYY-MM-DD; we filter for that
-            # date to get N (1-based: first commit today is -1).
+            # ``--since/--until`` already bounds output to today's
+            # commits server-side — every output line is then today's
+            # date in YYYY-MM-DD form. Just count non-empty lines;
+            # the previous "filter for today_iso" loop was redundant
+            # work the git filter had already done.
             today_iso = datetime.now().strftime("%Y-%m-%d")
             today_dot = today_iso.replace("-", ".")
             commits_today = subprocess.run(
@@ -187,7 +190,7 @@ def _detect_version() -> str:
             if commits_today.returncode == 0:
                 count_today = sum(
                     1 for ln in commits_today.stdout.splitlines()
-                    if ln.strip() == today_iso
+                    if ln.strip()
                 )
             # Position of HEAD among today's commits — ``-1`` is
             # the most recent. If HEAD isn't from today, the count

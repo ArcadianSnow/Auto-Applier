@@ -228,7 +228,7 @@ def check_ziprecruiter_profile() -> CheckResult:
         "ZipRecruiter profile", WARN,
         "local personal_info OK; verify remote ZR profile manually",
         fix=(
-            "Verify Jordan's ZR profile is populated at "
+            "Verify your ZR profile is populated at "
             "ziprecruiter.com -> Account -> Profile. "
             "Empty ZR profile -> silent rejection at apply time. "
             "(Could not verify automatically — too expensive to launch browser during doctor.)"

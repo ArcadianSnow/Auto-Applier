@@ -54,7 +54,6 @@ SUGGESTED_LINE_RE = re.compile(
 # yes/no question would be confusing), so we ALSO require a trailing
 # question mark before the button is shown.
 _OPEN_ENDED_HINT_FRAGMENTS = (
-    "why",
     "tell us",
     "describe",
     "interest",
@@ -65,6 +64,12 @@ _OPEN_ENDED_HINT_FRAGMENTS = (
     "your goals",
 )
 
+# Word-anchored fragments — bare 3-letter "why" as a substring would
+# theoretically match noise (e.g. some neologistic compound), so we
+# require a word-boundary match. Kept separate so the substring path
+# above stays simple.
+_OPEN_ENDED_HINT_WORDS_RE = re.compile(r"\bwhy\b", re.IGNORECASE)
+
 
 def _is_open_ended_shape(question: str) -> bool:
     """True when the question looks like a free-form prompt that
@@ -73,7 +78,8 @@ def _is_open_ended_shape(question: str) -> bool:
     Heuristic (must satisfy BOTH):
     - Ends in a question mark (after stripping whitespace).
     - Contains at least one open-ended fragment from
-      ``_OPEN_ENDED_HINT_FRAGMENTS``.
+      ``_OPEN_ENDED_HINT_FRAGMENTS`` OR a word-anchored match from
+      ``_OPEN_ENDED_HINT_WORDS_RE``.
 
     Returns False for short / non-question labels like "Email" or
     "Are you authorized to work?" (the latter ends in "?" but doesn't
@@ -85,7 +91,9 @@ def _is_open_ended_shape(question: str) -> bool:
     if not trimmed.endswith("?"):
         return False
     lowered = trimmed.lower()
-    return any(frag in lowered for frag in _OPEN_ENDED_HINT_FRAGMENTS)
+    if any(frag in lowered for frag in _OPEN_ENDED_HINT_FRAGMENTS):
+        return True
+    return _OPEN_ENDED_HINT_WORDS_RE.search(lowered) is not None
 
 
 def _extract_suggested(text: str) -> str:
@@ -1080,8 +1088,13 @@ class ChatAssistDialog(tk.Toplevel):
             reply = f"(error reaching the AI: {exc})"
 
         # Marshal back to the UI thread. If the dialog has been closed
-        # in the meantime, _render_reply no-ops.
-        self.after(0, lambda: self._render_reply(reply))
+        # in the meantime, ``_render_reply`` no-ops via ``_closed`` —
+        # but ``self.after()`` itself is unsafe on a destroyed widget
+        # (``_tkinter.TclError: invalid command name``). Wrap it.
+        try:
+            self.after(0, lambda: self._render_reply(reply))
+        except tk.TclError:
+            pass
 
     def _render_reply(self, reply_text: str) -> None:
         if self._closed:

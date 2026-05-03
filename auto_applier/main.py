@@ -1683,8 +1683,15 @@ def prune_failed(dry_run: bool, yes: bool):
         click.echo("applications.csv is empty.")
         return
 
+    # Identity-based filter — `r not in failed` does dict __eq__
+    # comparison against every entry in failed and would mis-drop
+    # any non-failed row whose contents happen to be all-equal to a
+    # failed row (rare but possible with duplicate dry-run rows on
+    # small data sets). Using id() guarantees we only drop the exact
+    # rows we classified.
     failed = [r for r in rows if (r.get("status") or "").strip() == "failed"]
-    keep = [r for r in rows if r not in failed]
+    failed_ids = {id(r) for r in failed}
+    keep = [r for r in rows if id(r) not in failed_ids]
 
     click.echo(f"applications.csv: {len(rows)} total, "
                f"{len(failed)} failed (would remove), "
