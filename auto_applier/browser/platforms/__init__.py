@@ -17,6 +17,7 @@ they're safe to run alongside the browser-driven platforms in the
 same cycle.
 """
 from auto_applier.browser.platforms.linkedin import LinkedInPlatform
+from auto_applier.browser.platforms.linkedin_nodriver import LinkedInNodriverPlatform
 from auto_applier.browser.platforms.indeed import IndeedPlatform
 from auto_applier.browser.platforms.dice import DicePlatform
 from auto_applier.browser.platforms.ziprecruiter import ZipRecruiterPlatform
@@ -25,11 +26,16 @@ from auto_applier.browser.platforms.ats_lever import ATSLeverPlatform
 from auto_applier.browser.platforms.ats_ashby import ATSAshbyPlatform
 
 PLATFORM_REGISTRY: dict[str, type] = {
-    # Browser-driven platforms
+    # Browser-driven platforms (patchright)
     "linkedin": LinkedInPlatform,
     "indeed": IndeedPlatform,
     "dice": DicePlatform,
     "ziprecruiter": ZipRecruiterPlatform,
+    # Browser-driven LinkedIn via the Nodriver anti-detect backend.
+    # Discovery-only. Optional dependency — install with
+    # `pip install -e ".[nodriver]"`. See platforms/linkedin_nodriver.py
+    # for state-of-this-scaffold caveats.
+    "linkedin_nodriver": LinkedInNodriverPlatform,
     # ATS public-API discovery (no browser, no anti-detect risk)
     "ats_greenhouse": ATSGreenhousePlatform,
     "ats_lever": ATSLeverPlatform,

@@ -24,6 +24,13 @@ dev = [
     "pytest-asyncio>=0.23",
     "pyinstaller>=6.0",
 ]
+# Optional anti-detect backend for LinkedIn discovery. Per Tier 4
+# research, patchright loses to LinkedIn's TLS/JA4 fingerprinting;
+# Nodriver drives raw CDP without Playwright's wire-protocol
+# signature. Install with: ``pip install -e ".[nodriver]"``.
+nodriver = [
+    "nodriver>=0.40",
+]
 
 [project.scripts]
 auto-applier = "auto_applier.main:cli"

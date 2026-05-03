@@ -528,6 +528,44 @@ def check_patchright() -> CheckResult:
         )
 
 
+def check_nodriver() -> CheckResult:
+    """Check if the optional Nodriver backend is available.
+
+    Only flags as actionable if the user has explicitly enabled
+    ``linkedin_nodriver`` in user_config — otherwise nodriver is
+    irrelevant and we report PASS silently to avoid noise.
+    """
+    from auto_applier.config import USER_CONFIG_FILE
+
+    enabled = []
+    if USER_CONFIG_FILE.exists():
+        try:
+            data = json.loads(USER_CONFIG_FILE.read_text(encoding="utf-8"))
+            enabled = data.get("enabled_platforms", []) or []
+        except (json.JSONDecodeError, OSError):
+            return CheckResult("Nodriver", PASS, "(config unreadable — skipping)")
+
+    if "linkedin_nodriver" not in enabled:
+        return CheckResult("Nodriver", PASS, "(not enabled — skipping)")
+
+    try:
+        import nodriver  # noqa: F401
+        return CheckResult(
+            "Nodriver", PASS,
+            "available — LinkedIn Nodriver discovery enabled",
+        )
+    except ImportError:
+        return CheckResult(
+            "Nodriver", FAIL,
+            "linkedin_nodriver is enabled but nodriver isn't installed",
+            fix=(
+                'Install with: pip install -e ".[nodriver]" '
+                "(then restart Auto Applier). Alternatively, remove "
+                "'linkedin_nodriver' from enabled_platforms in user_config.json."
+            ),
+        )
+
+
 def check_disk_space() -> CheckResult:
     from auto_applier.config import DATA_DIR
 
@@ -587,6 +625,7 @@ async def _run_all() -> list[CheckResult]:
         check_gemini_key,
         check_playwright,
         check_patchright,
+        check_nodriver,
         check_disk_space,
         check_screen_resolution,
     ]
