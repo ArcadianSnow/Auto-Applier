@@ -224,14 +224,27 @@ def check_ziprecruiter_profile() -> CheckResult:
                 "(CSV says 'applied' but ZR dashboard shows 'Application Incomplete')."
             ),
         )
+
+    # User-acknowledged ack flag. Once the user has verified their
+    # remote ZR profile in their browser they tick a checkbox in the
+    # wizard's ZipRecruiter card; that writes
+    # ``ziprecruiter_profile_verified: true`` into user_config and
+    # this check downgrades to PASS. Stays as WARN forever otherwise
+    # — we can't verify the remote profile from here without launching
+    # a browser, which is too expensive for doctor.
+    if data.get("ziprecruiter_profile_verified") is True:
+        return CheckResult(
+            "ZipRecruiter profile", PASS,
+            "local personal_info OK; user confirmed remote profile is filled in",
+        )
     return CheckResult(
         "ZipRecruiter profile", WARN,
         "local personal_info OK; verify remote ZR profile manually",
         fix=(
             "Verify your ZR profile is populated at "
-            "ziprecruiter.com -> Account -> Profile. "
-            "Empty ZR profile -> silent rejection at apply time. "
-            "(Could not verify automatically — too expensive to launch browser during doctor.)"
+            "ziprecruiter.com -> Account -> Profile, then tick "
+            "\"I've verified my ZipRecruiter profile\" under the ZR "
+            "card in the wizard to silence this warning."
         ),
     )
 

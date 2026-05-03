@@ -192,14 +192,17 @@ class SitesStep(ttk.Frame):
                 wraplength=720, justify="left",
             ).pack(anchor="w", padx=(24, 0), pady=(2, 0))
 
-            # Per-platform extras — only ATS or Nodriver cards have
-            # them. Hidden by default; revealed when the checkbox
-            # is toggled on.
+            # Per-platform extras — only ATS, Nodriver, or
+            # ZipRecruiter cards have them. Hidden by default;
+            # revealed when the platform's checkbox is toggled on.
             if options.get("ats"):
                 extra = self._build_ats_extra(card, key, options["ats_id"])
                 self._extras[key] = extra
             elif options.get("nodriver"):
                 extra = self._build_nodriver_extra(card)
+                self._extras[key] = extra
+            elif key == "ziprecruiter":
+                extra = self._build_zr_ack_extra(card)
                 self._extras[key] = extra
 
             # Show the extra at build time if the checkbox is already
@@ -400,6 +403,44 @@ class SitesStep(ttk.Frame):
             if isinstance(jobs, list):
                 return len(jobs)
         return -1
+
+    def _build_zr_ack_extra(self, parent: tk.Widget) -> tk.Widget:
+        """ZipRecruiter manual-verification ack checkbox.
+
+        ZR's silent-rejection failure mode (CSV says ``applied`` while
+        ZR's dashboard shows ``Application Incomplete``) requires the
+        user to fill in their profile on ziprecruiter.com itself —
+        we can't do that from the bot side. Doctor flags this as a
+        WARN every run, which is informational but bloats the log.
+
+        This checkbox lets users acknowledge they've verified their
+        remote ZR profile is populated; toggling it on writes
+        ``ziprecruiter_profile_verified: true`` to user_config.json
+        and the doctor check downgrades to PASS.
+
+        We never *imply* verification — toggling the box is purely
+        the user's claim about a state we can't observe.
+        """
+        frame = tk.Frame(parent, bg=BG_CARD)
+        ttk.Checkbutton(
+            frame,
+            text="I've verified my ZipRecruiter profile is filled in",
+            variable=self.wizard.data["ziprecruiter_profile_verified"],
+            style="Card.TCheckbutton",
+        ).pack(anchor="w")
+        tk.Label(
+            frame,
+            text=(
+                "Tick this once you've checked ziprecruiter.com -> "
+                "Account -> Profile and confirmed your name, phone, "
+                "address, and resume are saved on ZR's site. Silences "
+                "the recurring 'verify ZR profile' warning in the "
+                "preflight check."
+            ),
+            font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
+            anchor="w", justify="left", wraplength=700,
+        ).pack(anchor="w", padx=(24, 0))
+        return frame
 
     def _build_nodriver_extra(self, parent: tk.Widget) -> tk.Widget:
         """Install-helper sub-card for the Nodriver LinkedIn engine.

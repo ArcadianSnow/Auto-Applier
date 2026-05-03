@@ -152,6 +152,12 @@ class WizardApp(tk.Tk):
         for ats_id in ("greenhouse", "lever", "ashby"):
             self.data[f"ats_{ats_id}_slugs"] = tk.StringVar(value="")
 
+        # User ack: "I've verified my ZipRecruiter profile is filled
+        # in on the website." When True, doctor's ZR check downgrades
+        # from WARN to PASS — the warn is otherwise unsilenceable
+        # because we can't verify ZR's remote profile from here.
+        self.data["ziprecruiter_profile_verified"] = tk.BooleanVar(value=False)
+
         # Personal info
         for key in ("first_name", "last_name", "email", "phone",
                      "street_address", "city", "state", "zip_code",
@@ -210,6 +216,11 @@ class WizardApp(tk.Tk):
             var_key = f"{plat}_enabled"
             if var_key in self.data:
                 self.data[var_key].set(True)
+
+        # ZipRecruiter profile-verified ack — restore the saved tick
+        # on wizard reopen so users don't have to re-acknowledge.
+        if cfg.get("ziprecruiter_profile_verified") is True:
+            self.data["ziprecruiter_profile_verified"].set(True)
 
         # ATS company slugs — convert from the dict shape on disk
         # into the newline-joined string the sites-step text widget
@@ -643,6 +654,9 @@ class WizardApp(tk.Tk):
         config = {
             "enabled_platforms": enabled,
             "ats_api_companies": ats_api_companies,
+            "ziprecruiter_profile_verified": bool(
+                self.data["ziprecruiter_profile_verified"].get()
+            ),
             "personal_info": personal,
             "search_keywords": keywords,
             "location": self.data["location"].get().strip(),

@@ -31,12 +31,19 @@ COMPLETE_PERSONAL_INFO = {
 }
 
 
-def _write_config(tmp_path, monkeypatch, *, enabled_platforms, personal_info):
-    f = tmp_path / "user_config.json"
-    f.write_text(json.dumps({
+def _write_config(
+    tmp_path, monkeypatch, *,
+    enabled_platforms, personal_info,
+    ziprecruiter_profile_verified=None,
+):
+    payload = {
         "enabled_platforms": enabled_platforms,
         "personal_info": personal_info,
-    }))
+    }
+    if ziprecruiter_profile_verified is not None:
+        payload["ziprecruiter_profile_verified"] = ziprecruiter_profile_verified
+    f = tmp_path / "user_config.json"
+    f.write_text(json.dumps(payload))
     import auto_applier.config as cfg
     monkeypatch.setattr(cfg, "USER_CONFIG_FILE", f)
     return f
@@ -60,18 +67,71 @@ class TestZipRecruiterProfile:
         assert r.fix == ""
 
     def test_zr_enabled_complete_personal_info_warns(self, tmp_path, monkeypatch):
-        """All required local fields populated + ZR enabled —
-        WARN telling the user to eyeball ziprecruiter.com because
-        we can't verify the remote profile automatically."""
+        """All required local fields populated + ZR enabled, but the
+        user hasn't ticked the verification ack — WARN telling the
+        user to eyeball ziprecruiter.com (and pointing them at the
+        wizard ack to silence)."""
         _write_config(
             tmp_path, monkeypatch,
             enabled_platforms=["linkedin", "ziprecruiter"],
             personal_info=COMPLETE_PERSONAL_INFO,
+            # No ack flag — default behavior.
         )
         r = doctor.check_ziprecruiter_profile()
         assert r.status == doctor.WARN
         assert "ziprecruiter.com" in r.fix.lower()
-        assert "could not verify automatically" in r.fix.lower()
+        # The fix message must point users to the wizard ack so they
+        # know how to silence the warning.
+        assert "verified my ziprecruiter profile" in r.fix.lower()
+
+    def test_zr_enabled_user_acked_passes(self, tmp_path, monkeypatch):
+        """All required local fields populated + ZR enabled + user
+        ticked the wizard ack — PASS, not WARN. Lets the friend who
+        already verified their remote profile silence the recurring
+        log noise."""
+        _write_config(
+            tmp_path, monkeypatch,
+            enabled_platforms=["linkedin", "ziprecruiter"],
+            personal_info=COMPLETE_PERSONAL_INFO,
+            ziprecruiter_profile_verified=True,
+        )
+        r = doctor.check_ziprecruiter_profile()
+        assert r.status == doctor.PASS
+        # Message must indicate WHY this passed so the user can tell
+        # at a glance "ah, that's the ack flag" vs other PASS reasons.
+        assert "user confirmed" in r.message.lower()
+
+    def test_zr_enabled_explicit_false_ack_warns(self, tmp_path, monkeypatch):
+        """Explicit False ack is the same as no ack — still WARN.
+        Guards against a future refactor that might accidentally treat
+        any present-key value as truthy."""
+        _write_config(
+            tmp_path, monkeypatch,
+            enabled_platforms=["ziprecruiter"],
+            personal_info=COMPLETE_PERSONAL_INFO,
+            ziprecruiter_profile_verified=False,
+        )
+        r = doctor.check_ziprecruiter_profile()
+        assert r.status == doctor.WARN
+
+    def test_ack_does_not_override_missing_fields(self, tmp_path, monkeypatch):
+        """The ack flag is for the REMOTE profile only — it must NOT
+        override the local-personal-info FAIL. Ticking the box without
+        actually filling in your address can't make the form filler
+        magically know your zip code."""
+        partial = {
+            "name": "Jordan", "first_name": "Jordan", "email": "j@example.com",
+            # missing last_name, phone, city, state, zip_code
+        }
+        _write_config(
+            tmp_path, monkeypatch,
+            enabled_platforms=["ziprecruiter"],
+            personal_info=partial,
+            ziprecruiter_profile_verified=True,
+        )
+        r = doctor.check_ziprecruiter_profile()
+        # Still FAILs — local data is the authoritative gate.
+        assert r.status == doctor.FAIL
 
     def test_zr_enabled_missing_fields_fails(self, tmp_path, monkeypatch):
         """ZR enabled but personal_info is missing required fields —

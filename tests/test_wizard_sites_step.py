@@ -181,6 +181,7 @@ class TestWizardConfigRoundtrip:
             ),
             "ats_lever_slugs": self._make_var("netflix"),
             "ats_ashby_slugs": self._make_var(""),
+            "ziprecruiter_profile_verified": self._make_var(False),
             "search_keywords": self._make_var("data engineer"),
             "location": self._make_var("Remote"),
             "max_applications_per_day": self._make_var(10),
