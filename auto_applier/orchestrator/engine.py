@@ -1,4 +1,5 @@
 """Application engine -- orchestrates the full discover -> score -> apply pipeline."""
+import asyncio
 import logging
 import os
 
@@ -100,6 +101,15 @@ class ApplicationEngine:
         self._keep_browser_alive: bool = False
         self._stop_after_cycle: bool = False
         self._current_cycle: int = 0
+
+        # Background tasks fired during the apply loop that we'd
+        # like to gather before RUN_FINISHED but don't want to block
+        # the loop on. Currently: STAR-story generation per applied
+        # job (LLM call, 5-30s each). The old code awaited the
+        # generation inline, which added that latency to every apply
+        # cycle for no functional benefit. Now we create_task() and
+        # gather with a soft timeout in run()'s finally block.
+        self._background_tasks: list[asyncio.Task] = []
 
     def request_stop(self) -> None:
         """Signal the engine to stop after the current job finishes."""
@@ -399,6 +409,12 @@ class ApplicationEngine:
         else:
             run_reason = "Complete"
         finally:
+            # Wait for background story-gen tasks BEFORE we stop the
+            # browser / LLM router. Stories don't need the browser
+            # but they do need self.router still alive — stop()
+            # doesn't shut router down, but for symmetry we drain
+            # first so RUN_FINISHED can reflect the truly-final state.
+            await self._drain_background_tasks()
             await self.stop()
             self.events.emit(
                 RUN_FINISHED,
@@ -1192,36 +1208,119 @@ class ApplicationEngine:
                 self.events.emit(APPLICATION_COMPLETE, job=job, application=app)
 
                 # Generate STAR+R interview stories for real submissions.
-                # Non-blocking: failure here must never affect the run.
+                # Non-blocking: failure here must never affect the run,
+                # AND we don't want the apply loop to wait on a 5-30s
+                # LLM call. Spawn as a background task and gather at
+                # RUN_FINISHED. Each task captures its own copies of
+                # job + resume_text so any subsequent mutation can't
+                # poison the in-flight call.
                 if app.status == "applied":
-                    try:
-                        from auto_applier.resume.story_bank import (
-                            StoryGenerator, append_stories,
-                        )
-                        stories = await StoryGenerator(self.router).generate(
+                    self._background_tasks.append(asyncio.create_task(
+                        self._generate_stories_for_job(
                             resume_text=resume_text,
-                            job_description=job.description,
-                            company_name=job.company,
-                            job_title=job.title,
-                            job_id=job.job_id,
+                            job=job,
                             resume_label=job_score.resume_label,
-                        )
-                        append_stories(stories)
-                        if not stories:
-                            logger.warning(
-                                "No stories saved for %s @ %s (job_id=%s) — "
-                                "see earlier story_bank logs for the reason.",
-                                job.title[:50], job.company[:40], job.job_id,
-                            )
-                    except Exception as exc:
-                        logger.warning(
-                            "Story generation failed for %s @ %s (job_id=%s): %s",
-                            job.title[:50], job.company[:40], job.job_id, exc,
-                        )
+                        ),
+                        name=f"story-gen:{job.job_id}",
+                    ))
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    async def _generate_stories_for_job(
+        self,
+        resume_text: str,
+        job,
+        resume_label: str,
+    ) -> None:
+        """Background-task body for STAR+R story generation.
+
+        Runs concurrently with the apply loop so the loop doesn't
+        wait on a 5-30s LLM call. Failure here is silent — the
+        original inline implementation also swallowed exceptions
+        because story-bank failures must never affect the run's
+        applied/failed counts.
+
+        Captures all needed inputs as parameters so the task can't
+        observe a mutation of ``job`` made by a later iteration of
+        the apply loop.
+        """
+        try:
+            from auto_applier.resume.story_bank import (
+                StoryGenerator, append_stories,
+            )
+            stories = await StoryGenerator(self.router).generate(
+                resume_text=resume_text,
+                job_description=job.description,
+                company_name=job.company,
+                job_title=job.title,
+                job_id=job.job_id,
+                resume_label=resume_label,
+            )
+            append_stories(stories)
+            if not stories:
+                logger.warning(
+                    "No stories saved for %s @ %s (job_id=%s) — "
+                    "see earlier story_bank logs for the reason.",
+                    job.title[:50], job.company[:40], job.job_id,
+                )
+        except asyncio.CancelledError:
+            # Engine shutdown cancelled us mid-flight. Re-raise so
+            # the gather() at RUN_FINISHED sees the cancellation and
+            # doesn't keep waiting.
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Story generation failed for %s @ %s (job_id=%s): %s",
+                job.title[:50], job.company[:40], job.job_id, exc,
+            )
+
+    async def _drain_background_tasks(self, timeout: float = 30.0) -> None:
+        """Wait up to ``timeout`` seconds for background tasks to
+        finish, then cancel any stragglers.
+
+        Called from run()'s ``finally`` so RUN_FINISHED can be the
+        true end-of-run signal even though story generation runs
+        async to the apply loop. The 30-second cap keeps a hung LLM
+        from delaying shutdown indefinitely; in practice each story
+        gen is well under 30s. Stragglers are cancelled cleanly via
+        their own ``CancelledError`` handler.
+        """
+        if not self._background_tasks:
+            return
+        pending = [t for t in self._background_tasks if not t.done()]
+        if not pending:
+            self._background_tasks.clear()
+            return
+        logger.info(
+            "Draining %d background story-gen task(s), up to %.0fs…",
+            len(pending), timeout,
+        )
+        try:
+            done, still_pending = await asyncio.wait(
+                pending, timeout=timeout,
+                return_when=asyncio.ALL_COMPLETED,
+            )
+        except Exception as exc:
+            logger.debug("Background drain wait raised: %s", exc)
+            done, still_pending = set(pending), set()
+        if still_pending:
+            logger.warning(
+                "Cancelling %d background task(s) that didn't finish "
+                "within %.0fs",
+                len(still_pending), timeout,
+            )
+            for t in still_pending:
+                t.cancel()
+            # Give cancellations a brief window to propagate; their
+            # CancelledError handlers re-raise so this gather just
+            # observes them.
+            try:
+                await asyncio.wait(still_pending, timeout=2.0)
+            except Exception:
+                pass
+        self._background_tasks.clear()
 
     def _load_credentials(self):
         """Load platform credentials from .env into config."""
