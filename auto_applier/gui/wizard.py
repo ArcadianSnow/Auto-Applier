@@ -102,8 +102,17 @@ class WizardApp(tk.Tk):
             step.place(relx=0, rely=0, relwidth=1, relheight=1)
             self.steps.append(step)
 
-        self.current_step = 0
-        self._show_step(0)
+        # On subsequent runs (config + resumes already in place), jump
+        # straight to the Ready step. Saves friends 60+ seconds of
+        # clicking through the wizard every launch when nothing has
+        # changed. The Back button still lets them edit any earlier
+        # step.
+        if self._wizard_already_completed():
+            self.current_step = len(self.steps) - 1
+            self._show_step(self.current_step)
+        else:
+            self.current_step = 0
+            self._show_step(0)
 
         # Keyboard navigation — let the user advance/retreat through
         # the wizard without ever touching the mouse. Bound on the
@@ -197,6 +206,73 @@ class WizardApp(tk.Tk):
 
         # Load saved config if it exists
         self._load_saved_config()
+
+    def _wizard_already_completed(self) -> bool:
+        """True when this looks like a returning user with a viable
+        config — skip Welcome → … → Answers and land on Ready.
+
+        Definition (must satisfy ALL):
+          - ``user_config.json`` exists and parses
+          - ``personal_info`` has name (combined or first+last) AND email
+          - ``enabled_platforms`` has at least one entry
+          - At least one resume profile in ``data/profiles/`` OR at
+            least one file in ``data/resumes/``
+
+        Fail-safe: ANY exception → return False so the wizard falls
+        back to the full flow. Better to show a returning user the
+        first step unnecessarily than to skip past a broken config
+        they can't see.
+        """
+        try:
+            from auto_applier.config import (
+                USER_CONFIG_FILE, PROFILES_DIR, RESUMES_DIR,
+            )
+
+            if not USER_CONFIG_FILE.exists():
+                return False
+            data = json.loads(
+                USER_CONFIG_FILE.read_text(encoding="utf-8")
+            )
+
+            personal = (
+                data.get("personal_info", {})
+                or data.get("personal", {})
+                or {}
+            )
+            has_name = bool(
+                personal.get("name")
+                or (personal.get("first_name") and personal.get("last_name"))
+            )
+            has_email = bool(personal.get("email"))
+            if not (has_name and has_email):
+                return False
+
+            enabled = data.get("enabled_platforms", []) or []
+            if not enabled:
+                return False
+
+            # Resumes — accept either a parsed profile or a raw file.
+            # Profiles are the load-bearing artifact (the form filler
+            # reads them), but a user who hasn't yet opened the
+            # parsed profile may still have a usable file present;
+            # the ResumesStep auto-materializes profiles on demand.
+            has_profile = (
+                PROFILES_DIR.exists()
+                and any(p.suffix == ".json" for p in PROFILES_DIR.iterdir())
+            )
+            has_file = (
+                RESUMES_DIR.exists()
+                and any(
+                    p.is_file() and not p.name.startswith(".")
+                    for p in RESUMES_DIR.iterdir()
+                )
+            )
+            if not (has_profile or has_file):
+                return False
+
+            return True
+        except Exception:
+            return False
 
     def _load_saved_config(self) -> None:
         """Pre-populate variables from existing user_config.json."""
