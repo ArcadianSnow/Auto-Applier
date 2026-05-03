@@ -92,6 +92,12 @@ class JobScore:
     missing_skills: list = field(default_factory=list)
     deal_breakers: list = field(default_factory=list)
     all_resume_scores: list = field(default_factory=list)  # list[ResumeScore]
+    # Phase 2.3: archetype name surfaced from scoring so downstream
+    # consumers (e.g. ``_tailor_resume_for_job``'s L2 cache lookup)
+    # can reuse the classification without re-running the LLM.
+    # Empty string when archetype routing is disabled or the
+    # classifier didn't clear the confidence threshold.
+    archetype: str = ""
 
     @property
     def total(self) -> float:

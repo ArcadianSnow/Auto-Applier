@@ -76,8 +76,10 @@ class TestTailorCacheHit:
         """A pre-existing tailored PDF >1KB at the canonical path
         means we already tailored this job. Skip the LLM call."""
         from auto_applier import config as cfg_mod
+        from auto_applier.resume import tailor as tailor_mod
         gen_dir = tmp_path / "generated"
         monkeypatch.setattr(cfg_mod, "GENERATED_RESUMES_DIR", gen_dir)
+        monkeypatch.setattr(tailor_mod, "GENERATED_RESUMES_DIR", gen_dir)
 
         eng = _make_engine()
         # Pre-stage a "tailored" PDF (~2KB content)
@@ -104,8 +106,10 @@ class TestTailorCacheHit:
         """A near-empty PDF (<1KB) should NOT be treated as cached
         — likely a partial write from a prior crash. Re-tailor."""
         from auto_applier import config as cfg_mod
+        from auto_applier.resume import tailor as tailor_mod
         gen_dir = tmp_path / "generated"
         monkeypatch.setattr(cfg_mod, "GENERATED_RESUMES_DIR", gen_dir)
+        monkeypatch.setattr(tailor_mod, "GENERATED_RESUMES_DIR", gen_dir)
 
         eng = _make_engine()
         from auto_applier.resume.tailor import tailored_pdf_path
@@ -138,7 +142,10 @@ class TestTailorFailureFallbacks:
 
     def test_tailor_returns_none_falls_back(self, tmp_path, monkeypatch, caplog):
         from auto_applier import config as cfg_mod
-        monkeypatch.setattr(cfg_mod, "GENERATED_RESUMES_DIR", tmp_path / "g")
+        from auto_applier.resume import tailor as tailor_mod
+        gen_dir = tmp_path / "g"
+        monkeypatch.setattr(cfg_mod, "GENERATED_RESUMES_DIR", gen_dir)
+        monkeypatch.setattr(tailor_mod, "GENERATED_RESUMES_DIR", gen_dir)
 
         eng = _make_engine()
         fake_tailor = MagicMock()
@@ -155,7 +162,10 @@ class TestTailorFailureFallbacks:
 
     def test_tailor_raises_falls_back(self, tmp_path, monkeypatch, caplog):
         from auto_applier import config as cfg_mod
-        monkeypatch.setattr(cfg_mod, "GENERATED_RESUMES_DIR", tmp_path / "g")
+        from auto_applier.resume import tailor as tailor_mod
+        gen_dir = tmp_path / "g"
+        monkeypatch.setattr(cfg_mod, "GENERATED_RESUMES_DIR", gen_dir)
+        monkeypatch.setattr(tailor_mod, "GENERATED_RESUMES_DIR", gen_dir)
 
         eng = _make_engine()
         fake_tailor = MagicMock()
@@ -179,7 +189,10 @@ class TestTailorFailureFallbacks:
         renderer fails. Must fall back to base, not return the
         nonexistent or zero-byte tailored path."""
         from auto_applier import config as cfg_mod
-        monkeypatch.setattr(cfg_mod, "GENERATED_RESUMES_DIR", tmp_path / "g")
+        from auto_applier.resume import tailor as tailor_mod
+        gen_dir = tmp_path / "g"
+        monkeypatch.setattr(cfg_mod, "GENERATED_RESUMES_DIR", gen_dir)
+        monkeypatch.setattr(tailor_mod, "GENERATED_RESUMES_DIR", gen_dir)
 
         from auto_applier.resume.tailor import TailoredResume
         eng = _make_engine()
@@ -217,8 +230,10 @@ class TestTailorFailureFallbacks:
         """DOCX is best-effort. PDF success + DOCX failure should
         still return the tailored PDF."""
         from auto_applier import config as cfg_mod
+        from auto_applier.resume import tailor as tailor_mod
         gen_dir = tmp_path / "g"
         monkeypatch.setattr(cfg_mod, "GENERATED_RESUMES_DIR", gen_dir)
+        monkeypatch.setattr(tailor_mod, "GENERATED_RESUMES_DIR", gen_dir)
 
         from auto_applier.resume.tailor import (
             TailoredResume, tailored_pdf_path,
@@ -330,3 +345,143 @@ class TestCandidateHeaderHelper:
         eng = _make_engine()
         name, _ = eng._candidate_header_for_render()
         assert name == "Jane"
+
+
+# ----------------------------------------------------------------------
+# Phase 2.3: L2 archetype cache hit
+# ----------------------------------------------------------------------
+
+class TestArchetypeCacheHit:
+    """When the scorer surfaces an archetype AND a pre-rendered
+    archetype-tailored resume exists, the engine returns it WITHOUT
+    triggering an LLM tailor call."""
+
+    def test_l2_cache_hit_skips_llm(self, tmp_path, monkeypatch):
+        from auto_applier import config as cfg_mod
+        from auto_applier.resume import tailor as tailor_mod
+        from auto_applier.resume.tailor import archetype_tailored_pdf_path
+        gen_dir = tmp_path / "generated"
+        monkeypatch.setattr(cfg_mod, "GENERATED_RESUMES_DIR", gen_dir)
+        monkeypatch.setattr(tailor_mod, "GENERATED_RESUMES_DIR", gen_dir)
+
+        # Pre-stage an archetype-tailored PDF
+        cached = archetype_tailored_pdf_path("default", "data_analyst")
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        cached.write_bytes(b"X" * 4096)
+
+        eng = _make_engine()
+        # If the tailor LLM is called, the test fails.
+        with patch(
+            "auto_applier.resume.tailor.ResumeTailor",
+            side_effect=AssertionError("LLM should not be called on L2 hit"),
+        ):
+            result = _run(eng._tailor_resume_for_job(
+                job=_job(),
+                base_resume_path="/base.pdf",
+                resume_text="x",
+                resume_label="default",
+                archetype="data_analyst",
+            ))
+        assert result == str(cached)
+
+    def test_l2_miss_falls_through_to_llm_tailor(self, tmp_path, monkeypatch):
+        """Archetype provided but no cached file exists — fall
+        through to the regular tailor path (which may then succeed
+        or fail; here we mock it returning None so the test
+        verifies the cache path didn't short-circuit incorrectly)."""
+        from auto_applier import config as cfg_mod
+        from auto_applier.resume import tailor as tailor_mod
+        gen_dir = tmp_path / "generated"
+        monkeypatch.setattr(cfg_mod, "GENERATED_RESUMES_DIR", gen_dir)
+        monkeypatch.setattr(tailor_mod, "GENERATED_RESUMES_DIR", gen_dir)
+
+        eng = _make_engine()
+        fake_tailor = MagicMock()
+        fake_tailor.tailor = AsyncMock(return_value=None)
+        with patch(
+            "auto_applier.resume.tailor.ResumeTailor",
+            return_value=fake_tailor,
+        ):
+            result = _run(eng._tailor_resume_for_job(
+                job=_job(),
+                base_resume_path="/base.pdf",
+                resume_text="x",
+                resume_label="default",
+                archetype="data_analyst",
+            ))
+
+        # Tailor WAS attempted (cache missed)
+        fake_tailor.tailor.assert_awaited_once()
+        # Returned base because LLM returned None
+        assert result == "/base.pdf"
+
+    def test_no_archetype_skips_l2_check(self, tmp_path, monkeypatch):
+        """Empty archetype string → L2 check is skipped entirely.
+        Must not crash on missing archetype."""
+        from auto_applier import config as cfg_mod
+        from auto_applier.resume import tailor as tailor_mod
+        gen_dir = tmp_path / "g"
+        monkeypatch.setattr(cfg_mod, "GENERATED_RESUMES_DIR", gen_dir)
+        monkeypatch.setattr(tailor_mod, "GENERATED_RESUMES_DIR", gen_dir)
+
+        eng = _make_engine()
+        fake_tailor = MagicMock()
+        fake_tailor.tailor = AsyncMock(return_value=None)
+        with patch(
+            "auto_applier.resume.tailor.ResumeTailor",
+            return_value=fake_tailor,
+        ):
+            result = _run(eng._tailor_resume_for_job(
+                job=_job(),
+                base_resume_path="/base.pdf",
+                resume_text="x",
+                resume_label="default",
+                archetype="",
+            ))
+        assert result == "/base.pdf"
+
+    def test_l1_hit_takes_precedence_over_l2(self, tmp_path, monkeypatch):
+        """When BOTH a per-job tailored AND an archetype-tailored
+        cache file exist, prefer the per-job one (more targeted)."""
+        from auto_applier import config as cfg_mod
+        from auto_applier.resume import tailor as tailor_mod
+        from auto_applier.resume.tailor import (
+            archetype_tailored_pdf_path, tailored_pdf_path,
+        )
+        gen_dir = tmp_path / "generated"
+        monkeypatch.setattr(cfg_mod, "GENERATED_RESUMES_DIR", gen_dir)
+        monkeypatch.setattr(tailor_mod, "GENERATED_RESUMES_DIR", gen_dir)
+
+        # Pre-stage BOTH caches
+        l1 = tailored_pdf_path(_job().job_id)
+        l1.parent.mkdir(parents=True, exist_ok=True)
+        l1.write_bytes(b"X" * 4096)
+        l2 = archetype_tailored_pdf_path("default", "data_analyst")
+        l2.parent.mkdir(parents=True, exist_ok=True)
+        l2.write_bytes(b"Y" * 4096)
+
+        eng = _make_engine()
+        result = _run(eng._tailor_resume_for_job(
+            job=_job(),
+            base_resume_path="/base.pdf",
+            resume_text="x",
+            resume_label="default",
+            archetype="data_analyst",
+        ))
+        # L1 wins
+        assert result == str(l1)
+
+
+class TestJobScoreArchetype:
+    """Phase 2.3 added an ``archetype`` attribute to JobScore so
+    the scorer's classification surfaces to downstream consumers
+    without re-running the classifier."""
+
+    def test_jobscore_has_archetype_field(self):
+        from auto_applier.scoring.models import JobScore, ScoreDecision
+        js = JobScore(decision=ScoreDecision.AUTO_APPLY)
+        # Default empty
+        assert js.archetype == ""
+        # Settable
+        js.archetype = "data_analyst"
+        assert js.archetype == "data_analyst"

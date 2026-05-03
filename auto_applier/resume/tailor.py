@@ -272,6 +272,57 @@ def tailored_docx_path(job_id: str) -> Path:
     return GENERATED_RESUMES_DIR / safe_job / filename
 
 
+def archetype_tailored_pdf_path(resume_label: str, archetype: str) -> Path:
+    """Cache path for archetype-tailored resumes (Phase 2.3).
+
+    The Phase 2 plan has three cache tiers:
+      L1: per-job tailored at ``GENERATED_RESUMES_DIR/<job_id>/...``
+          (set by Phase 1.6 ``_tailor_resume_for_job`` on first apply)
+      L2: per-archetype tailored at
+          ``GENERATED_RESUMES_DIR/_archetypes/<resume_label>/<archetype>/...``
+          (set by `cli refresh-tailored-resumes` in idle time, or
+          on-demand)
+      L3: base resume from ``data/resumes/`` (always-available
+          fallback)
+
+    Layout uses ``_archetypes`` (leading underscore) as the parent
+    so it sorts alphabetically away from per-job dirs and is easy
+    to spot in `data/profiles/generated/`. Subdirs by resume_label
+    so two resumes (e.g. ``Data_Analyst`` and ``Data_Engineer``)
+    don't collide on shared archetype names.
+    """
+    safe_label = "".join(
+        c if c.isalnum() or c in "-_." else "_"
+        for c in (resume_label or "default")
+    )
+    safe_arch = "".join(
+        c if c.isalnum() or c in "-_." else "_"
+        for c in (archetype or "default")
+    )
+    prefix = _user_filename_prefix()
+    filename = f"{prefix}_Resume.pdf" if prefix else "Resume.pdf"
+    return (
+        GENERATED_RESUMES_DIR / "_archetypes" / safe_label / safe_arch / filename
+    )
+
+
+def archetype_tailored_docx_path(resume_label: str, archetype: str) -> Path:
+    """DOCX sibling of :func:`archetype_tailored_pdf_path`."""
+    safe_label = "".join(
+        c if c.isalnum() or c in "-_." else "_"
+        for c in (resume_label or "default")
+    )
+    safe_arch = "".join(
+        c if c.isalnum() or c in "-_." else "_"
+        for c in (archetype or "default")
+    )
+    prefix = _user_filename_prefix()
+    filename = f"{prefix}_Resume.docx" if prefix else "Resume.docx"
+    return (
+        GENERATED_RESUMES_DIR / "_archetypes" / safe_label / safe_arch / filename
+    )
+
+
 async def render_docx(tailored: TailoredResume, out_path: Path,
                       name: str = "", contact: str = "") -> bool:
     """Render a TailoredResume to a single-column ATS-friendly DOCX.

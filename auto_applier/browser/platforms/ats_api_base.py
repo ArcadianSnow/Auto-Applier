@@ -297,6 +297,246 @@ class ATSAPIPlatform(JobPlatform):
         )
 
     # ------------------------------------------------------------------
+    # Phase 2.2 — Browser-driven quick-apply (DOM prefill, halt before
+    # Submit). Off by default; engine opt-in via auto_quick_apply_ats.
+    # ------------------------------------------------------------------
+
+    async def quick_apply(
+        self,
+        job: Job,
+        resume_path: str,
+        cover_letter_text: str,
+        personal_info: dict,
+        page,
+    ) -> ApplyResult:
+        """Open the apply URL in ``page``, run form_filler to populate
+        every field we can, upload the resume, paste the cover letter,
+        and HALT before clicking Submit.
+
+        Returns ``ApplyResult`` with:
+          - ``success=True`` and ``requires_manual_apply=True`` on a
+            successful prefill (user must review + click Submit).
+          - ``success=False, requires_manual_apply=True`` on prefill
+            failure (page didn't render, no form found, etc.).
+
+        The actual submit is the USER's responsibility — that's the
+        whole legal/ethical defense of the quick-apply pattern. Per
+        Phase 2 research: ATS apply endpoints have anti-abuse
+        layers (Greenhouse invisible reCAPTCHA, Lever hCaptcha,
+        Ashby private POST), but the apply FORM rendered in a real
+        browser session can be filled and reviewed without those
+        engaging.
+
+        Subclasses can override ``_resolve_apply_url`` if their
+        listing URL needs derivation (e.g. Ashby uses ``applyUrl``
+        rather than ``jobUrl``). Default: trust ``job.url``.
+        """
+        from auto_applier.browser.form_filler import FormFiller
+
+        apply_url = self._resolve_apply_url(job)
+        if not apply_url:
+            return ApplyResult(
+                success=False,
+                failure_reason=(
+                    "No apply URL available for this ATS job — open "
+                    "the listing in your browser manually."
+                ),
+                requires_manual_apply=True,
+            )
+
+        try:
+            await page.goto(apply_url, wait_until="domcontentloaded", timeout=20000)
+        except Exception as exc:
+            logger.warning(
+                "%s quick-apply: navigation to %s failed: %s",
+                self.display_name, apply_url, exc,
+            )
+            return ApplyResult(
+                success=False,
+                failure_reason=(
+                    f"Couldn't open the apply page ({exc}). Open the "
+                    "URL manually."
+                ),
+                requires_manual_apply=True,
+            )
+
+        # Give React-rendered forms a moment to hydrate. Greenhouse
+        # and Ashby are SPAs; Lever is server-rendered but still
+        # benefits from the brief settle.
+        try:
+            await page.wait_for_timeout(2500)
+        except Exception:
+            pass
+
+        # Run form_filler against the apply page. This handles
+        # personal-info → answers.json → LLM cascade per field. The
+        # platform adapters all use the same {find_form_fields →
+        # fill_field per field} pattern, mirrored here.
+        from auto_applier.browser.selector_utils import find_form_fields
+
+        # Resolve a router. The base ATSAPIPlatform doesn't carry a
+        # FormFiller, but the engine does pass one in via the
+        # form_filler argument when we're called from the engine's
+        # apply path. Caller must wire this; we surface a clear
+        # error if it's missing.
+        if self.form_filler is None or getattr(self.form_filler, "router", None) is None:
+            return ApplyResult(
+                success=False,
+                failure_reason=(
+                    "Quick-apply needs an LLM router but the platform "
+                    "adapter wasn't given one. This is a wiring bug — "
+                    "the engine must pass form_filler= to the adapter "
+                    "for quick-apply to work."
+                ),
+                requires_manual_apply=True,
+            )
+
+        from auto_applier.browser.form_filler import FormFiller
+
+        try:
+            filler = FormFiller(
+                router=self.form_filler.router,
+                personal_info=personal_info or {},
+                resume_text="",
+                job_description=job.description or "",
+                company_name=job.company,
+                job_title=job.title,
+                resume_label=getattr(self.form_filler, "resume_label", ""),
+                platform_display_name=self.display_name,
+            )
+        except Exception as exc:
+            logger.warning(
+                "%s quick-apply: FormFiller init failed: %s",
+                self.display_name, exc,
+            )
+            return ApplyResult(
+                success=False,
+                failure_reason=f"Couldn't start form filler: {exc}",
+                requires_manual_apply=True,
+            )
+
+        # Resume upload first — the form's resume field is usually
+        # at the top, and several ATSes cascade subsequent fields
+        # only after a resume is attached. ``pick_resume_input``
+        # finds the right slot via classification.
+        try:
+            slot = await FormFiller.pick_resume_input(page, self.display_name)
+            if slot is not None and resume_path:
+                await slot.set_input_files(resume_path)
+                await FormFiller.wait_for_upload_complete(
+                    page, expected_name=resume_path, timeout=15.0,
+                )
+                # Some ATSes parse the resume and auto-populate fields.
+                # Give that a beat so we don't overwrite their work.
+                await page.wait_for_timeout(2000)
+        except Exception as exc:
+            logger.debug(
+                "%s quick-apply: resume upload skipped (%s)",
+                self.display_name, exc,
+            )
+
+        # Prefill the rest — discover fields, then fill each. Any
+        # single-field error is logged at WARNING by fill_field
+        # itself; we keep going.
+        try:
+            fields = await find_form_fields(page)
+        except Exception as exc:
+            logger.warning(
+                "%s quick-apply: find_form_fields raised: %s",
+                self.display_name, exc,
+            )
+            fields = []
+
+        for field in fields:
+            try:
+                await filler.fill_field(page, field)
+            except Exception as exc:
+                logger.debug(
+                    "%s quick-apply: fill_field raised on %r: %s",
+                    self.display_name, getattr(field, "label", "?"), exc,
+                )
+
+        # Paste cover letter into a textarea if one is visible. The
+        # form_filler also has a cover-letter handler that fires on
+        # recognized fields; we treat THIS path as the fallback for
+        # the case where cover-letter text was pre-generated upstream
+        # but the form didn't expose a recognized cover-letter field.
+        # Best-effort — never fails the prefill.
+        if cover_letter_text:
+            try:
+                await self._paste_cover_letter_if_textarea(page, cover_letter_text)
+            except Exception as exc:
+                logger.debug(
+                    "%s quick-apply: cover-letter paste skipped: %s",
+                    self.display_name, exc,
+                )
+
+        logger.info(
+            "%s quick-apply: prefilled %d/%d fields for %s @ %s — "
+            "HALTING before Submit; user must review and click "
+            "Submit themselves",
+            self.display_name,
+            filler.fields_filled, filler.fields_total,
+            job.title[:50], job.company[:40],
+        )
+        return ApplyResult(
+            success=True,
+            failure_reason=(
+                "Form prefilled — review and click Submit yourself in "
+                "the browser window. Quick-apply never auto-submits."
+            ),
+            requires_manual_apply=True,
+            fields_filled=filler.fields_filled,
+            fields_total=filler.fields_total,
+            cover_letter_generated=bool(cover_letter_text),
+            used_llm=filler.used_llm,
+            gaps=list(filler.gaps),
+        )
+
+    def _resolve_apply_url(self, job: Job) -> str:
+        """Derive the apply-page URL from a Job.
+
+        Default: trust ``job.url`` — Lever's ``hostedUrl`` is already
+        the apply-form gateway. Greenhouse / Ashby override this so
+        ``boards.greenhouse.io/<slug>/jobs/<id>`` becomes the
+        apply-mode URL.
+        """
+        return job.url or ""
+
+    async def _paste_cover_letter_if_textarea(self, page, text: str) -> None:
+        """Find a cover-letter textarea on the apply page and fill
+        it with ``text``. Best-effort — silently does nothing if no
+        recognizable cover-letter field is visible.
+
+        We deliberately avoid an aggressive "fill any large textarea"
+        strategy because some boards have a "Why us?" custom textarea
+        that should NOT receive a generic cover letter — that field
+        gets answered by the form_filler's LLM cascade.
+        """
+        candidates = (
+            "textarea[name*='cover' i]",
+            "textarea[id*='cover' i]",
+            "textarea[aria-label*='cover letter' i]",
+            "textarea[placeholder*='cover letter' i]",
+        )
+        for sel in candidates:
+            try:
+                el = await page.query_selector(sel)
+                if not el:
+                    continue
+                if not await el.is_visible():
+                    continue
+                # Only fill if the field is empty — don't clobber
+                # something the form-filler already wrote.
+                current = await el.input_value()
+                if current and current.strip():
+                    return
+                await el.fill(text)
+                return
+            except Exception:
+                continue
+
+    # ------------------------------------------------------------------
     # Subclass contract
     # ------------------------------------------------------------------
 

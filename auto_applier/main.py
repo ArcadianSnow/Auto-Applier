@@ -1469,11 +1469,87 @@ def trends(limit):
 
 
 @cli.command()
-def doctor():
-    """Run preflight checks — verify everything is ready to run."""
+@click.option(
+    "--selectors", is_flag=True,
+    help=(
+        "Run the selector decay monitor: load known job pages and "
+        "verify our DOM selectors still match enough elements. "
+        "Catches site DOM changes BEFORE they break a real run. "
+        "Costs ~5-10s per platform; not run by default."
+    ),
+)
+@click.option(
+    "--platforms", default=None,
+    help=(
+        "Comma-separated list of platforms to smoke-test "
+        "(e.g. 'indeed,dice'). Default: all browser-driven platforms. "
+        "Only meaningful with --selectors."
+    ),
+)
+def doctor(selectors: bool, platforms: str | None):
+    """Run preflight checks — verify everything is ready to run.
+
+    Default mode: runs every cheap, read-only check (data dirs,
+    config, resumes, Ollama smoke test, etc.) in <5 seconds.
+
+    With ``--selectors``: ALSO opens a browser, navigates to a
+    known public URL per platform, and asserts our selector lists
+    still match real DOM elements. Adds 5-10s per platform.
+    """
     from auto_applier import doctor as doctor_module
     import sys as _sys
-    _sys.exit(doctor_module.run())
+
+    # Standard preflight first.
+    standard_rc = doctor_module.run()
+
+    if not selectors:
+        _sys.exit(standard_rc)
+
+    # Selector smoke test.
+    click.echo("\n" + "=" * 60)
+    click.echo("Selector decay monitor")
+    click.echo("=" * 60)
+
+    requested: list[str] | None = None
+    if platforms:
+        requested = [
+            p.strip() for p in platforms.split(",")
+            if p.strip()
+        ]
+
+    import asyncio as _asyncio
+    from auto_applier.browser.selector_check import (
+        run_all_smoke_tests, format_summary,
+    )
+
+    try:
+        results = _asyncio.run(run_all_smoke_tests(requested))
+    except Exception as exc:
+        click.echo(f"  Selector monitor failed: {exc}")
+        _sys.exit(2)
+
+    if not results:
+        click.echo(
+            "  No smoke targets matched the requested platforms. "
+            "(Add SelectorTarget entries to "
+            "auto_applier/browser/selector_check.py)"
+        )
+        _sys.exit(standard_rc)
+
+    click.echo(format_summary(results))
+
+    selector_failures = sum(1 for r in results if not r.ok)
+    if selector_failures:
+        click.echo(
+            "\nSelector failures usually mean a job site updated "
+            "its DOM. Open the failing URL in a regular browser, "
+            "inspect the new structure, and update the selector "
+            "list in browser/platforms/<platform>.py."
+        )
+        # Don't escalate to FAIL exit — this is informational
+        # unless the standard preflight already failed.
+        _sys.exit(max(standard_rc, 1))
+    _sys.exit(standard_rc)
 
 
 @cli.command()
@@ -2380,6 +2456,148 @@ def tailor(job_id: str, resume: str):
         html_path = pdf_path.with_suffix(".html")
         html_path.write_text(html_content, encoding="utf-8")
         return f"Wrote {pdf_path}"
+
+    result = _asyncio.run(_run())
+    click.echo(result)
+
+
+@cli.command("refresh-tailored-resumes")
+@click.option(
+    "--resume", "resume_label", default=None,
+    help="Resume label to refresh (default: all loaded resumes)",
+)
+@click.option(
+    "--archetype", "archetype_name", default=None,
+    help="Archetype name to refresh (default: all archetypes)",
+)
+def refresh_tailored_resumes(resume_label: str | None, archetype_name: str | None):
+    """Phase 2.3 — pre-tailor resumes per (resume_label × archetype).
+
+    The engine's L2 tailoring cache reads from
+    ``data/profiles/generated/_archetypes/<resume_label>/<archetype>/...``
+    when no per-job tailored exists. Run this command in idle hours
+    (or once after editing your archetypes) so the cache is warm
+    before your next apply cycle. Apply-time cost drops from
+    30-60s of LLM tailoring to ~0s (just a file read).
+
+    With no flags: refreshes every (resume_label × archetype)
+    combination. ~20-60s per pair on gemma4:e4b. A 2-resume × 4-
+    archetype setup takes 2-8 minutes total.
+    """
+    import asyncio as _asyncio
+    import json as _json
+    from auto_applier.config import USER_CONFIG_FILE
+    from auto_applier.llm.router import LLMRouter
+    from auto_applier.resume.archetypes import load_archetypes
+    from auto_applier.resume.manager import ResumeManager
+    from auto_applier.resume.tailor import (
+        ResumeTailor, render_html, render_pdf, render_docx,
+        archetype_tailored_pdf_path, archetype_tailored_docx_path,
+    )
+
+    archetypes = load_archetypes()
+    if not archetypes:
+        click.echo(
+            "No archetypes defined in data/archetypes.json. "
+            "Define them first (see resume/archetypes.py for the "
+            "JSON shape) — without archetypes there's nothing to "
+            "tailor against."
+        )
+        return
+
+    if archetype_name:
+        archetypes = [a for a in archetypes if a.name == archetype_name]
+        if not archetypes:
+            click.echo(f"Archetype '{archetype_name}' not found.")
+            return
+
+    async def _run():
+        router = LLMRouter()
+        await router.initialize()
+        mgr = ResumeManager(router)
+
+        resumes = mgr.list_resumes()
+        if resume_label:
+            resumes = [r for r in resumes if r.label == resume_label]
+            if not resumes:
+                return f"Resume '{resume_label}' not found."
+        if not resumes:
+            return "No resumes loaded — add one via the GUI wizard first."
+
+        # Personal info for header rendering.
+        personal = {}
+        try:
+            if USER_CONFIG_FILE.exists():
+                personal = (_json.loads(
+                    USER_CONFIG_FILE.read_text(encoding="utf-8")
+                ) or {}).get("personal_info", {}) or {}
+        except Exception:
+            pass
+        first = (personal.get("first_name") or "").strip()
+        last = (personal.get("last_name") or "").strip()
+        name = f"{first} {last}".strip() or (personal.get("name") or "Candidate")
+        contact = " | ".join(p for p in (
+            personal.get("email", ""),
+            personal.get("phone", ""),
+            personal.get("city_state", ""),
+            personal.get("linkedin_url", ""),
+        ) if p)
+
+        tailor = ResumeTailor(router)
+        rendered = 0
+        skipped = 0
+        failed = 0
+        total = len(resumes) * len(archetypes)
+        click.echo(
+            f"Refreshing {total} (resume × archetype) pair(s)..."
+        )
+        for resume in resumes:
+            resume_text = mgr.get_resume_text(resume.label) or ""
+            for arch in archetypes:
+                pdf_path = archetype_tailored_pdf_path(resume.label, arch.name)
+                docx_path = archetype_tailored_docx_path(resume.label, arch.name)
+                # Build a synthetic JD from the archetype description
+                # + keywords. The archetype is the abstract job
+                # shape; tailoring against it produces a resume
+                # focused on those skills without being tied to a
+                # specific posting.
+                jd_synthetic = (
+                    f"Role archetype: {arch.name}\n\n"
+                    f"{arch.description}\n\n"
+                    f"Relevant skills/keywords: {', '.join(arch.keywords)}"
+                )
+                try:
+                    tailored = await tailor.tailor(
+                        resume_text=resume_text,
+                        job_description=jd_synthetic,
+                        company_name="(archetype-tailored)",
+                        job_title=arch.name,
+                        job_id=f"_archetypes/{resume.label}/{arch.name}",
+                        resume_label=resume.label,
+                    )
+                    if tailored is None:
+                        click.echo(f"  ✗ {resume.label} × {arch.name}  (LLM returned no result)")
+                        failed += 1
+                        continue
+                    html = render_html(tailored, name=name, contact=contact)
+                    pdf_ok = await render_pdf(html, pdf_path)
+                    try:
+                        await render_docx(tailored, docx_path, name=name, contact=contact)
+                    except Exception:
+                        pass
+                    if pdf_ok:
+                        click.echo(f"  ✓ {resume.label} × {arch.name}  -> {pdf_path}")
+                        rendered += 1
+                    else:
+                        click.echo(f"  ✗ {resume.label} × {arch.name}  (PDF render failed)")
+                        failed += 1
+                except Exception as exc:
+                    click.echo(f"  ✗ {resume.label} × {arch.name}  ({exc})")
+                    failed += 1
+        return (
+            f"Done. {rendered} rendered, {skipped} skipped, "
+            f"{failed} failed (out of {total})."
+        )
 
     result = _asyncio.run(_run())
     click.echo(result)

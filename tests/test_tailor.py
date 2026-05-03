@@ -7,6 +7,8 @@ import pytest
 from auto_applier.resume.tailor import (
     ResumeTailor,
     TailoredResume,
+    archetype_tailored_docx_path,
+    archetype_tailored_pdf_path,
     render_docx,
     render_html,
     tailored_docx_path,
@@ -339,3 +341,46 @@ class TestRenderDocx:
         ))
         assert ok is False
         assert not out.exists()
+
+
+# ----------------------------------------------------------------------
+# Archetype cache paths (Phase 2.3)
+# ----------------------------------------------------------------------
+
+class TestArchetypeCachePaths:
+    """L2 cache: archetype-tailored resumes pre-rendered by
+    `cli refresh-tailored-resumes`. Path layout:
+    GENERATED_RESUMES_DIR/_archetypes/<resume_label>/<archetype>/<file>"""
+
+    def test_pdf_path_layout(self):
+        path = archetype_tailored_pdf_path("Data_Engineer", "data_analyst")
+        assert "_archetypes" in path.parts
+        assert "Data_Engineer" in path.parts
+        assert "data_analyst" in path.parts
+        assert path.suffix == ".pdf"
+
+    def test_docx_sibling_path(self):
+        pdf = archetype_tailored_pdf_path("Data_Engineer", "data_analyst")
+        docx = archetype_tailored_docx_path("Data_Engineer", "data_analyst")
+        # Same parent dir, different suffix
+        assert docx.parent == pdf.parent
+        assert docx.suffix == ".docx"
+
+    def test_sanitizes_unsafe_chars(self):
+        path = archetype_tailored_pdf_path("../../../etc", "passwd")
+        # Sanitized: no path traversal segments survive as ".."
+        assert ".." not in path.parts
+        assert path.parts.count("_archetypes") == 1
+
+    def test_falls_back_to_default_when_empty(self):
+        path = archetype_tailored_pdf_path("", "")
+        assert "default" in path.parts
+
+    def test_distinct_resume_labels_distinct_paths(self):
+        a = archetype_tailored_pdf_path("DA", "data")
+        b = archetype_tailored_pdf_path("DE", "data")
+        assert a != b
+        # Same archetype directory name, different parent
+        assert a.parent.name == "data"
+        assert b.parent.name == "data"
+        assert a.parent.parent.name != b.parent.parent.name

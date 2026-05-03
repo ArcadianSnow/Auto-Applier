@@ -985,6 +985,57 @@ class ApplicationEngine:
                         job_score.score, job_score.resume_label,
                     )
                     self.events.emit(JOB_SCORED, job=job, score=job_score)
+
+                    # Phase 2.2: opt-in quick-apply for ATS jobs.
+                    # When enabled AND the platform supports it AND
+                    # the score clears the auto-apply threshold, we
+                    # navigate to the apply URL in the existing
+                    # browser, prefill via FormFiller, and HALT
+                    # before Submit. The user reviews and clicks
+                    # Submit themselves.
+                    from auto_applier.config import (
+                        DEFAULT_AUTO_QUICK_APPLY_ATS,
+                    )
+                    quick_apply_on = self.config.get(
+                        "auto_quick_apply_ats", DEFAULT_AUTO_QUICK_APPLY_ATS,
+                    )
+                    can_quick_apply = (
+                        quick_apply_on
+                        and platform_key.startswith("ats_")
+                        and hasattr(platform, "quick_apply")
+                        and job_score.score >= self.scorer.auto_apply_min
+                        and not self.dry_run
+                    )
+
+                    if can_quick_apply:
+                        try:
+                            qa_app = await self._run_ats_quick_apply(
+                                platform=platform,
+                                platform_key=platform_key,
+                                job=job,
+                                job_score=job_score,
+                                personal_info=personal_info,
+                            )
+                            save(qa_app)
+                            seen_pairs.add((job.job_id, platform_key))
+                            # quick_apply success counts as a real
+                            # apply attempt — not skipped, not failed
+                            # — so the run summary surfaces it. The
+                            # Application row's status reflects the
+                            # nuance via failure_reason copy.
+                            if qa_app.status == "applied":
+                                self.applied_count += 1
+                            else:
+                                self.skipped_count += 1
+                            continue
+                        except Exception as exc:
+                            logger.warning(
+                                "%s quick-apply: failed for %s, falling "
+                                "back to discovery-only save: %s",
+                                platform_key, job.job_id, exc,
+                            )
+                            # Fall through to the standard skipped save below.
+
                     self.skipped_count += 1
                     save(
                         Application(
@@ -1214,6 +1265,7 @@ class ApplicationEngine:
                     base_resume_path=str(resume_info.file_path),
                     resume_text=resume_text,
                     resume_label=job_score.resume_label,
+                    archetype=getattr(job_score, "archetype", ""),
                 )
 
                 # Apply
@@ -1363,12 +1415,170 @@ class ApplicationEngine:
                 job.title[:50], job.company[:40], job.job_id, exc,
             )
 
+    async def _run_ats_quick_apply(
+        self,
+        platform,
+        platform_key: str,
+        job,
+        job_score,
+        personal_info: dict,
+    ) -> Application:
+        """Phase 2.2 helper — open the ATS apply page, prefill via
+        FormFiller, halt before Submit. Returns the Application
+        row to persist.
+
+        Resume tailoring is reused from Phase 1.6 (`_tailor_resume_for_job`)
+        so the prefilled form gets the per-JD-tailored resume.
+        Cover letter is read from the on-disk cache (Phase 1.5
+        already pre-generated it as a background task on prior
+        applies) — but for the quick-apply path which fires BEFORE
+        any background task has a chance, we generate one inline
+        as part of this helper if the cache miss.
+
+        Failure here NEVER kills the run — the engine wraps this
+        in try/except. Returns an Application row tagged with the
+        attempted state so the user can see what was tried.
+        """
+        # Resolve a resume path (use base if Phase 1.6 isn't on or fails).
+        resume_info = self.resume_manager.get_resume_info(job_score.resume_label)
+        if resume_info is None:
+            return Application(
+                job_id=job.job_id,
+                status="skipped",
+                source=platform_key,
+                resume_used=job_score.resume_label,
+                score=job_score.score,
+                failure_reason=(
+                    "Quick-apply needs a resume but none is loaded for "
+                    f"label '{job_score.resume_label}'."
+                ),
+            )
+        base_resume_path = str(resume_info.file_path)
+        resume_text = self.resume_manager.get_resume_text(
+            job_score.resume_label,
+        )
+
+        tailored_path = await self._tailor_resume_for_job(
+            job=job,
+            base_resume_path=base_resume_path,
+            resume_text=resume_text,
+            resume_label=job_score.resume_label,
+            archetype=getattr(job_score, "archetype", ""),
+        )
+
+        # Cover letter — try the on-disk cache first; generate inline
+        # if missing. Inline-generation is sync within the quick-apply
+        # call (so the prefill has the letter in hand) — the bg task
+        # path (auto_cover_letter) only runs AFTER successful applies,
+        # which by definition can't have happened yet at this point.
+        cover_letter_text = await self._get_or_generate_cover_letter(
+            job=job, resume_text=resume_text,
+        )
+
+        # Wire the platform with a FormFiller that has the LLM router.
+        # The ATS adapter's quick_apply method reads ``self.form_filler.router``
+        # to decide whether the LLM is available for question-answering.
+        from auto_applier.browser.form_filler import FormFiller
+        platform.form_filler = FormFiller(
+            router=self.router,
+            personal_info=personal_info,
+            resume_text=resume_text,
+            job_description=job.description or "",
+            company_name=job.company,
+            job_title=job.title,
+            resume_label=job_score.resume_label,
+            platform_display_name=platform.display_name,
+        )
+
+        # Run quick_apply on the existing browser context's page so
+        # the user's session / cookies persist.
+        page = self.browser.context.pages[0] if self.browser.context.pages else (
+            await self.browser.context.new_page()
+        )
+
+        self.events.emit(APPLICATION_STARTED, job=job, resume=job_score.resume_label)
+
+        result = await platform.quick_apply(
+            job=job,
+            resume_path=tailored_path,
+            cover_letter_text=cover_letter_text,
+            personal_info=personal_info,
+            page=page,
+        )
+
+        # Map ApplyResult → Application row. Quick-apply success
+        # means "form was prefilled, user must click Submit" — we
+        # tag the row as ``applied`` since it represents real
+        # apply effort, but failure_reason carries the
+        # "user-must-submit" caveat so the dashboard shows it
+        # accurately.
+        if result.success:
+            status = "applied"
+        else:
+            status = "skipped"
+        return Application(
+            job_id=job.job_id,
+            status=status,
+            source=platform_key,
+            resume_used=job_score.resume_label,
+            score=job_score.score,
+            cover_letter_generated=result.cover_letter_generated,
+            fields_filled=result.fields_filled,
+            fields_total=result.fields_total,
+            used_llm=result.used_llm,
+            failure_reason=result.failure_reason or "",
+        )
+
+    async def _get_or_generate_cover_letter(
+        self, job, resume_text: str,
+    ) -> str:
+        """Read the cached cover letter for this job, or generate
+        one inline if the cache misses.
+
+        Cache layout matches the Phase 1.5 background-task layout
+        so the bg task and the quick-apply path agree on the
+        artifact location.
+        """
+        from auto_applier.config import COVER_LETTERS_DIR
+        from auto_applier.resume.cover_letter import CoverLetterWriter
+
+        safe_id = "".join(
+            c if c.isalnum() or c in "-_." else "_"
+            for c in (job.job_id or "unknown")
+        )[:120]
+        cached_path = COVER_LETTERS_DIR / safe_id / "letter.txt"
+        if cached_path.exists() and cached_path.stat().st_size > 100:
+            try:
+                content = cached_path.read_text(encoding="utf-8")
+                # Strip the leading header lines (begin with "# ")
+                lines = [
+                    line for line in content.splitlines()
+                    if not line.startswith("#")
+                ]
+                return "\n".join(lines).strip()
+            except Exception:
+                pass
+
+        try:
+            writer = CoverLetterWriter(self.router)
+            letter = await writer.generate(
+                resume_text=resume_text,
+                job_description=job.description or "",
+                company_name=job.company,
+                job_title=job.title,
+            )
+            return letter or ""
+        except Exception as exc:
+            logger.debug("Inline cover-letter gen failed: %s", exc)
+            return ""
+
     async def _tailor_resume_for_job(
         self,
         job,
         base_resume_path: str,
         resume_text: str,
         resume_label: str,
+        archetype: str = "",
     ) -> str:
         """Pre-apply resume tailoring (Phase 1.6).
 
@@ -1395,6 +1605,7 @@ class ApplicationEngine:
             from auto_applier.resume.tailor import (
                 ResumeTailor, render_html, render_pdf, render_docx,
                 save_tailored_json, tailored_pdf_path, tailored_docx_path,
+                archetype_tailored_pdf_path,
             )
         except Exception as exc:
             logger.debug("Tailor: import failed (%s); using base resume", exc)
@@ -1405,16 +1616,37 @@ class ApplicationEngine:
         except Exception:
             return base_resume_path
 
-        # Cache hit — already tailored for this job.
+        # L1 cache hit — already tailored for THIS specific job.
         try:
             if pdf_path.exists() and pdf_path.stat().st_size > 1000:
                 logger.info(
-                    "Tailor: cache hit for %s @ %s -> %s",
+                    "Tailor: L1 cache hit for %s @ %s -> %s",
                     job.title[:50], job.company[:40], pdf_path,
                 )
                 return str(pdf_path)
         except Exception:
             pass
+
+        # L2 cache hit — archetype-tailored resume (Phase 2.3). When
+        # the scorer surfaced an ``archetype`` AND we've pre-rendered
+        # a resume for that (resume_label, archetype) tuple, use it.
+        # Less targeted than a per-job tailor but far better than the
+        # generic base, and zero LLM cost at apply time (idle-time
+        # pre-render via ``cli refresh-tailored-resumes`` amortizes
+        # the cost across many applies). Archetype is passed in as
+        # an arg from the caller (engine reads it off JobScore.archetype
+        # to avoid re-running the classifier).
+        if archetype:
+            try:
+                arch_path = archetype_tailored_pdf_path(resume_label, archetype)
+                if arch_path.exists() and arch_path.stat().st_size > 1000:
+                    logger.info(
+                        "Tailor: L2 (archetype=%s) cache hit for %s @ %s -> %s",
+                        archetype, job.title[:50], job.company[:40], arch_path,
+                    )
+                    return str(arch_path)
+            except Exception:
+                pass
 
         # Generate.
         try:

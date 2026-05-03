@@ -60,6 +60,21 @@ DEFAULT_AUTO_OUTREACH = False
 # zero. Override with auto_tailor_resume:false in user_config.json.
 DEFAULT_AUTO_TAILOR_RESUME = True
 
+# Whether the engine opens ATS-discovered high-score jobs in a real
+# browser tab and pre-fills the apply form, halting before Submit.
+# Default OFF — flips ATS adapters from pure discovery-only to a
+# browser-driven prefill flow, which is a meaningful behavior change.
+# Phase 2 research (2026-05-03) found this is the legally defensible
+# middle path: user clicks Submit themselves so we can't be accused
+# of automated submission, but the form is fully populated by us.
+#
+# When ON, engine treats ATS jobs scoring >= auto_apply_min like
+# real apply candidates: open apply URL, run form_filler, halt,
+# emit ``user_review_needed``. User reviews and clicks Submit.
+#
+# Override with ``auto_quick_apply_ats:true`` in user_config.json.
+DEFAULT_AUTO_QUICK_APPLY_ATS = False
+
 # Whether the engine pre-generates a tailored cover letter on every
 # AUTO_APPLY decision. Default ON per Phase 1 research:
 #   - 63% of recruiters explicitly want JD-tailored cover letters

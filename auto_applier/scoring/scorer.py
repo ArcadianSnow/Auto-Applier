@@ -89,6 +89,10 @@ class JobScorer:
             missing_skills=best.missing_skills,
             deal_breakers=[],
             all_resume_scores=resume_scores,
+            # Phase 2.3: surface archetype so the L2 tailoring cache
+            # in engine._tailor_resume_for_job can use it without a
+            # second classifier call.
+            archetype=archetype_filter,
         )
 
     def override_decision(
