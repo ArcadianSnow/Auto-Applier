@@ -8,9 +8,9 @@ from tkinter import messagebox, ttk
 
 from auto_applier.config import ANSWERS_FILE, UNANSWERED_FILE
 from auto_applier.gui.styles import (
-    ACCENT_TEXT, BG, BG_CARD, DANGER_TEXT, PRIMARY, WARNING, TEXT, TEXT_LIGHT,
+    ACCENT_TEXT, BG, BG_CARD, PRIMARY, WARNING, TEXT, TEXT_LIGHT,
     TEXT_MUTED, BORDER,
-    FONT_HEADING, FONT_SUBHEADING, FONT_BODY, FONT_SMALL, FONT_MONO,
+    FONT_SUBHEADING, FONT_BODY, FONT_SMALL, FONT_BUTTON,
     PAD_X, PAD_Y, make_scrollable,
 )
 
@@ -32,6 +32,40 @@ def _find_placeholder(question: str) -> str | None:
         return None
     m = PLACEHOLDER_RE.search(question)
     return m.group(0) if m else None
+
+
+# Matches the trailing `SUGGESTED: ...` line that ANSWER_CHAT prompts
+# the LLM to emit on every reply. The capture grabs everything from
+# the first non-space character after the colon to end-of-line. The
+# (?im) flag-set makes the match case-insensitive (Gemma 4 occasionally
+# capitalizes oddly) and multiline-aware so the `$` anchors at the
+# physical line break rather than end-of-string.
+SUGGESTED_LINE_RE = re.compile(
+    r"^[ \t]*SUGGESTED[ \t]*:[ \t]*(.*?)[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _extract_suggested(text: str) -> str:
+    """Pull the proposed answer out of a chat reply.
+
+    The LLM is instructed to finish each reply with a line of the
+    form ``SUGGESTED: <answer>``. We search for the LAST such line
+    so a model that "thinks aloud" with an interim suggestion mid-
+    reply still ends up surfacing its final pick.
+
+    Falls back to the whole reply (stripped) if no SUGGESTED line is
+    present — that way a model that ignores the instruction at least
+    still drives the preview pane with something the user can read.
+    Empty input returns "".
+    """
+    if not text:
+        return ""
+    matches = list(SUGGESTED_LINE_RE.finditer(text))
+    if matches:
+        # Last match wins — the prompt asks for it at the end.
+        return matches[-1].group(1).strip()
+    return text.strip()
 
 # Default common questions and their input types.
 # "dropdown" means use a Combobox; "entry" means a plain text field.
@@ -424,8 +458,16 @@ class AnswersStep(ttk.Frame):
     def _open_answer_assist(
         self, question: str, answer_var: tk.StringVar,
     ) -> None:
-        """Open the validation + suggestion popup for a single row."""
-        AnswerAssistDialog(self, question, answer_var)
+        """Open the multi-turn chat assistant for a single row.
+
+        Replaces the old single-shot AnswerAssistDialog (which fired two
+        LLM calls and showed canned results) with a back-and-forth chat
+        so the LLM can ASK the user what an ambiguous question means
+        instead of guessing — see live feedback 2026-05-01: AI assist
+        was useless for the placeholder/tool question because the LLM
+        had no way to clarify.
+        """
+        ChatAssistDialog(self, question, answer_var, self.wizard)
 
     # ------------------------------------------------------------------
     # Persistence helpers
@@ -503,37 +545,79 @@ class AnswersStep(ttk.Frame):
         return []
 
 
-class AnswerAssistDialog(tk.Toplevel):
-    """Modal popup: validate an answer and propose a resume-grounded one.
+class ChatAssistDialog(tk.Toplevel):
+    """Modal multi-turn chat assistant for building a single answer.
 
-    Two LLM calls fire in parallel on a single background thread (one
-    asyncio.run() drives both via ``asyncio.gather``). Each section
-    shows a "Checking..." placeholder until its result lands, then
-    flips to the rendered output. The user can replace their answer
-    with the suggestion via "Use suggested answer".
+    Replaces the older single-shot AnswerAssistDialog. The old dialog
+    fired two LLM calls (validate + suggest) and showed canned results
+    — useful when the question was unambiguous, useless when it wasn't
+    (live feedback 2026-05-01: "AI suggestion doesn't do anything for
+    [specific tool questions]" — the LLM had no way to ASK what tool
+    the user meant, so it either guessed wrong or punted).
+
+    This dialog is a back-and-forth chat:
+
+    - Open seeds the LLM with profile + concatenated resume text +
+      the question + the current saved answer + any detected
+      placeholder.
+    - User types a message, hits Send (or Enter; Shift+Enter for
+      newline). Each turn fires a fresh ``LLMRouter.complete()`` call
+      with the full conversation history threaded back into the
+      prompt.
+    - The LLM is instructed to end every reply with a
+      ``SUGGESTED: <answer>`` line; we extract that into a live
+      "Suggested answer" preview that the user can save with
+      "Use this answer".
+    - Conversation is capped at ~12 turns to keep prompt size bounded
+      on local models (Gemma 4 starts degrading past ~8k chars).
     """
+
+    # Maximum number of user+assistant turn-pairs before the dialog
+    # locks input. Beyond this, the prompt window grows large enough
+    # to push local models past their reliable instruction-following
+    # range. 12 is generous — most useful exchanges resolve in 2-4.
+    MAX_TURNS = 12
+    # When the user reaches this turn count, surface a soft warning
+    # so they know the dialog is about to cap. 10 leaves a 2-turn
+    # buffer for them to wrap up.
+    WARN_TURNS = 10
 
     def __init__(
         self,
         parent: tk.Misc,
         question: str,
         answer_var: tk.StringVar,
+        wizard: object | None = None,
     ) -> None:
         super().__init__(parent)
         self._question = question
         self._answer_var = answer_var
-        self._suggested_answer: str = ""
-        # Detect un-customized template placeholders (e.g. "[specific
-        # tool]", "<topic>", "___"). When set, we skip the LLM calls
-        # entirely — otherwise the model fabricates fills for the
-        # placeholder by stitching together unrelated tokens from its
-        # context (live run 2026-05-01: "Testpilot" hallucination).
+        self._wizard = wizard
+        # Conversation history — list of dicts ``{role, text}`` where
+        # role is ``"user"`` or ``"assist"``. Both seed (system framing)
+        # and live turns end up here so the prompt re-render is just
+        # `\n`.join over this list. The leading entry is a synthetic
+        # "assist" message that opens the chat — see ``_seed_chat``.
+        self._history: list[dict[str, str]] = []
+        # Most recent SUGGESTED line extracted from an assistant
+        # reply. Mirrored into the preview label and used by the
+        # "Use this answer" button.
+        self._current_suggestion: str = ""
+        # In-flight worker guard. We allow the user to close the
+        # dialog while a worker is still running — the close handler
+        # just flips this and any late after-callbacks no-op.
+        self._closed: bool = False
+        self._busy: bool = False
+        # Cached resume + profile blobs. Resolved lazily on first
+        # send so dialog open stays snappy.
+        self._resume_text: str | None = None
+        self._candidate_profile: str | None = None
         self._placeholder = _find_placeholder(question)
 
-        self.title("AI assist — answer review")
+        self.title("AI assist — chat about this answer")
         self.configure(bg=BG)
-        self.geometry("620x540")
-        self.minsize(460, 420)
+        self.geometry("720x680")
+        self.minsize(560, 520)
 
         self._build_ui()
 
@@ -541,25 +625,24 @@ class AnswerAssistDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.focus_set()
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
-        self.bind("<Escape>", lambda _e: self.destroy())
-        # First focusable control on open is the close/use button —
-        # but the user usually wants to read first, so focus the
-        # window itself so Escape works without a tab.
-        self.after_idle(self.focus_set)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.bind("<Escape>", lambda _e: self._on_close())
+        # Focus the input so the user can start typing immediately.
+        self.after_idle(self._input.focus_set)
 
-        if self._placeholder is None:
-            # Kick off both LLM calls immediately on open.
-            self.after(50, self._start_workers)
+        # Seed the chat with an opening assistant message + first
+        # auto-fired LLM turn. This gives the user something to read
+        # on open instead of a blank pane.
+        self.after(50, self._seed_chat)
 
     # ------------------------------------------------------------------
     # Layout
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        # Header — full question text
+        # ---- Header ----
         ttk.Label(
-            self, text="Answer review",
+            self, text="AI assist — chat",
             style="Heading.TLabel",
         ).pack(anchor="w", padx=PAD_X, pady=(PAD_Y, 4))
 
@@ -575,267 +658,508 @@ class AnswerAssistDialog(tk.Toplevel):
         tk.Label(
             q_card, text=self._question,
             font=FONT_BODY, fg=TEXT, bg=BG_CARD,
-            wraplength=540, justify="left",
+            wraplength=640, justify="left",
         ).pack(anchor="w", padx=12, pady=(0, 8))
 
-        # Validation card
-        val_card = tk.Frame(
+        # Current saved answer + quick-actions row
+        cur_row = tk.Frame(q_card, bg=BG_CARD)
+        cur_row.pack(fill="x", padx=12, pady=(0, 8))
+        cur_lbl_text = self._answer_var.get().strip() or "(no answer saved yet)"
+        tk.Label(
+            cur_row,
+            text=f"Current: {cur_lbl_text[:200]}",
+            font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
+            wraplength=460, justify="left",
+        ).pack(side="left", anchor="w")
+        ttk.Button(
+            cur_row, text="Use as-is",
+            command=self._on_close,
+        ).pack(side="right", padx=(6, 0))
+
+        # ---- Chat transcript ----
+        transcript_card = tk.Frame(
             self, bg=BG_CARD, highlightbackground=BORDER,
             highlightthickness=1,
         )
-        val_card.pack(fill="x", padx=PAD_X, pady=(0, 8))
-        tk.Label(
-            val_card, text="Validation",
-            font=FONT_SUBHEADING, fg=PRIMARY, bg=BG_CARD,
-        ).pack(anchor="w", padx=12, pady=(8, 4))
-        if self._placeholder is not None:
-            self._validation_lbl = tk.Label(
-                val_card,
-                text=(
-                    "Cannot validate — this question contains a "
-                    "placeholder. Customize it first."
-                ),
-                font=FONT_BODY, fg=WARNING, bg=BG_CARD,
-                wraplength=540, justify="left",
-            )
-        else:
-            self._validation_lbl = tk.Label(
-                val_card, text="Checking...",
-                font=FONT_BODY, fg=TEXT_MUTED, bg=BG_CARD,
-                wraplength=540, justify="left",
-            )
-        self._validation_lbl.pack(anchor="w", padx=12, pady=(0, 8))
+        transcript_card.pack(
+            fill="both", expand=True, padx=PAD_X, pady=(0, 8),
+        )
+        # Read-only Text widget. We toggle state -> normal on each
+        # insert, then back to disabled, so the user can't edit
+        # transcript history but can still scroll + select to copy.
+        transcript_frame = tk.Frame(transcript_card, bg=BG_CARD)
+        transcript_frame.pack(fill="both", expand=True, padx=8, pady=8)
+        self._transcript = tk.Text(
+            transcript_frame, wrap="word", state="disabled",
+            bg=BG_CARD, fg=TEXT, font=FONT_BODY,
+            relief="flat", borderwidth=0, padx=6, pady=6,
+            height=12,
+        )
+        scroll = ttk.Scrollbar(
+            transcript_frame, orient="vertical",
+            command=self._transcript.yview,
+        )
+        self._transcript.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self._transcript.pack(side="left", fill="both", expand=True)
+        # Tag styles for author labels + bubble bg. We keep this
+        # minimal — Tk Text tags don't do bubble shapes, so we rely
+        # on color coding for author and a leading blank line for
+        # visual separation between turns.
+        self._transcript.tag_configure(
+            "user_label", foreground=PRIMARY, font=FONT_BUTTON,
+        )
+        self._transcript.tag_configure(
+            "assist_label", foreground=ACCENT_TEXT, font=FONT_BUTTON,
+        )
+        self._transcript.tag_configure(
+            "system_label", foreground=TEXT_MUTED, font=FONT_SMALL,
+        )
+        self._transcript.tag_configure(
+            "msg_body", foreground=TEXT, font=FONT_BODY,
+            lmargin1=8, lmargin2=8,
+        )
+        self._transcript.tag_configure(
+            "system_body", foreground=TEXT_MUTED, font=FONT_SMALL,
+            lmargin1=8, lmargin2=8,
+        )
 
-        # Suggestion card
+        # ---- Suggested answer preview ----
         sug_card = tk.Frame(
             self, bg=BG_CARD, highlightbackground=BORDER,
             highlightthickness=1,
         )
-        sug_card.pack(fill="both", expand=True, padx=PAD_X, pady=(0, 8))
+        sug_card.pack(fill="x", padx=PAD_X, pady=(0, 8))
         tk.Label(
             sug_card, text="Suggested answer",
             font=FONT_SUBHEADING, fg=PRIMARY, bg=BG_CARD,
-        ).pack(anchor="w", padx=12, pady=(8, 4))
+        ).pack(anchor="w", padx=12, pady=(8, 0))
+        self._suggestion_lbl = tk.Label(
+            sug_card, text="(chat hasn't proposed an answer yet)",
+            font=FONT_BODY, fg=TEXT_MUTED, bg=BG_CARD,
+            wraplength=640, justify="left",
+        )
+        self._suggestion_lbl.pack(
+            anchor="w", padx=12, pady=(2, 8), fill="x",
+        )
+        # When the question is a TEMPLATE (placeholder present), the
+        # chat is help-only — users see the bot's reasoning but
+        # there's no per-tool right answer to save. Surface the
+        # constraint visibly so the disabled "Use this answer" button
+        # makes sense.
         if self._placeholder is not None:
-            # Bypass LLM entirely. Render a fixed warning that names
-            # the exact placeholder substring so the user knows what
-            # to replace.
-            self._suggestion_lbl = tk.Label(
+            tk.Label(
                 sug_card,
                 text=(
-                    "This question is a TEMPLATE. Replace the "
-                    "placeholder below with the real tool/topic/"
-                    "company name from the actual job application "
-                    "before saving an answer here."
+                    "Template question — chat is for guidance only. "
+                    "The form filler will answer the LIVE question "
+                    "with your resume context at apply time."
                 ),
-                font=FONT_BODY, fg=TEXT, bg=BG_CARD,
-                wraplength=540, justify="left",
+                font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
+                wraplength=640, justify="left",
+            ).pack(
+                anchor="w", padx=12, pady=(0, 8), fill="x",
             )
-            self._suggestion_lbl.pack(anchor="w", padx=12, pady=(0, 6))
-            tk.Label(
-                sug_card, text=self._placeholder,
-                font=FONT_MONO, fg=DANGER_TEXT, bg=BG_CARD,
-                wraplength=540, justify="left",
-            ).pack(anchor="w", padx=12, pady=(0, 4))
-            self._rationale_lbl = tk.Label(
-                sug_card, text="",
-                font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD,
-                wraplength=540, justify="left",
-            )
-            self._rationale_lbl.pack(anchor="w", padx=12, pady=(0, 8))
-        else:
-            self._suggestion_lbl = tk.Label(
-                sug_card, text="Checking...",
-                font=FONT_BODY, fg=TEXT, bg=BG_CARD,
-                wraplength=540, justify="left",
-            )
-            self._suggestion_lbl.pack(anchor="w", padx=12, pady=(0, 4))
-            self._rationale_lbl = tk.Label(
-                sug_card, text="",
-                font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD,
-                wraplength=540, justify="left",
-            )
-            self._rationale_lbl.pack(anchor="w", padx=12, pady=(0, 8))
 
-        # Action buttons. For placeholder-bearing questions we omit
-        # the "Use suggested answer" button — there is no suggestion
-        # to use, only Close.
+        # ---- Input + status row ----
+        input_card = tk.Frame(self, bg=BG)
+        input_card.pack(fill="x", padx=PAD_X, pady=(0, 4))
+
+        self._status_lbl = tk.Label(
+            input_card, text="",
+            font=FONT_SMALL, fg=TEXT_MUTED, bg=BG,
+        )
+        self._status_lbl.pack(anchor="w", pady=(0, 2))
+
+        input_row = tk.Frame(input_card, bg=BG)
+        input_row.pack(fill="x")
+        self._input = tk.Text(
+            input_row, height=3, wrap="word",
+            bg=BG_CARD, fg=TEXT, font=FONT_BODY,
+            relief="solid", borderwidth=1, padx=6, pady=4,
+        )
+        self._input.pack(side="left", fill="x", expand=True)
+        self._send_btn = ttk.Button(
+            input_row, text="Send", style="Primary.TButton",
+            command=self._on_send,
+        )
+        self._send_btn.pack(side="left", padx=(8, 0))
+
+        # Enter-to-send, Shift+Enter for newline. The shift handler
+        # returns nothing so default newline-insert behavior wins;
+        # the bare Return handler sends and returns "break" so Tk
+        # doesn't ALSO insert a newline.
+        self._input.bind("<Return>", self._on_return_key)
+        self._input.bind("<Shift-Return>", lambda _e: None)
+
+        # ---- Action buttons ----
         btn_row = tk.Frame(self, bg=BG)
         btn_row.pack(fill="x", padx=PAD_X, pady=(0, PAD_Y))
-        if self._placeholder is None:
-            self._use_btn = ttk.Button(
-                btn_row, text="Use suggested answer",
-                style="Primary.TButton",
-                command=self._on_use_suggestion,
-                state="disabled",
-            )
-            self._use_btn.pack(side="left")
-        else:
-            self._use_btn = None
+        self._use_btn = ttk.Button(
+            btn_row, text="Use this answer",
+            style="Primary.TButton",
+            command=self._on_use_suggestion,
+            state="disabled",
+        )
+        self._use_btn.pack(side="left")
         ttk.Button(
             btn_row, text="Close",
-            command=self.destroy,
+            command=self._on_close,
         ).pack(side="right")
 
-        # Enter on the dialog accepts the suggestion (when ready).
-        # For placeholder dialogs Enter is a no-op (closes via Escape).
-        if self._use_btn is not None:
-            self.bind(
-                "<Return>",
-                lambda _e: self._on_use_suggestion()
-                if str(self._use_btn["state"]) == "normal" else None,
+    # ------------------------------------------------------------------
+    # Transcript helpers
+    # ------------------------------------------------------------------
+
+    def _append_transcript(self, role: str, text: str) -> None:
+        """Append a message to the read-only transcript widget.
+
+        ``role`` is ``"user"``, ``"assist"``, or ``"system"``. Each
+        message renders as a colored author label on its own line
+        followed by the body. We toggle the widget's state to
+        ``normal`` only for the duration of the insert so users
+        can't edit transcript content.
+        """
+        if self._closed:
+            return
+        try:
+            self._transcript.configure(state="normal")
+            # Leading blank between turns so the transcript reads
+            # like a chat log instead of a wall of text.
+            if self._transcript.index("end-1c") != "1.0":
+                self._transcript.insert("end", "\n")
+            label_tag = f"{role}_label"
+            body_tag = "system_body" if role == "system" else "msg_body"
+            label_text = {
+                "user": "[user]", "assist": "[assist]",
+                "system": "[system]",
+            }.get(role, f"[{role}]")
+            self._transcript.insert("end", f"{label_text}\n", label_tag)
+            self._transcript.insert("end", text.strip() + "\n", body_tag)
+            self._transcript.see("end")
+        finally:
+            try:
+                self._transcript.configure(state="disabled")
+            except tk.TclError:
+                pass
+
+    def _set_status(self, text: str) -> None:
+        if self._closed:
+            return
+        try:
+            self._status_lbl.configure(text=text)
+        except tk.TclError:
+            pass
+
+    def _set_input_enabled(self, enabled: bool) -> None:
+        if self._closed:
+            return
+        state = "normal" if enabled else "disabled"
+        try:
+            self._input.configure(state=state)
+            self._send_btn.configure(state=state)
+        except tk.TclError:
+            pass
+
+    # ------------------------------------------------------------------
+    # Seeding — first turn primes the chat
+    # ------------------------------------------------------------------
+
+    def _seed_chat(self) -> None:
+        """Render the opening assistant message + fire the first LLM turn.
+
+        We don't run an LLM call for the OPENING message — it's a
+        canned greeting tailored by whether the question contains a
+        placeholder. The first real LLM call is deferred until the
+        user replies. This keeps the dialog feeling responsive on
+        open even when Ollama is cold-loading the model.
+        """
+        if self._placeholder is not None:
+            opener = (
+                f"This question contains a placeholder "
+                f"`{self._placeholder}` — what should it actually say? "
+                "Tell me the real tool, topic, or company name and "
+                "I'll help you draft an answer."
             )
+        else:
+            opener = (
+                "Hi — I can help you build an answer to this question. "
+                "What context should I work with? You can describe your "
+                "experience, paste a JD snippet, or ask me to draft a "
+                "first pass from your resume."
+            )
+        # Seed entry. We deliberately don't append a SUGGESTED line
+        # for the opener — there's nothing to suggest yet.
+        self._history.append({"role": "assist", "text": opener})
+        self._append_transcript("assist", opener)
 
     # ------------------------------------------------------------------
-    # Workers
+    # Send / receive
     # ------------------------------------------------------------------
 
-    def _start_workers(self) -> None:
-        current_answer = self._answer_var.get()
-        # Capture resume context once on the UI thread — ResumeManager
-        # only needs the router for new adds, but we still construct
-        # it the same way panels/almost.py does for consistency.
+    def _on_return_key(self, _event):
+        # Bare Return sends; Shift+Return falls through to default
+        # newline insert (handled by the separate binding).
+        self._on_send()
+        return "break"
+
+    def _on_send(self) -> None:
+        if self._closed or self._busy:
+            return
+        try:
+            text = self._input.get("1.0", "end").strip()
+        except tk.TclError:
+            return
+        if not text:
+            # No-op — empty Send shouldn't fire an LLM call.
+            return
+
+        # Hard cap on conversation length. Beyond MAX_TURNS the prompt
+        # body gets too long for local models to follow reliably and
+        # the user is better served by closing + opening a fresh chat.
+        user_turns = sum(1 for m in self._history if m["role"] == "user")
+        if user_turns >= self.MAX_TURNS:
+            self._set_status(
+                "Chat limit reached — close the dialog and reopen "
+                "for a fresh conversation."
+            )
+            return
+
+        # Append user message + clear the input box.
+        self._history.append({"role": "user", "text": text})
+        self._append_transcript("user", text)
+        try:
+            self._input.delete("1.0", "end")
+        except tk.TclError:
+            pass
+
+        # Soft warning at WARN_TURNS so the user knows the cap is
+        # close. We render it as a system message so it lives in the
+        # transcript log.
+        new_user_turns = user_turns + 1
+        if new_user_turns == self.WARN_TURNS:
+            warn = (
+                "Chat is getting long — consider closing and using "
+                "the current suggestion."
+            )
+            self._history.append({"role": "system", "text": warn})
+            self._append_transcript("system", warn)
+
+        self._busy = True
+        self._set_input_enabled(False)
+        self._set_status("Thinking...")
+
         threading.Thread(
             target=self._worker,
-            args=(self._question, current_answer),
+            args=(list(self._history),),
             daemon=True,
         ).start()
 
-    def _worker(self, question: str, current_answer: str) -> None:
-        # Lazy imports — keeps wizard startup snappy.
-        from auto_applier.llm.prompts import (
-            ANSWER_SUGGESTION,
-            ANSWER_VALIDATION,
-        )
-        from auto_applier.llm.router import LLMRouter
-        from auto_applier.resume.manager import ResumeManager
+    def _worker(self, history_snapshot: list[dict[str, str]]) -> None:
+        """Background-thread entrypoint for one chat turn.
 
-        async def run() -> tuple[dict | None, dict | None]:
+        Builds the prompt from the captured history snapshot (so a
+        late append from a separate Send can't race), runs the LLM
+        call via ``asyncio.run``, and marshals the reply back via
+        ``self.after``.
+        """
+        from auto_applier.llm.prompts import ANSWER_CHAT
+        from auto_applier.llm.router import LLMRouter
+
+        # Lazy-resolve resume + profile on first send. Doing it here
+        # (off the UI thread) keeps dialog open snappy when the user
+        # has many resumes loaded.
+        if self._resume_text is None:
+            self._resume_text = self._collect_resume_text()
+        if self._candidate_profile is None:
+            self._candidate_profile = self._collect_profile()
+
+        async def run() -> str:
             router = LLMRouter()
             await router.initialize()
-
-            # Concatenate every loaded resume so the suggestion call
-            # has the full picture. The user's pain point is "do you
-            # have experience with X?" — we want the LLM to scan all
-            # resume text and answer truthfully.
+            convo = self._format_conversation(history_snapshot)
             try:
-                rm = ResumeManager(router)
-                resumes = rm.list_resumes()
-                resume_chunks: list[str] = []
-                for r in resumes:
-                    text = rm.get_resume_text(r.label)
-                    if text:
-                        resume_chunks.append(f"=== {r.label} ===\n{text}")
-                resume_text = (
-                    "\n\n".join(resume_chunks) if resume_chunks
-                    else "(no resumes loaded)"
+                response = await router.complete(
+                    prompt=ANSWER_CHAT.format(
+                        candidate_profile=self._candidate_profile or "(no profile)",
+                        resume_text=(self._resume_text or "(no resumes)")[:8000],
+                        question=self._question,
+                        current_answer=self._answer_var.get() or "(empty)",
+                        conversation=convo,
+                    ),
+                    system_prompt=ANSWER_CHAT.system,
+                    temperature=0.4,
+                    max_tokens=600,
+                    # Don't cache — each turn has a different prompt
+                    # body anyway, but more importantly two consecutive
+                    # asks with the same convo would otherwise collide.
+                    use_cache=False,
                 )
-            except Exception:
-                resume_text = "(no resumes loaded)"
-
-            async def _validate() -> dict | None:
-                try:
-                    return await router.complete_json(
-                        prompt=ANSWER_VALIDATION.format(
-                            question=question,
-                            answer=current_answer or "(empty)",
-                        ),
-                        system_prompt=ANSWER_VALIDATION.system,
-                    )
-                except Exception:
-                    return None
-
-            async def _suggest() -> dict | None:
-                # Truncate resume text — local models choke past ~8k
-                # chars in the prompt body, and we already saw the
-                # equivalent cap in analysis/title_expansion.py.
-                excerpt = resume_text[:8000]
-                try:
-                    return await router.complete_json(
-                        prompt=ANSWER_SUGGESTION.format(
-                            question=question,
-                            resume_text=excerpt,
-                        ),
-                        system_prompt=ANSWER_SUGGESTION.system,
-                    )
-                except Exception:
-                    return None
-
-            return await asyncio.gather(_validate(), _suggest())
+                return response.text or ""
+            except Exception as exc:
+                return f"(error reaching the AI: {exc})"
 
         try:
-            validation, suggestion = asyncio.run(run())
-        except Exception:
-            validation, suggestion = None, None
+            reply = asyncio.run(run())
+        except Exception as exc:
+            reply = f"(error reaching the AI: {exc})"
 
-        self.after(0, lambda: self._render_results(validation, suggestion))
+        # Marshal back to the UI thread. If the dialog has been closed
+        # in the meantime, _render_reply no-ops.
+        self.after(0, lambda: self._render_reply(reply))
 
-    # ------------------------------------------------------------------
-    # UI updates
-    # ------------------------------------------------------------------
-
-    def _render_results(
-        self,
-        validation: dict | None,
-        suggestion: dict | None,
-    ) -> None:
-        try:
-            # Validation
-            if validation is None:
-                self._validation_lbl.configure(
-                    text="Couldn't reach the AI — is Ollama running?",
-                    fg=DANGER_TEXT,
-                )
-            else:
-                valid = bool(validation.get("valid"))
-                issue = str(validation.get("issue") or "").strip()
-                if valid:
-                    self._validation_lbl.configure(
-                        text="✓ Looks good — your saved answer "
-                             "fits the question.",
-                        fg=ACCENT_TEXT,
-                    )
-                else:
-                    msg = "✗ " + (issue or "This answer may not fit.")
-                    self._validation_lbl.configure(
-                        text=msg, fg=DANGER_TEXT,
-                    )
-
-            # Suggestion
-            if suggestion is None:
-                self._suggestion_lbl.configure(
-                    text="Couldn't generate a suggestion.",
-                    fg=DANGER_TEXT,
-                )
-                self._rationale_lbl.configure(text="")
-                return
-
-            answer = str(suggestion.get("answer") or "").strip()
-            rationale = str(suggestion.get("rationale") or "").strip()
-
-            if not answer:
-                self._suggestion_lbl.configure(
-                    text="(no resume-backed suggestion available)",
-                    fg=TEXT_MUTED,
-                )
-                if rationale:
-                    self._rationale_lbl.configure(text=rationale)
-                return
-
-            self._suggested_answer = answer
-            self._suggestion_lbl.configure(text=answer, fg=TEXT)
-            if rationale:
-                self._rationale_lbl.configure(
-                    text=f"Why: {rationale}",
-                )
-            if self._use_btn is not None:
-                self._use_btn.configure(state="normal")
-        except tk.TclError:
-            # Window already closed — nothing to render into.
+    def _render_reply(self, reply_text: str) -> None:
+        if self._closed:
             return
+        try:
+            suggested = _extract_suggested(reply_text)
+            # Strip the SUGGESTED line out of the body before
+            # rendering — it's already shown in the preview pane,
+            # so leaving it in the transcript would just be noise.
+            body = SUGGESTED_LINE_RE.sub("", reply_text).strip()
+            if not body:
+                # Pure SUGGESTED-only reply — fall back to showing the
+                # suggestion in the transcript so the user sees something.
+                body = suggested or "(empty reply)"
+
+            self._history.append({"role": "assist", "text": reply_text})
+            self._append_transcript("assist", body)
+
+            if suggested:
+                self._current_suggestion = suggested
+                self._suggestion_lbl.configure(
+                    text=suggested, fg=TEXT,
+                )
+                # Don't enable "Use this answer" for placeholder
+                # template questions. The chat result for "Do you
+                # have experience with [specific tool]?" is
+                # context-poor: at apply time the live question
+                # has a real tool name, and the form_filler will
+                # match against the resume in context. Saving a
+                # literal placeholder-derived answer would risk
+                # mis-applying it to every tools-experience
+                # variant. Chat stays useful as user-guidance, but
+                # the literal save is suppressed.
+                if not self._placeholder:
+                    self._use_btn.configure(state="normal")
+            # No SUGGESTED parsed — leave previous suggestion (if any)
+            # in place. The user can still hit "Use this answer" with
+            # whatever the last good suggestion was.
+        except tk.TclError:
+            return
+        finally:
+            self._busy = False
+            self._set_input_enabled(True)
+            self._set_status("")
+            try:
+                self._input.focus_set()
+            except tk.TclError:
+                pass
+
+    # ------------------------------------------------------------------
+    # Prompt-context collection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _format_conversation(history: list[dict[str, str]]) -> str:
+        """Render history into the `[user]: ... / [assist]: ...` form
+        the ANSWER_CHAT prompt expects. System messages (the warn
+        notice) are filtered out so they don't confuse the model.
+        """
+        lines: list[str] = []
+        for entry in history:
+            role = entry.get("role", "")
+            text = entry.get("text", "").strip()
+            if not text:
+                continue
+            if role == "user":
+                lines.append(f"[user]: {text}")
+            elif role == "assist":
+                lines.append(f"[assist]: {text}")
+            # "system" entries (chat-getting-long notice) are local
+            # UI hints, not part of the conversation we want the LLM
+            # to see.
+        return "\n".join(lines) if lines else "(no prior turns)"
+
+    def _collect_resume_text(self) -> str:
+        """Concatenate every loaded resume's text, capped at 8000 chars.
+
+        Same shape as the old AnswerAssistDialog used so the LLM can
+        scan all resume text and ground its answers in real
+        experience.
+        """
+        try:
+            from auto_applier.llm.router import LLMRouter
+            from auto_applier.resume.manager import ResumeManager
+            rm = ResumeManager(LLMRouter())
+            resumes = rm.list_resumes()
+            chunks: list[str] = []
+            for r in resumes:
+                text = rm.get_resume_text(r.label)
+                if text:
+                    chunks.append(f"=== {r.label} ===\n{text}")
+            if not chunks:
+                return "(no resumes loaded)"
+            blob = "\n\n".join(chunks)
+            return blob[:8000]
+        except Exception:
+            return "(no resumes loaded)"
+
+    def _collect_profile(self) -> str:
+        """Build a short profile blob from the wizard's personal_info.
+
+        Email and phone are redacted — those are PII the LLM does
+        not need to do its job. The rest (name, location, work
+        preferences) gives the model enough context to ground
+        answers without leaking contact details into the prompt.
+        """
+        try:
+            data = getattr(self._wizard, "data", None) or {}
+            keep_keys = (
+                "first_name", "last_name", "city", "state", "country",
+                "linkedin_url", "website",
+            )
+            parts: list[str] = []
+            for key in keep_keys:
+                var = data.get(key)
+                if var is None:
+                    continue
+                try:
+                    val = var.get() if hasattr(var, "get") else str(var)
+                except Exception:
+                    val = ""
+                val = str(val).strip()
+                if val:
+                    parts.append(f"{key}: {val}")
+            if not parts:
+                return "(no profile data)"
+            return "\n".join(parts)
+        except Exception:
+            return "(no profile data)"
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     def _on_use_suggestion(self) -> None:
-        if not self._suggested_answer:
+        if not self._current_suggestion:
             return
-        self._answer_var.set(self._suggested_answer)
-        self.destroy()
+        self._answer_var.set(self._current_suggestion)
+        self._on_close()
+
+    def _on_close(self) -> None:
+        """Tear down the dialog. Any in-flight LLM worker will land
+        on a closed `_render_reply` and short-circuit on the
+        ``self._closed`` guard — we don't bother trying to cancel
+        the underlying ``asyncio.run`` (best-effort, per spec).
+        """
+        self._closed = True
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
+
+
+# Backwards-compatible alias. External callers (and tests) can still
+# reach the old name; new code should use ChatAssistDialog directly.
+AnswerAssistDialog = ChatAssistDialog

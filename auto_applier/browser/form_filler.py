@@ -15,6 +15,7 @@ import json
 import logging
 import re
 from datetime import date, timedelta
+from typing import Optional
 
 from playwright.async_api import Page
 
@@ -211,10 +212,27 @@ START_DATE_KEYWORDS = [
     "date available",
 ]
 
+# Notice-period keywords. These look like "how many weeks" / "how
+# much notice" questions where the answer is a count of weeks rather
+# than a calendar date. Must be checked BEFORE START_DATE_KEYWORDS so
+# "how many weeks of notice" doesn't accidentally route to a date.
+NOTICE_PERIOD_KEYWORDS = [
+    "notice period",
+    "how much notice",
+    "how many weeks of notice",
+    "weeks of notice required",
+    "weeks notice",
+]
+
 # Default start-date offset used when a form asks for the earliest
 # date the candidate can begin. Two weeks is the conventional notice
 # period in most industries.
 DEFAULT_START_DATE_OFFSET_DAYS = 14
+
+# Buffer for an unemployed candidate. Not 0 because a same-day start
+# is implausible — recruiters need at least a couple of business days
+# to schedule paperwork, background checks, and onboarding logistics.
+UNEMPLOYED_START_DATE_OFFSET_DAYS = 3
 
 
 class FormFiller:
@@ -611,9 +629,13 @@ class FormFiller:
           candidate's resume, using the same canonical-name
           normalization we use for dedup so 'Acme' matches 'Acme Inc.'.
 
-        - **Earliest start date**: return a date 14 days from today
-          in ISO format. The _apply_answer date branch will normalize
-          it for whatever date widget the site is using.
+        - **Earliest start date**: infer from the resume whether the
+          candidate is currently employed. Currently-employed → 14
+          days out (giving notice). Likely-unemployed → 3 days out
+          (close to "available immediately" but with a small HR
+          buffer). Indeterminate → the safe 14-day default. Notice-
+          period style fields ("how many weeks of notice") instead
+          return a number of weeks (2 or 0).
         """
         # Source attribution — only if we know which platform we're on
         if self.platform_display_name:
@@ -626,12 +648,22 @@ class FormFiller:
         if any(kw in label_lower for kw in PREVIOUSLY_WORKED_KEYWORDS):
             return self._check_prior_employment()
 
-        # Earliest start date
+        # Notice period (number of weeks). Check BEFORE start-date so
+        # "how many weeks of notice" doesn't route to a calendar date.
+        # Skipped here if the smart-fallback layer (`_smart_notice_period`)
+        # already owns the literal "notice period" phrasing on text
+        # fields — but the contextual layer is reached first for
+        # number / select fields, where we want a numeric answer.
+        if any(kw in label_lower for kw in NOTICE_PERIOD_KEYWORDS):
+            inferred = self._infer_notice_period(field, label_lower)
+            if inferred:
+                return inferred
+
+        # Earliest start date — inferred from resume employment status.
         if any(kw in label_lower for kw in START_DATE_KEYWORDS):
-            default = date.today() + timedelta(
-                days=DEFAULT_START_DATE_OFFSET_DAYS
-            )
-            return default.isoformat()
+            inferred = self._infer_start_date(field, label_lower)
+            if inferred:
+                return inferred
 
         # Conditional "If not [X], do you [Y]?" questions. Live run
         # 2026-05-02 hit "If not a US Citizen, do you have a non-
@@ -731,6 +763,92 @@ class FormFiller:
         if raw and raw in resume_lower:
             return "Yes"
         return "No"
+
+    # Phrases that indicate an ongoing role on the resume. We treat
+    # any of these as "candidate is currently employed".
+    _CURRENTLY_EMPLOYED_MARKERS = (
+        r"\bpresent\b",
+        r"\bcurrent\b",
+        r"\bcurrently\b",
+        r"\bnow\b",
+        r"\bto date\b",
+        r"\bto present\b",
+        r"\bongoing\b",
+    )
+
+    def _is_currently_employed(self) -> Optional[bool]:
+        """Best-effort signal from the resume.
+
+        Returns True if any "Present / Current / Currently / Now"
+        marker shows up alongside a date range — the typical resume
+        shape for an ongoing role. Returns False if the resume has
+        dated experience but every most-recent year ends in the
+        past with no ongoing markers. Returns None when we can't
+        decide (empty resume, no dated lines, ambiguous content),
+        so the caller can fall back to a safe default rather than
+        commit to a wrong inference.
+        """
+        text = (self.resume_text or "").strip()
+        if not text:
+            return None
+        text_lower = text.lower()
+
+        # Look for ongoing-role markers near a date or month/year. We
+        # match the marker on its own first; the regex is cheap and a
+        # false positive (resume mentions "present" elsewhere) just
+        # falls through to the same 14-day default we used to use, so
+        # over-detection here is the safe direction.
+        for pattern in self._CURRENTLY_EMPLOYED_MARKERS:
+            if re.search(pattern, text_lower):
+                # Sanity check: marker should appear near a year or a
+                # range separator. Anchors us to the experience block
+                # rather than something like "I'm currently learning".
+                for m in re.finditer(pattern, text_lower):
+                    window = text_lower[max(0, m.start() - 60): m.end() + 30]
+                    if re.search(r"\b(19|20)\d{2}\b", window) or "–" in window or " - " in window or "—" in window:
+                        return True
+
+        # No ongoing marker — but does the resume HAVE date ranges?
+        # If it does, the candidate has work history that all ended
+        # in the past, which is our heuristic for "likely unemployed".
+        years = re.findall(r"\b(19|20)\d{2}\b", text_lower)
+        if years:
+            return False
+        # Resume has no detectable dates — too thin to call.
+        return None
+
+    def _infer_start_date(self, field: FormField, label_lower: str) -> str:
+        """Infer earliest start date as ISO YYYY-MM-DD from resume.
+
+        Currently employed → today + 14 days (notice period buffer).
+        Likely unemployed → today + 3 days (HR scheduling buffer; not
+        zero because same-day starts are implausible).
+        Indeterminate → today + 14 days (safe default).
+        Returns "" only when an unrelated label_lower path should
+        win — currently always returns a date so the caller doesn't
+        need to special-case empty.
+        """
+        employed = self._is_currently_employed()
+        if employed is True:
+            offset = DEFAULT_START_DATE_OFFSET_DAYS
+        elif employed is False:
+            offset = UNEMPLOYED_START_DATE_OFFSET_DAYS
+        else:
+            offset = DEFAULT_START_DATE_OFFSET_DAYS
+        return (date.today() + timedelta(days=offset)).isoformat()
+
+    def _infer_notice_period(self, field: FormField, label_lower: str) -> str:
+        """Infer notice in weeks for "how many weeks of notice" fields.
+
+        Currently employed → "2" (standard two-week notice).
+        Likely unemployed → "0" (no current employer to notify).
+        Indeterminate → "2" (safe default; matches the existing
+        _smart_notice_period text-field handler).
+        """
+        employed = self._is_currently_employed()
+        if employed is False:
+            return "0"
+        return "2"
 
     # ------------------------------------------------------------------
     # Priority 2: Answers.json

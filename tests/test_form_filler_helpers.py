@@ -307,6 +307,68 @@ class TestMatchContextual:
 
 
 # ------------------------------------------------------------------
+# Start-date / notice-period inference
+# ------------------------------------------------------------------
+
+class TestStartDateInference:
+    """`_infer_start_date` and `_infer_notice_period` resume-aware logic."""
+
+    def test_currently_employed_resume_returns_14_days(self):
+        # "Mar 2022 – Present" → ongoing role → 14-day notice buffer
+        resume = (
+            "EXPERIENCE\n"
+            "Senior Analyst — Acme Corp Mar 2022 – Present\n"
+            "Built dashboards and ETL pipelines.\n"
+        )
+        filler = FormFiller(
+            router=MagicMock(), personal_info={}, resume_text=resume,
+        )
+        field = MagicMock()
+        result = filler._match_contextual("earliest start date", field)
+        expected = (date.today() + timedelta(days=14)).isoformat()
+        assert result == expected
+
+    def test_unemployed_resume_returns_3_days(self):
+        # All roles ended in the past, no "Present" → likely unemployed
+        resume = (
+            "EXPERIENCE\n"
+            "Senior Analyst — Acme Corp Jun 2020 – Aug 2022\n"
+            "Junior Analyst — Beta Jan 2018 – May 2020\n"
+        )
+        filler = FormFiller(
+            router=MagicMock(), personal_info={}, resume_text=resume,
+        )
+        field = MagicMock()
+        result = filler._match_contextual("earliest start date", field)
+        expected = (date.today() + timedelta(days=3)).isoformat()
+        assert result == expected
+
+    def test_empty_resume_returns_safe_default(self):
+        # No signal — fall back to the conventional 14-day default
+        filler = FormFiller(
+            router=MagicMock(), personal_info={}, resume_text="",
+        )
+        field = MagicMock()
+        result = filler._match_contextual("earliest start date", field)
+        expected = (date.today() + timedelta(days=14)).isoformat()
+        assert result == expected
+
+    def test_notice_period_currently_employed_returns_2(self):
+        resume = (
+            "EXPERIENCE\n"
+            "Senior Analyst — Acme Corp Mar 2022 – Present\n"
+        )
+        filler = FormFiller(
+            router=MagicMock(), personal_info={}, resume_text=resume,
+        )
+        field = MagicMock()
+        result = filler._match_contextual(
+            "how many weeks notice do you need?", field,
+        )
+        assert result == "2"
+
+
+# ------------------------------------------------------------------
 # Source question regex
 # ------------------------------------------------------------------
 
