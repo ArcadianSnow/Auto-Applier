@@ -138,10 +138,31 @@ class ATSAPIPlatform(JobPlatform):
     async def search_jobs(self, keyword: str, location: str) -> list[Job]:
         """Pull jobs from every configured company on this ATS.
 
-        ``keyword`` and ``location`` are applied client-side as a
-        case-insensitive substring filter against title / location
-        / description (any match counts). Both are optional —
-        callers that pass empty strings get the full company board.
+        ``keyword`` is applied client-side as a **word-level OR**
+        filter against the job title — any title word ≥3 chars from
+        the keyword that appears in the job title is enough to match.
+        This is dramatically more permissive than the previous
+        substring-AND filter, which dropped 1500+ raw Greenhouse jobs
+        down to 0 because "data analyst" had to appear as a literal
+        substring in title-or-description (rejected: "Senior Data
+        Engineer", "Marketing Analyst", "Software Engineer in Data",
+        etc.).
+
+        ``location`` is **NOT filtered** by the adapter — ATS jobs
+        often phrase location inconsistently ("Remote", "100% remote",
+        "Distributed", "Anywhere in the US", "Hybrid - SF") and the
+        downstream multi-axis scorer evaluates location-fit per axis
+        anyway. Better to let the scorer handle it and surface
+        borderline matches in ``cli almost``.
+
+        Cap: each company contributes at most ``max_jobs_per_company``
+        (default 30) and the overall batch is capped at
+        ``max_jobs_per_search`` (default 200) to bound the LLM-cost
+        per cycle. Continuous-run mode chews through the rest over
+        subsequent cycles via the dedup layer.
+
+        Empty keyword → no kw filter; all jobs from configured boards
+        are returned.
         """
         companies = self._configured_companies()
         if not companies:
@@ -153,10 +174,18 @@ class ATSAPIPlatform(JobPlatform):
             )
             return []
 
+        # Per-cycle caps. Defaulted so a board the size of Stripe's
+        # (~500 jobs) can't single-handedly swamp the LLM scorer.
+        # Override per-platform via config, e.g.::
+        #
+        #   "ats_greenhouse": {"max_jobs_per_company": 50, "max_jobs_per_search": 300}
+        plat_cfg = self.config.get(self.source_id, {}) or {}
+        max_per_company = int(plat_cfg.get("max_jobs_per_company", 30))
+        max_total = int(plat_cfg.get("max_jobs_per_search", 200))
+
         client = await self._get_http()
         all_jobs: list[Job] = []
-        kw_lower = (keyword or "").strip().lower()
-        loc_lower = (location or "").strip().lower()
+        kw_words = self._extract_keyword_words(keyword)
 
         for slug in companies:
             try:
@@ -197,13 +226,40 @@ class ATSAPIPlatform(JobPlatform):
                 if keyword and not j.search_keyword:
                     j.search_keyword = keyword
 
-            if kw_lower or loc_lower:
+            # Word-level OR keyword filter. Any title word ≥3 chars
+            # that matches a keyword word counts. Empty kw_words
+            # passes everything through.
+            if kw_words:
+                pre_count = len(jobs)
                 jobs = [
                     j for j in jobs
-                    if self._matches_filter(j, kw_lower, loc_lower)
+                    if self._title_matches_any(j, kw_words)
                 ]
+                logger.debug(
+                    "%s: %s kw-filtered %d/%d (any word from %r in title)",
+                    self.display_name, slug, len(jobs), pre_count,
+                    keyword,
+                )
+
+            # Per-company cap. Take the FIRST N — ATS endpoints sort
+            # newest-first by default, so this lets continuous-run
+            # mode work through the backlog over time without us
+            # having to write a sorter here.
+            if max_per_company > 0:
+                jobs = jobs[:max_per_company]
 
             all_jobs.extend(jobs)
+            if max_total > 0 and len(all_jobs) >= max_total:
+                # Stop fetching more companies once total cap hit;
+                # the rest fall to next cycle's dedup churn.
+                logger.info(
+                    "%s: reached max_jobs_per_search=%d after %d "
+                    "company board(s); deferring remaining boards "
+                    "to next cycle",
+                    self.display_name, max_total,
+                    companies.index(slug) + 1,
+                )
+                break
 
         logger.info(
             "%s: fetched %d job(s) across %d configured company board(s)",
@@ -304,26 +360,39 @@ class ATSAPIPlatform(JobPlatform):
             unique.append(s)
         return unique
 
-    def _matches_filter(
-        self, job: Job, kw_lower: str, loc_lower: str,
-    ) -> bool:
-        """Case-insensitive substring match against title/desc/location.
+    @staticmethod
+    def _extract_keyword_words(keyword: str) -> list[str]:
+        """Tokenize ``keyword`` into matchable words.
 
-        Both filters are AND'd when both are non-empty. Empty filter
-        means "any". We don't try fancy matching — users who want
-        regex can pre-filter their company list.
+        Returns lowercase word-tokens of length ≥3. Drops short
+        words ("a", "of", "in") that would otherwise dominate the
+        OR-filter and waste an LLM scoring call on every job whose
+        description contains "in". Empty keyword → empty list.
         """
-        if kw_lower:
-            haystack = f"{job.title}\n{job.description}".lower()
-            if kw_lower not in haystack:
-                return False
-        if loc_lower:
-            # Location data lives in the description for some ATSes.
-            # Cast wide net.
-            haystack = f"{job.title}\n{job.description}".lower()
-            if loc_lower not in haystack:
-                return False
-        return True
+        if not keyword:
+            return []
+        import re as _re
+        return [
+            w for w in _re.findall(r"[a-z0-9]+", keyword.lower())
+            if len(w) >= 3
+        ]
+
+    @staticmethod
+    def _title_matches_any(job: Job, kw_words: list[str]) -> bool:
+        """True when the JOB TITLE contains any keyword word.
+
+        Title-only (not description) because:
+          1. Descriptions are long; almost any 3-letter word will
+             match somewhere → effectively no filter.
+          2. The whole point of the kw filter is "is this the kind
+             of role I want?", which the title carries.
+          3. The downstream multi-axis scorer reads the description
+             anyway.
+        """
+        if not kw_words:
+            return True
+        title_lower = (job.title or "").lower()
+        return any(w in title_lower for w in kw_words)
 
     async def _get_http(self) -> httpx.AsyncClient:
         if self._http is None:

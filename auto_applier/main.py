@@ -133,6 +133,42 @@ def _on_run_finished(**kw):
         f"\nDone ({reason}). Applied: {applied}, Skipped: {skipped}, Failed: {failed}"
     )
 
+    # When a run consists entirely (or mostly) of discovery-only
+    # platforms (LinkedIn discovery, ATS API), "Applied: 0" reads
+    # as failure even though the user just got a queue of high-
+    # score manual-apply matches. Surface those explicitly so the
+    # CLI feedback matches reality.
+    #
+    # User feedback 2026-05-03: "it says 0 applies even though it
+    # found a job and scored it a 9/10". The "9/10" was an ATS
+    # discovery — correctly saved as ``status=skipped`` but reads
+    # like a failure in the headline.
+    if skipped > 0:
+        try:
+            from auto_applier.storage.repository import load_all
+            from auto_applier.storage.models import Application
+            from datetime import datetime, timedelta, timezone
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+            apps = load_all(Application)
+            ats_recent = []
+            for a in apps:
+                if (a.source or "").startswith("ats_") and a.status == "skipped":
+                    try:
+                        ts = datetime.fromisoformat(a.applied_at.replace("Z", "+00:00"))
+                    except Exception:
+                        continue
+                    if ts >= cutoff and a.score >= 7:
+                        ats_recent.append(a)
+            if ats_recent:
+                click.echo(
+                    f"\n  💡 {len(ats_recent)} ATS-discovered job(s) scored ≥7/10 "
+                    f"in this run.\n"
+                    f"     View them with:  python -m auto_applier --cli almost"
+                )
+        except Exception:
+            # Summary noise must never fail the run.
+            pass
+
 
 def _on_cycle_started(**kw):
     n = kw.get("cycle_number", 0)

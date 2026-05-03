@@ -69,17 +69,29 @@ def _strip_html(text: str) -> str:
     Greenhouse uses ``&lt;p&gt;`` for paragraphs and ``&lt;ul&gt;/&lt;li&gt;`` for
     bullet lists — replacing those with newlines before tag removal
     keeps the structure readable for the scoring LLM.
+
+    Order is critical: ``html.unescape`` MUST run before tag removal,
+    otherwise escaped tags (``&lt;h2&gt;Who we are&lt;/h2&gt;``) survive
+    the strip step and re-emerge as literal ``<h2>`` after unescape.
+    Live integration test 2026-05-03 caught this on Stripe.
     """
     if not text:
         return ""
-    # Preserve structure: paragraph breaks → double newline,
-    # list items → bullet.
-    s = re.sub(r"</p>", "\n\n", text, flags=re.IGNORECASE)
+    # 1. Decode HTML entities FIRST so escaped tags become real tags
+    #    that subsequent regexes can match.
+    s = html.unescape(text)
+    # 2. Preserve structure: paragraph breaks → double newline,
+    #    list items → bullet.
+    s = re.sub(r"</p>", "\n\n", s, flags=re.IGNORECASE)
     s = re.sub(r"<br\s*/?>", "\n", s, flags=re.IGNORECASE)
     s = re.sub(r"<li[^>]*>", "\n• ", s, flags=re.IGNORECASE)
+    # 3. Header tags get newline padding so the scorer sees section
+    #    boundaries instead of inline-jammed text.
+    s = re.sub(r"</h[1-6]>", "\n", s, flags=re.IGNORECASE)
+    s = re.sub(r"<h[1-6][^>]*>", "\n", s, flags=re.IGNORECASE)
+    # 4. Strip everything else.
     s = _TAG_RE.sub("", s)
-    s = html.unescape(s)
-    # Collapse runs of whitespace but keep paragraph breaks.
+    # 5. Collapse runs of whitespace but keep paragraph breaks.
     s = re.sub(r"[ \t]+", " ", s)
     s = re.sub(r"\n\s*\n\s*", "\n\n", s)
     return s.strip()

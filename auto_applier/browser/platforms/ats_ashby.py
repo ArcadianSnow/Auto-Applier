@@ -58,13 +58,19 @@ _TAG_RE = re.compile(r"<[^>]+>")
 
 
 def _strip_html(text: str) -> str:
+    """Strip tags and decode entities. Order matters — unescape
+    FIRST so escaped tags become real tags before strip.
+    See ats_greenhouse._strip_html for context.
+    """
     if not text:
         return ""
-    s = re.sub(r"</p>", "\n\n", text, flags=re.IGNORECASE)
+    s = html.unescape(text)
+    s = re.sub(r"</p>", "\n\n", s, flags=re.IGNORECASE)
     s = re.sub(r"<br\s*/?>", "\n", s, flags=re.IGNORECASE)
     s = re.sub(r"<li[^>]*>", "\n• ", s, flags=re.IGNORECASE)
+    s = re.sub(r"</h[1-6]>", "\n", s, flags=re.IGNORECASE)
+    s = re.sub(r"<h[1-6][^>]*>", "\n", s, flags=re.IGNORECASE)
     s = _TAG_RE.sub("", s)
-    s = html.unescape(s)
     s = re.sub(r"[ \t]+", " ", s)
     s = re.sub(r"\n\s*\n\s*", "\n\n", s)
     return s.strip()

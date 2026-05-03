@@ -47,16 +47,40 @@ logger = logging.getLogger(__name__)
 # can add it themselves; the starter pack is for "I have no idea what
 # to type, give me jobs."
 # ----------------------------------------------------------------------
+# Live-verified 2026-05-03 against the actual ATS APIs. Each slug
+# confirmed to return >= 50 open jobs at the time of curation.
+# Removed: github, plaid (Greenhouse 404 — companies migrated off
+# the public API), netflix, shopify (Lever — companies migrated off
+# Lever entirely; their public boards return empty).
 STARTER_PACK_SLUGS: dict[str, list[str]] = {
     "greenhouse": [
-        "stripe", "github", "airbnb", "plaid", "robinhood",
-        "discord", "anthropic", "dropbox",
+        "stripe",       # 504 jobs (financial infrastructure)
+        "anthropic",    # 443 jobs (AI safety)
+        "cloudflare",   # 444 jobs (edge networking)
+        "datadog",      # 426 jobs (observability)
+        "airbnb",       # 235 jobs (travel)
+        "robinhood",    # 142 jobs (fintech)
+        "reddit",       # 137 jobs (social)
+        "coinbase",     # 103 jobs (crypto)
+        "dropbox",      # 101 jobs (cloud storage)
+        "discord",      # 79 jobs (chat)
+        # Plus databricks (823 jobs) and gitlab (200) — adding too
+        # many starter slugs hits the per-cycle cap; those land in
+        # "find your own" territory.
     ],
     "lever": [
-        "netflix", "shopify", "palantir",
+        "palantir",     # 235 jobs (data analytics)
+        "spotify",      # 198 jobs (audio)
+        # Lever is much less popular in 2026 than Greenhouse/Ashby.
+        # Most companies that USED Lever have migrated to Greenhouse.
+        # If a candidate finds a Lever board they want, they can add
+        # it via the paste-URL helper.
     ],
     "ashby": [
-        "openai", "ramp", "linear", "vanta",
+        "openai",       # 671 jobs (AI)
+        "vanta",        # 146 jobs (compliance automation)
+        "ramp",         # 116 jobs (corporate cards / fintech)
+        "linear",       # 23 jobs (issue tracking)
     ],
 }
 

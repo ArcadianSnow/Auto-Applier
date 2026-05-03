@@ -164,11 +164,36 @@ class ApplicationEngine:
         # Evolution engine
         self.evolution = EvolutionEngine()
 
-        # Browser
+        # Browser — only launch if at least one enabled platform
+        # actually drives a browser. ATS-only runs (ats_greenhouse,
+        # ats_lever, ats_ashby — all pure HTTP) shouldn't pay the
+        # 3-5s Chromium startup cost or open a Chrome window.
+        # User feedback 2026-05-03: "for ATS only runs it still
+        # opens a browser window".
         self.browser = BrowserSession()
-        await self.browser.start()
+        if self._needs_browser():
+            await self.browser.start()
+        else:
+            logger.info(
+                "All enabled platforms are no-browser (ATS API). "
+                "Skipping Chromium startup."
+            )
 
         self._started = True
+
+    def _needs_browser(self) -> bool:
+        """True when at least one enabled platform requires a real
+        browser (anything except the ats_* HTTP adapters).
+
+        Tolerates an unrecognized platform key by erring on the side
+        of "yes, launch a browser" — better to waste a process than
+        crash on a registered-but-not-checked platform."""
+        enabled = self.config.get("enabled_platforms", []) or []
+        no_browser_prefixes = ("ats_",)
+        for plat in enabled:
+            if not any(plat.startswith(p) for p in no_browser_prefixes):
+                return True
+        return False
 
     async def stop(self):
         """Clean up resources.

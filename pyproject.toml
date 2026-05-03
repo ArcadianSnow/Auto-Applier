@@ -43,3 +43,8 @@ include = ["auto_applier*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: tests that hit live external services (network required)",
+]
+# Skip integration tests by default; opt in via `pytest -m integration`.
+addopts = "-m 'not integration'"
