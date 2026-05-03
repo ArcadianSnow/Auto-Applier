@@ -218,7 +218,12 @@ class TestTailorFailureFallbacks:
             with caplog.at_level(logging.WARNING):
                 result = _run(eng._tailor_resume_for_job(
                     job=_job(), base_resume_path="/base.pdf",
-                    resume_text="x", resume_label="default",
+                    # Source must contain the tailored skills so the
+                    # fabrication guard accepts the tailor output —
+                    # this test is about PDF render failure, not the
+                    # validator.
+                    resume_text="Python and SQL developer.",
+                    resume_label="default",
                 ))
 
         assert result == "/base.pdf"
@@ -241,7 +246,10 @@ class TestTailorFailureFallbacks:
         eng = _make_engine()
         fake_tailor = MagicMock()
         fake_tailor.tailor = AsyncMock(return_value=TailoredResume(
-            summary="x", skills=["y"], experience=[], education=[],
+            summary="x",
+            skills=["python"],   # supported in resume_text below
+            experience=[],
+            education=[],
             job_id="test_tailor_job_1",
         ))
 
@@ -263,7 +271,10 @@ class TestTailorFailureFallbacks:
         ):
             result = _run(eng._tailor_resume_for_job(
                 job=_job(), base_resume_path="/base.pdf",
-                resume_text="x", resume_label="default",
+                # Validator needs the source to contain the
+                # tailored skill ("python") to accept the output.
+                resume_text="I am a Python developer.",
+                resume_label="default",
             ))
 
         # Tailored PDF returned despite DOCX failure
@@ -470,6 +481,104 @@ class TestArchetypeCacheHit:
         ))
         # L1 wins
         assert result == str(l1)
+
+
+class TestFabricationGuardWiring:
+    """Phase 1.6 follow-up — the engine must run the fabrication
+    guard on every tailor output and fall back to base resume when
+    the LLM hallucinated too much. Per user feedback 2026-05-03:
+    'we can't just lie about certain skills for the user.'"""
+
+    def test_rejected_validation_falls_back_to_base(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        from auto_applier import config as cfg_mod
+        from auto_applier.resume import tailor as tailor_mod
+        from auto_applier.resume.tailor import TailoredResume
+        gen_dir = tmp_path / "g"
+        monkeypatch.setattr(cfg_mod, "GENERATED_RESUMES_DIR", gen_dir)
+        monkeypatch.setattr(tailor_mod, "GENERATED_RESUMES_DIR", gen_dir)
+
+        eng = _make_engine()
+        # Tailor returns a result that has 100% fabricated skills
+        # — none appear in resume_text. Validator should REJECT
+        # and the engine should return the base resume path.
+        fake_tailor = MagicMock()
+        fake_tailor.tailor = AsyncMock(return_value=TailoredResume(
+            summary="Made-up summary.",
+            skills=["TensorFlow", "Snowflake", "Kubernetes", "Rust", "Spark"],
+            experience=[],
+            education=[],
+        ))
+        with patch(
+            "auto_applier.resume.tailor.ResumeTailor",
+            return_value=fake_tailor,
+        ):
+            import logging
+            with caplog.at_level(logging.WARNING):
+                result = _run(eng._tailor_resume_for_job(
+                    job=_job(),
+                    base_resume_path="/base.pdf",
+                    # Source resume has none of the skills the LLM claimed
+                    resume_text="I am a Python and SQL developer.",
+                    resume_label="default",
+                ))
+
+        assert result == "/base.pdf"
+        # The validator's rejection reason landed in the log
+        assert "validation" in caplog.text.lower()
+        assert "fabricat" in caplog.text.lower() or "not supported" in caplog.text.lower()
+
+    def test_partial_fabrication_kept(self, tmp_path, monkeypatch):
+        """When only a minority of skills are fabricated, validator
+        drops them but accepts the tailored. Engine should proceed
+        to render — we mock render_pdf to True so we can assert the
+        engine returned the tailored path."""
+        from auto_applier import config as cfg_mod
+        from auto_applier.resume import tailor as tailor_mod
+        from auto_applier.resume.tailor import TailoredResume, tailored_pdf_path
+        gen_dir = tmp_path / "g"
+        monkeypatch.setattr(cfg_mod, "GENERATED_RESUMES_DIR", gen_dir)
+        monkeypatch.setattr(tailor_mod, "GENERATED_RESUMES_DIR", gen_dir)
+
+        eng = _make_engine()
+        fake_tailor = MagicMock()
+        # 1 of 5 skills fabricated = 20% — below the 50% threshold
+        fake_tailor.tailor = AsyncMock(return_value=TailoredResume(
+            summary="x",
+            skills=["Python", "SQL", "Postgres", "Kafka", "Snowflake"],
+            #                                              ^^^^^^^^^ fabricated
+            experience=[],
+            education=[],
+        ))
+
+        async def fake_pdf(html, out_path):
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(b"%PDF" + b"X" * 4096)
+            return True
+
+        with patch(
+            "auto_applier.resume.tailor.ResumeTailor",
+            return_value=fake_tailor,
+        ), patch(
+            "auto_applier.resume.tailor.render_pdf",
+            side_effect=fake_pdf,
+        ), patch(
+            "auto_applier.resume.tailor.render_docx",
+            new=AsyncMock(return_value=False),
+        ):
+            result = _run(eng._tailor_resume_for_job(
+                job=_job(),
+                base_resume_path="/base.pdf",
+                resume_text=(
+                    "Senior Engineer using Python, SQL, Postgres, Kafka. "
+                    "Built data pipelines."
+                ),
+                resume_label="default",
+            ))
+
+        # Tailored returned (acceptable validation), not base
+        assert result == str(tailored_pdf_path("test_tailor_job_1"))
 
 
 class TestJobScoreArchetype:

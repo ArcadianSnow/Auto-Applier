@@ -337,7 +337,17 @@ class PreferencesStep(ttk.Frame):
         ).pack(side="right")
 
     def validate(self) -> bool:
-        """Require at least one keyword and a location."""
+        """Require at least one keyword and a location.
+
+        Plus a soft warning (non-blocking) when ``max_applications_per_day``
+        is set above the research-backed sweet spot. Phase 1 research
+        (1M-application Indeed analysis) found top-decile volume
+        appliers had 39% LOWER positive response rates; cross-2025
+        reports converge on a 20-39 TOTAL applications sweet spot.
+        Going past 25/day per site (=100/day with 4 platforms) is
+        documented self-sabotage. The warning informs but doesn't
+        block — advanced users may have a legitimate reason.
+        """
         kw = self.wizard.data["search_keywords"].get().strip()
         loc = self.wizard.data["location"].get().strip()
 
@@ -354,6 +364,41 @@ class PreferencesStep(ttk.Frame):
                 parent=self.wizard,
             )
             return False
+
+        # Soft warning on volume. Threshold matches the research's
+        # documented inflection point — past 25/site is where the
+        # response-rate decay accelerates. We also haven't built any
+        # protection above the spinbox's nominal to=50, so a typed
+        # value above 50 is also worth flagging.
+        try:
+            max_apps = int(self.wizard.data["max_applications_per_day"].get())
+        except (TypeError, ValueError):
+            max_apps = 0
+        if max_apps > 25 and not getattr(self, "_volume_warning_shown", False):
+            ack = messagebox.askyesno(
+                "High application volume",
+                (
+                    f"You set the daily cap to {max_apps} applications "
+                    "per site. With 3-4 sites enabled that's "
+                    f"{max_apps * 3}-{max_apps * 4} applications a "
+                    "day.\n\n"
+                    "Phase 1 research (1M-application Indeed analysis) "
+                    "found that volume past ~25/day per site is "
+                    "associated with LOWER positive response rates. "
+                    "Recruiters flag mass applications and AI screeners "
+                    "downscore generic submissions. The data converges "
+                    "on a 20-39 TOTAL applications sweet spot to land "
+                    "an offer.\n\n"
+                    "Continue with this cap, or click No to lower it?"
+                ),
+                parent=self.wizard,
+                icon="warning",
+            )
+            # Cache the user's decision so the dialog doesn't re-pop
+            # if they navigate forward → back → forward.
+            self._volume_warning_shown = True
+            if not ack:
+                return False
         return True
 
     # ------------------------------------------------------------------

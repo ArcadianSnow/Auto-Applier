@@ -1667,6 +1667,34 @@ class ApplicationEngine:
                 )
                 return base_resume_path
 
+            # Fabrication guard. Per user feedback 2026-05-03 —
+            # "we can't just lie about certain skills for the user".
+            # The TAILOR_RESUME prompt has a no-fabrication rule but
+            # LLMs hallucinate anyway. The validator filters
+            # tailored.skills / tailored.experience to only what
+            # appears in the source resume, and rejects the whole
+            # tailored if too much was unsupported.
+            try:
+                from auto_applier.resume.tailor_validator import (
+                    validate_tailored_resume,
+                )
+                report = validate_tailored_resume(tailored, resume_text or "")
+                if not report.is_acceptable:
+                    logger.warning(
+                        "Tailor: validation REJECTED for %s @ %s — %s",
+                        job.title[:50], job.company[:40], report.reason,
+                    )
+                    return base_resume_path
+            except Exception as exc:
+                # Validator itself failed — fail safe and use base.
+                # We'd rather upload an unflashy resume than risk a
+                # fabricated one going out unchecked.
+                logger.warning(
+                    "Tailor: validator raised (%s) — falling back to base "
+                    "resume to avoid uploading unverified content.", exc,
+                )
+                return base_resume_path
+
             # Resolve user contact info for the rendered header.
             name, contact = self._candidate_header_for_render()
 
