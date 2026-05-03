@@ -24,7 +24,12 @@
 param(
     [Parameter(Mandatory = $true)] [string] $InstallDir,
     [Parameter(Mandatory = $true)] [string] $DoPlaywright,
-    [Parameter(Mandatory = $true)] [string] $DoOllama
+    [Parameter(Mandatory = $true)] [string] $DoOllama,
+    # Optional component: when "1", attempt `pip install nodriver`
+    # so the experimental LinkedIn engine works out of the box.
+    # Default "0" so older installers (pre-2026-05-03) still satisfy
+    # the contract.
+    [Parameter(Mandatory = $false)] [string] $DoNodriver = "0"
 )
 
 $ErrorActionPreference = 'Continue'  # Don't bail on first error
@@ -51,7 +56,7 @@ function Test-OllamaInstalled {
 }
 
 Write-Log "Auto Applier post-install bootstrap starting."
-Write-Log "InstallDir=$InstallDir, DoPlaywright=$DoPlaywright, DoOllama=$DoOllama"
+Write-Log "InstallDir=$InstallDir, DoPlaywright=$DoPlaywright, DoOllama=$DoOllama, DoNodriver=$DoNodriver"
 
 # ----------------------------------------------------------------------
 # 1. Playwright Chromium install
@@ -141,6 +146,37 @@ if ($DoOllama -eq '1') {
 }
 else {
     Write-Log "Skipping Ollama detection (user opted out)."
+}
+
+# ----------------------------------------------------------------------
+# 3. Optional Nodriver install
+# ----------------------------------------------------------------------
+if ($DoNodriver -eq '1') {
+    Write-Log "Installing nodriver (experimental LinkedIn engine)..."
+    # Same Python-discovery logic as Playwright. PyInstaller-onefile
+    # bundles can't pip-install into themselves, so we shell out to
+    # system Python. If absent, the wizard's Sites step has its own
+    # in-app install button as a fallback.
+    $py = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $py) { $py = Get-Command python3 -ErrorAction SilentlyContinue }
+    if (-not $py) { $py = Get-Command py -ErrorAction SilentlyContinue }
+    if ($py) {
+        try {
+            Write-Log "Using $($py.Source) -m pip install nodriver"
+            & $py.Source -m pip install nodriver 2>&1 |
+                Out-File -FilePath $LogPath -Append -Encoding utf8
+            Write-Log "Nodriver install completed (exit=$LASTEXITCODE)."
+        }
+        catch {
+            Write-Log "Nodriver install raised: $($_.Exception.Message)"
+        }
+    }
+    else {
+        Write-Log "No system Python found; user can install nodriver later via the wizard's Sites step."
+    }
+}
+else {
+    Write-Log "Skipping Nodriver install (user opted out)."
 }
 
 Write-Log "Post-install bootstrap done."

@@ -53,7 +53,10 @@ Compression=lzma2/ultra
 SolidCompression=yes
 WizardStyle=modern
 LicenseFile=license.txt
-SetupIconFile=icon.ico
+; SetupIconFile is commented out so the installer builds without a
+; custom icon (default Inno Setup icon is used). Drop a 256x256
+; .ico at installer/icon.ico and uncomment this line to brand it.
+;SetupIconFile=icon.ico
 UninstallDisplayName=Auto Applier {#MyAppVersion}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 ; ArchitecturesInstallIn64BitMode is empty so 32-bit Python builds
@@ -67,6 +70,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "playwrightinstall"; Description: "Install browser used for job sites (Chromium ~150 MB, recommended)"; GroupDescription: "Required components:"; Flags: checkedonce
 Name: "ollamacheck"; Description: "Check for Ollama (the local AI engine) and offer install if missing"; GroupDescription: "Required components:"; Flags: checkedonce
+; Optional: install the experimental LinkedIn anti-detect engine.
+; Off by default — only ~5% of users opt in; the others stick with
+; the standard Indeed/Dice/ZR flow plus the LinkedIn discovery-only
+; patchright path.
+Name: "nodriverinstall"; Description: "Install experimental LinkedIn engine (Nodriver, ~50 MB, advanced)"; GroupDescription: "Optional components:"; Flags: unchecked
 
 [Files]
 ; Main executable produced by PyInstaller
@@ -97,7 +105,7 @@ Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 ; itself is signed by no-one — it's just shell-out wrapping that
 ; could equally be a .bat file.
 Filename: "powershell.exe"; \
-  Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\post_install.ps1"" -InstallDir ""{app}"" -DoPlaywright {code:GetPlaywrightFlag} -DoOllama {code:GetOllamaFlag}"; \
+  Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\post_install.ps1"" -InstallDir ""{app}"" -DoPlaywright {code:GetPlaywrightFlag} -DoOllama {code:GetOllamaFlag} -DoNodriver {code:GetNodriverFlag}"; \
   StatusMsg: "Installing browser components and detecting AI engine..."; \
   Flags: runhidden waituntilterminated
 
@@ -123,6 +131,14 @@ end;
 function GetOllamaFlag(Default: string): string;
 begin
   if WizardIsTaskSelected('ollamacheck') then
+    Result := '1'
+  else
+    Result := '0';
+end;
+
+function GetNodriverFlag(Default: string): string;
+begin
+  if WizardIsTaskSelected('nodriverinstall') then
     Result := '1'
   else
     Result := '0';

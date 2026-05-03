@@ -130,9 +130,27 @@ class WizardApp(tk.Tk):
             "indeed": True,
             "dice": True,
             "ziprecruiter": True,
+            # Experimental anti-detect backend for LinkedIn —
+            # opt-in; mutually exclusive with the standard engine,
+            # validated by SitesStep.validate().
+            "linkedin_nodriver": False,
+            # ATS public-API discovery channels. Off by default
+            # because each requires the user to add company slugs;
+            # an empty slug list yields zero jobs and a confusing
+            # "why didn't it find anything?" question.
+            "ats_greenhouse": False,
+            "ats_lever": False,
+            "ats_ashby": False,
         }
         for key, default in platform_defaults.items():
             self.data[f"{key}_enabled"] = tk.BooleanVar(value=default)
+
+        # ATS company slugs — one StringVar per ATS, holding
+        # newline-separated slugs. Sites step's text widgets sync
+        # back into these on every keystroke; ``get_config`` parses
+        # them into the ats_api_companies dict shape.
+        for ats_id in ("greenhouse", "lever", "ashby"):
+            self.data[f"ats_{ats_id}_slugs"] = tk.StringVar(value="")
 
         # Personal info
         for key in ("first_name", "last_name", "email", "phone",
@@ -192,6 +210,34 @@ class WizardApp(tk.Tk):
             var_key = f"{plat}_enabled"
             if var_key in self.data:
                 self.data[var_key].set(True)
+
+        # ATS company slugs — convert from the dict shape on disk
+        # into the newline-joined string the sites-step text widget
+        # consumes. Tolerate the legacy list-of-dicts shape too so
+        # users who hand-edited their config don't lose data.
+        ats_block = cfg.get("ats_api_companies", {}) or {}
+        if isinstance(ats_block, dict):
+            for ats_id in ("greenhouse", "lever", "ashby"):
+                slugs = ats_block.get(ats_id, []) or []
+                if isinstance(slugs, list):
+                    text = "\n".join(str(s).strip() for s in slugs if str(s).strip())
+                    var = self.data.get(f"ats_{ats_id}_slugs")
+                    if var is not None:
+                        var.set(text)
+        elif isinstance(ats_block, list):
+            # Legacy: [{"ats": "greenhouse", "company": "stripe"}, ...]
+            grouped: dict[str, list[str]] = {"greenhouse": [], "lever": [], "ashby": []}
+            for entry in ats_block:
+                if not isinstance(entry, dict):
+                    continue
+                ats_id = str(entry.get("ats", "")).lower()
+                slug = str(entry.get("company", "")).strip()
+                if ats_id in grouped and slug:
+                    grouped[ats_id].append(slug)
+            for ats_id, slugs in grouped.items():
+                var = self.data.get(f"ats_{ats_id}_slugs")
+                if var is not None:
+                    var.set("\n".join(slugs))
 
         # Preferences
         kws = cfg.get("search_keywords", [])
@@ -510,9 +556,35 @@ class WizardApp(tk.Tk):
         """Build the full configuration dict from all wizard state."""
         # Enabled platforms
         enabled = []
-        for key in ("linkedin", "indeed", "dice", "ziprecruiter"):
+        for key in (
+            "linkedin",
+            "linkedin_nodriver",
+            "indeed",
+            "dice",
+            "ziprecruiter",
+            "ats_greenhouse",
+            "ats_lever",
+            "ats_ashby",
+        ):
             if self.data[f"{key}_enabled"].get():
                 enabled.append(key)
+
+        # ATS company slugs — newline-separated text from the
+        # SitesStep text widgets gets normalized into the dict
+        # shape that the ATS adapters consume. Empty entries are
+        # dropped; dedup happens client-side at adapter load time.
+        ats_api_companies: dict[str, list[str]] = {}
+        for ats_id in ("greenhouse", "lever", "ashby"):
+            var = self.data.get(f"ats_{ats_id}_slugs")
+            if var is None:
+                continue
+            raw = var.get()
+            slugs = [
+                line.strip() for line in raw.splitlines()
+                if line.strip()
+            ]
+            if slugs:
+                ats_api_companies[ats_id] = slugs
 
         # Personal info. Start from the on-disk user_config so fields
         # the wizard UI doesn't edit (zip_code, state, street_address,
@@ -570,6 +642,7 @@ class WizardApp(tk.Tk):
 
         config = {
             "enabled_platforms": enabled,
+            "ats_api_companies": ats_api_companies,
             "personal_info": personal,
             "search_keywords": keywords,
             "location": self.data["location"].get().strip(),
