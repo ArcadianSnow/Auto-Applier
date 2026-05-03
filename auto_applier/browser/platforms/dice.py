@@ -1160,27 +1160,61 @@ class DicePlatform(JobPlatform):
             return None
 
         # Check the new tab(s) for an internal Dice apply URL.
+        #
+        # IMPORTANT: Dice's apply button hrefs at
+        # ``/job-applications/<id>/start-apply`` are a BRIDGE — when
+        # the company has chosen to handle applications through an
+        # external ATS (TEKsystems, Booz Allen, etc.) the bridge
+        # 302-redirects the new tab off-site to ``apply.teksystems.com``,
+        # ``careers.boozallen.com``, etc. Live run 2026-05-03 11:28:54
+        # showed every Dice apply being misclassified as internal
+        # because the substring check fired on the bridge URL BEFORE
+        # the redirect resolved. Result: walker filled an external
+        # company form and reported "0/27 fields, dry_run success".
+        #
+        # Defense:
+        #   1. Wait for ``load`` (not just domcontentloaded) so the
+        #      301/302 chain resolves.
+        #   2. Anchor the host to ``dice.com`` exactly, then check
+        #      the path. ``"/start-apply" in tab_url`` was too loose:
+        #      any ATS URL with that fragment matched.
+        #   3. If post-load URL is off-host, classify as external.
         new_pages = list(self.context.pages[pages_before:])
         for new_page in new_pages:
             try:
-                # Wait briefly for navigation to settle on the new tab
-                # so page.url reflects the destination, not about:blank.
+                # Wait for the FULL load (including redirects). domcontentloaded
+                # alone fires on the first DOM, before the bridge tab's
+                # JS or 30x chain redirects to the external ATS.
                 try:
                     await new_page.wait_for_load_state(
-                        "domcontentloaded", timeout=8000,
+                        "load", timeout=12000,
                     )
                 except Exception:
+                    # If load times out, fall back to whatever URL we have.
+                    # Better to misclassify than to hang the run.
                     pass
                 tab_url = new_page.url
             except Exception:
                 tab_url = ""
-            if (
-                "dice.com/job-applications" in tab_url
-                or "dice.com/dashboard/apply" in tab_url
-                or "/start-apply" in tab_url
-            ):
-                # Internal Dice apply — close all OTHER new tabs and
-                # return this one to the caller.
+            tab_url_lower = (tab_url or "").lower()
+            # Host-anchored Dice check. Parse the host out of the URL
+            # rather than substring-matching, so an external site
+            # whose URL happens to contain "dice.com" anywhere can't
+            # masquerade as internal.
+            is_internal = False
+            if tab_url_lower.startswith(("https://www.dice.com/", "https://dice.com/")):
+                # Path must be a known apply route. ``/start-apply``
+                # is allowed only when paired with the dice host.
+                path_lower = tab_url_lower.split("dice.com", 1)[1] if "dice.com" in tab_url_lower else ""
+                if (
+                    "/job-applications/" in path_lower
+                    or "/dashboard/apply" in path_lower
+                    or path_lower.startswith("/start-apply")
+                    or "/start-apply" in path_lower
+                ):
+                    is_internal = True
+            if is_internal:
+                # Close other new tabs, return this one.
                 for p in new_pages:
                     if p is new_page:
                         continue
@@ -1297,7 +1331,46 @@ class DicePlatform(JobPlatform):
         Handles: form fields, resume upload, Next/Submit buttons.
         Returns when either Submit is clicked or an error occurs.
         """
-        # SAFETY CHECK: if this is actually a signup/login page (not an
+        # SAFETY CHECK 1 — host gate. If the page navigated off
+        # dice.com between _check_ats_redirect (which saw an
+        # internal-looking bridge URL) and the start of this walk,
+        # the page is now an external company ATS. Walking it would
+        # mean filling an unknown form and (because the form filler's
+        # 'submit' detection key on any button labelled Submit/Apply)
+        # potentially declaring success on a foreign site.
+        # This is the regression that bit live-run 2026-05-03 11:28:54
+        # ("Telecom GIS" + "Mid Data Analyst" — both routed through
+        # apply.teksystems.com / careers.boozallen.com after Dice's
+        # bridge URL 302-redirected). Bail out cleanly: the engine
+        # routes requires_manual_apply to the manual-apply queue.
+        try:
+            cur_host = page.url.split("/")[2].lower() if page.url else ""
+        except Exception:
+            cur_host = ""
+        if cur_host and not (
+            cur_host == "dice.com" or cur_host.endswith(".dice.com")
+        ):
+            logger.warning(
+                "Dice: apply page is off-host (host=%s, url=%s) — "
+                "external ATS redirect that resolved AFTER bridge "
+                "tab open. Bailing to manual-apply queue.",
+                cur_host, page.url,
+            )
+            try:
+                await page.close()
+            except Exception:
+                pass
+            return ApplyResult(
+                success=False,
+                failure_reason=(
+                    f"External ATS redirect (host={cur_host}) — open "
+                    "the URL and apply manually. Auto Applier won't "
+                    "fill forms on third-party ATSes."
+                ),
+                requires_manual_apply=True,
+            )
+
+        # SAFETY CHECK 2: if this is actually a signup/login page (not an
         # apply page), bail out before we waste 8 modal-step cycles on
         # a form we can never complete. This catches the common false-
         # positive where Dice redirects to create-account and our
@@ -1768,14 +1841,30 @@ class DicePlatform(JobPlatform):
             # job-detail page; a real submission either navigates
             # to a confirmation route or closes the modal and
             # redirects. If we left the entry URL onto something
-            # plausible, treat as probable success.
+            # plausible AND we're STILL on dice.com, treat as
+            # probable success.
+            #
+            # The host check is critical defense-in-depth: live run
+            # 2026-05-03 saw Dice's apply bridge redirect to TEKsystems
+            # /BoozAllen mid-flow. Without this guard the navigation-
+            # away signal would fire on the external host's URL change
+            # and falsely declare success on a third-party site.
             try:
                 cur_url = page.url
             except Exception:
                 cur_url = pre_url
             cur_lower = cur_url.lower()
+            try:
+                cur_host = cur_url.split("/")[2].lower() if cur_url else ""
+            except Exception:
+                cur_host = ""
+            stayed_on_dice = bool(
+                cur_host
+                and (cur_host == "dice.com" or cur_host.endswith(".dice.com"))
+            )
             if (
                 cur_url != pre_url
+                and stayed_on_dice
                 and "/auth" not in cur_lower
                 and "/login" not in cur_lower
                 and "captcha" not in cur_lower

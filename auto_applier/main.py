@@ -1834,6 +1834,117 @@ def prune_failed(dry_run: bool, yes: bool):
     click.echo(f"Removed {len(failed)} failed row(s).")
 
 
+@cli.command("prune-by-job-id")
+@click.argument("job_ids", nargs=-1, required=True)
+@click.option(
+    "--dry-run", is_flag=True,
+    help="Preview what would be removed without writing the file",
+)
+@click.option(
+    "--yes", is_flag=True,
+    help="Skip the confirmation prompt",
+)
+def prune_by_job_id(job_ids: tuple[str, ...], dry_run: bool, yes: bool):
+    """Surgically remove Application rows by job_id.
+
+    Use when an apply was misclassified — for example, the
+    2026-05-03 false-applied bug where Dice's bridge URL routed
+    to an external ATS and the walker filled a foreign form,
+    marking it dry_run/applied despite filling 0 fields. Those
+    rows are status='applied' or 'dry_run', so prune-failed won't
+    touch them — but they still dedup-poison future runs of the
+    same job.
+
+    Backs up data/applications.csv to data/.backups/ before
+    rewriting. Pass one or more job_ids; matching is exact.
+
+    Example:
+
+        python -m auto_applier --cli prune-by-job-id \
+            dice-461795d3-9232-460a-bc13-998ec350c1f8 \
+            dice-a4816ecb-b039-4c6c-8db1-b49d0ca1f050
+    """
+    from shutil import copy2
+    from datetime import datetime, timezone
+    import csv as _csv
+    from auto_applier.config import APPLICATIONS_CSV, BACKUP_DIR
+
+    if not APPLICATIONS_CSV.exists():
+        click.echo("No applications.csv to prune.")
+        return
+
+    target_set = {jid.strip() for jid in job_ids if jid.strip()}
+    if not target_set:
+        click.echo("No job_ids provided.")
+        return
+
+    rows: list[dict] = []
+    fieldnames: list[str] = []
+    with open(APPLICATIONS_CSV, "r", newline="", encoding="utf-8") as f:
+        reader = _csv.DictReader(f)
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+
+    if not rows:
+        click.echo("applications.csv is empty.")
+        return
+
+    matches = [r for r in rows if (r.get("job_id") or "").strip() in target_set]
+    matches_ids = {id(r) for r in matches}
+    keep = [r for r in rows if id(r) not in matches_ids]
+
+    click.echo(
+        f"applications.csv: {len(rows)} total, "
+        f"{len(matches)} match (would remove), "
+        f"{len(keep)} kept."
+    )
+    if not matches:
+        click.echo("No matching rows. Nothing to prune.")
+        return
+
+    click.echo("\nMatching rows:")
+    for r in matches:
+        title_excerpt = (r.get("job_id") or "")[:50]
+        status = r.get("status", "?")
+        source = r.get("source", "?")
+        applied_at = r.get("applied_at", "?")
+        reason = (r.get("failure_reason") or "")[:60]
+        click.echo(
+            f"  - {title_excerpt}  status={status}  source={source}  "
+            f"at={applied_at}  reason={reason}"
+        )
+    # Report any missing job_ids so the user knows their args
+    # were processed correctly.
+    found_ids = {(r.get("job_id") or "").strip() for r in matches}
+    missing = sorted(target_set - found_ids)
+    if missing:
+        click.echo(f"\nNot found in CSV: {', '.join(missing)}")
+
+    if dry_run:
+        click.echo("\n--dry-run: no file changes made.")
+        return
+
+    if not yes:
+        if not click.confirm(
+            f"\nRemove {len(matches)} row(s)?",
+            default=False,
+        ):
+            click.echo("Aborted.")
+            return
+
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    backup = BACKUP_DIR / f"applications.{ts}.before_prune_by_job_id.csv"
+    copy2(APPLICATIONS_CSV, backup)
+    click.echo(f"Backup: {backup}")
+
+    with open(APPLICATIONS_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = _csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(keep)
+    click.echo(f"Removed {len(matches)} row(s).")
+
+
 @cli.command("prune-unanswered")
 @click.option(
     "--dry-run", is_flag=True,
