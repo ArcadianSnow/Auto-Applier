@@ -48,41 +48,125 @@ logger = logging.getLogger(__name__)
 # to type, give me jobs."
 # ----------------------------------------------------------------------
 # Live-verified 2026-05-03 against the actual ATS APIs. Each slug
-# confirmed to return >= 50 open jobs at the time of curation.
-# Removed: github, plaid (Greenhouse 404 — companies migrated off
-# the public API), netflix, shopify (Lever — companies migrated off
-# Lever entirely; their public boards return empty).
-STARTER_PACK_SLUGS: dict[str, list[str]] = {
-    "greenhouse": [
-        "stripe",       # 504 jobs (financial infrastructure)
-        "anthropic",    # 443 jobs (AI safety)
-        "cloudflare",   # 444 jobs (edge networking)
-        "datadog",      # 426 jobs (observability)
-        "airbnb",       # 235 jobs (travel)
-        "robinhood",    # 142 jobs (fintech)
-        "reddit",       # 137 jobs (social)
-        "coinbase",     # 103 jobs (crypto)
-        "dropbox",      # 101 jobs (cloud storage)
-        "discord",      # 79 jobs (chat)
-        # Plus databricks (823 jobs) and gitlab (200) — adding too
-        # many starter slugs hits the per-cycle cap; those land in
-        # "find your own" territory.
-    ],
-    "lever": [
-        "palantir",     # 235 jobs (data analytics)
-        "spotify",      # 198 jobs (audio)
-        # Lever is much less popular in 2026 than Greenhouse/Ashby.
-        # Most companies that USED Lever have migrated to Greenhouse.
-        # If a candidate finds a Lever board they want, they can add
-        # it via the paste-URL helper.
-    ],
-    "ashby": [
-        "openai",       # 671 jobs (AI)
-        "vanta",        # 146 jobs (compliance automation)
-        "ramp",         # 116 jobs (corporate cards / fintech)
-        "linear",       # 23 jobs (issue tracking)
-    ],
+# confirmed to return >= 20 open jobs at the time of curation.
+#
+# Architectural note: ATS APIs (Greenhouse/Lever/Ashby) are
+# *per-company* by design — there's no global "search all jobs
+# matching X" endpoint. We can't do a true title-based search
+# across the whole ATS. Instead, we pre-curate well-known boards
+# by category. Users pick a category that matches their target
+# role, those slugs load into the per-ATS lists, and the wizard's
+# keyword field (already used for browser-based search) acts as a
+# title filter via ats_api_base._title_matches_any.
+#
+# Each category entry:
+#   label:       short human label shown on the wizard button
+#   description: explanatory line under the button (~80 chars)
+#   boards:      list of (ats_id, slug) tuples — order doesn't
+#                matter; dedup happens at apply time.
+STARTER_PACKS_BY_CATEGORY: dict[str, dict] = {
+    "tech_generalist": {
+        "label": "Big Tech & generalist roles",
+        "description": (
+            "Stripe, Anthropic, Cloudflare, Datadog, Airbnb, "
+            "Reddit, Dropbox… general SWE / PM / ops roles."
+        ),
+        "boards": [
+            # Greenhouse heavyweights
+            ("greenhouse", "stripe"),       # 504
+            ("greenhouse", "anthropic"),    # 443
+            ("greenhouse", "cloudflare"),   # 444
+            ("greenhouse", "datadog"),      # 426
+            ("greenhouse", "airbnb"),       # 235
+            ("greenhouse", "robinhood"),    # 142
+            ("greenhouse", "reddit"),       # 137
+            ("greenhouse", "coinbase"),     # 103
+            ("greenhouse", "dropbox"),      # 101
+            ("greenhouse", "discord"),      # 79
+            # Lever (small but active)
+            ("lever", "palantir"),          # 235
+            ("lever", "spotify"),           # 198
+            # Ashby (newer cos)
+            ("ashby", "openai"),            # 671
+            ("ashby", "vanta"),             # 146
+            ("ashby", "ramp"),              # 116
+            ("ashby", "linear"),            # 23
+        ],
+    },
+    "data_ai": {
+        "label": "Data & AI / ML",
+        "description": (
+            "OpenAI, Anthropic, Mistral, Cohere, Databricks, "
+            "Harvey, ElevenLabs… data + AI-first companies."
+        ),
+        "boards": [
+            ("ashby", "openai"),            # 671 — flagship AI
+            ("ashby", "harvey"),            # 261 — legal AI
+            ("ashby", "mistral"),           # 173 — frontier LLMs
+            ("ashby", "elevenlabs"),        # 137 — audio AI
+            ("ashby", "cohere"),            # 124 — enterprise LLMs
+            ("ashby", "perplexity"),        # 68  — AI search
+            ("ashby", "abridge"),           # 66  — medical AI
+            ("ashby", "writer"),            # 48  — enterprise GenAI
+            ("ashby", "lambda"),            # 31  — GPU cloud
+            ("ashby", "modal"),             # 28  — serverless ML
+            ("greenhouse", "anthropic"),    # 443 — AI safety
+            ("greenhouse", "databricks"),   # 822 — data platform
+            ("greenhouse", "datadog"),      # 426 — observability
+            ("greenhouse", "samsara"),      # 366 — IoT data
+            ("greenhouse", "starburst"),    # 26  — data lakehouse
+        ],
+    },
+    "startups": {
+        "label": "Fast-moving startups",
+        "description": (
+            "Newer / mid-stage companies hiring across the board: "
+            "Ramp, Linear, Vanta, Modal, Discord…"
+        ),
+        "boards": [
+            ("ashby", "ramp"),              # 116
+            ("ashby", "vanta"),             # 146
+            ("ashby", "linear"),            # 23
+            ("ashby", "modal"),             # 28
+            ("ashby", "lambda"),            # 31
+            ("ashby", "writer"),            # 48
+            ("greenhouse", "discord"),      # 79
+            ("greenhouse", "robinhood"),    # 142
+            ("greenhouse", "carta"),        # 52  — equity / fintech
+            ("greenhouse", "figma"),        # 159 — design
+            ("greenhouse", "starburst"),    # 26
+        ],
+    },
 }
+
+
+def _starter_pack_slugs_for_category(category: str) -> dict[str, list[str]]:
+    """Convert a single category's ``boards`` list into the
+    ``{ats_id: [slug, ...]}`` shape the existing wizard apply
+    code expects. Dedups within each ATS, preserves order.
+
+    Pure function — kept module-level so tests can pin the shape
+    without instantiating Tk."""
+    cat = STARTER_PACKS_BY_CATEGORY.get(category, {})
+    boards = cat.get("boards", []) or []
+    grouped: dict[str, list[str]] = {}
+    seen: set[tuple[str, str]] = set()
+    for ats_id, slug in boards:
+        key = (ats_id, slug.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        grouped.setdefault(ats_id, []).append(slug)
+    return grouped
+
+
+# Backward-compat: STARTER_PACK_SLUGS was the original single-pack
+# shape. Some external callers / future tests still reference it.
+# We synthesize it from the "tech_generalist" category so it stays
+# in sync with the curated content rather than drifting.
+STARTER_PACK_SLUGS: dict[str, list[str]] = _starter_pack_slugs_for_category(
+    "tech_generalist",
+)
 
 
 # ATS URL patterns. Tuple is (ats_id, regex). The regex captures the
@@ -412,24 +496,47 @@ class SitesStep(ttk.Frame):
             anchor="w", justify="left", wraplength=720,
         ).pack(anchor="w", pady=(0, 8))
 
-        # --- Block 2: starter pack button ---
-        starter_row = tk.Frame(card, bg=BG_CARD)
-        starter_row.pack(fill="x", pady=(0, 8))
-        ttk.Button(
-            starter_row, text="Try popular companies",
-            style="Primary.TButton",
-            command=self._apply_starter_pack,
-        ).pack(side="left")
+        # --- Block 2: category-based starter packs ---
+        # ATS APIs are per-company (no global title search), so we
+        # ship curated category packs. User picks a category that
+        # matches their target role; those slugs load into the
+        # per-ATS lists. The wizard's Search Keywords field then
+        # narrows by job title via the existing word-level OR
+        # filter (see ats_api_base._title_matches_any).
         tk.Label(
-            starter_row,
+            card,
+            text="Pick a category to load curated company boards:",
+            font=FONT_SMALL, fg=TEXT, bg=BG_CARD, anchor="w",
+        ).pack(anchor="w", pady=(0, 4))
+
+        for category_id, meta in STARTER_PACKS_BY_CATEGORY.items():
+            row = tk.Frame(card, bg=BG_CARD)
+            row.pack(fill="x", pady=(0, 4))
+            ttk.Button(
+                row,
+                text=meta["label"],
+                style="Primary.TButton",
+                command=lambda c=category_id: self._apply_category_pack(c),
+            ).pack(side="left")
+            tk.Label(
+                row, text=f"  {meta['description']}",
+                font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
+                anchor="w", justify="left", wraplength=540,
+            ).pack(side="left")
+
+        # Title-search hint — explain that the keyword field on the
+        # NEXT wizard step (Preferences) does the title narrowing.
+        tk.Label(
+            card,
             text=(
-                f"  Loads {sum(len(v) for v in STARTER_PACK_SLUGS.values())} "
-                "well-known boards (Stripe, GitHub, Netflix, OpenAI, …) "
-                "into all three ATSes at once."
+                "ℹ Title search: ATS APIs don't support cross-company "
+                "search. Pick category → all those boards' jobs get "
+                "pulled → your Search Keywords (next step) narrow by "
+                "title. Try \"data analyst\" or \"frontend engineer\"."
             ),
-            font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
-            anchor="w", justify="left",
-        ).pack(side="left")
+            font=FONT_SMALL, fg=TEXT, bg=BG_CARD,
+            anchor="w", justify="left", wraplength=720,
+        ).pack(anchor="w", pady=(4, 8))
 
         # --- Block 3: paste-URL helper ---
         url_label = tk.Label(
@@ -475,17 +582,48 @@ class SitesStep(ttk.Frame):
             anchor="w", justify="left", wraplength=720,
         ).pack(anchor="w", pady=(8, 0))
 
-    def _apply_starter_pack(self) -> None:
-        """Load the curated starter slugs into all three ATS
-        StringVars and auto-enable the matching platform cards.
+    def _apply_category_pack(self, category_id: str) -> None:
+        """Load a single category's slugs into the ATS lists and
+        auto-enable the matching platform cards.
 
-        Idempotent — adds slugs without removing whatever the user
-        already typed, dedups case-insensitively, refreshes the
-        text widgets to reflect the new list, and reveals the now-
-        enabled extras.
+        Wraps :meth:`_apply_starter_pack` with category-specific
+        slugs, then surfaces a category-aware status message so
+        users see WHICH category they just loaded.
         """
+        meta = STARTER_PACKS_BY_CATEGORY.get(category_id, {})
+        if not meta:
+            return
+        slugs_by_ats = _starter_pack_slugs_for_category(category_id)
+        added = self._add_slugs_to_lists(slugs_by_ats)
+        if hasattr(self, "_url_status") and self._url_status is not None:
+            try:
+                self._url_status.configure(
+                    text=(
+                        f"✓ Loaded the '{meta.get('label', category_id)}' "
+                        f"pack — {added} new board(s) added across "
+                        f"Greenhouse / Lever / Ashby. Set your search "
+                        f"keyword on the next wizard step to narrow by "
+                        f"title."
+                    ),
+                )
+            except tk.TclError:
+                pass
+
+    def _apply_starter_pack(self) -> None:
+        """Backward-compat: load the legacy single starter pack.
+        Now equivalent to ``_apply_category_pack('tech_generalist')``.
+        """
+        self._apply_category_pack("tech_generalist")
+
+    def _add_slugs_to_lists(self, slugs_by_ats: dict[str, list[str]]) -> int:
+        """Push slugs into the per-ATS StringVars + text widgets
+        and auto-enable any newly-relevant platform cards.
+
+        Returns the number of NEW slugs added (existing ones are
+        not double-counted). Idempotent. Tk-error guarded so calls
+        from background threads don't crash if the wizard closed."""
         added_total = 0
-        for ats_id, slugs in STARTER_PACK_SLUGS.items():
+        for ats_id, slugs in slugs_by_ats.items():
             var_name = f"ats_{ats_id}_slugs"
             var = self.wizard.data.get(var_name)
             if var is None:
@@ -523,18 +661,7 @@ class SitesStep(ttk.Frame):
                 # toggle would.
                 self._on_toggle(f"ats_{ats_id}")
 
-        if hasattr(self, "_url_status") and self._url_status is not None:
-            try:
-                self._url_status.configure(
-                    text=(
-                        f"✓ Loaded the starter pack — "
-                        f"{added_total} new board(s) added across "
-                        f"Greenhouse, Lever, and Ashby. Click a card "
-                        f"below to see / edit each list."
-                    ),
-                )
-            except tk.TclError:
-                pass
+        return added_total
 
     def _add_slug_from_url(self) -> None:
         """Parse the URL in the entry box and add its slug to the

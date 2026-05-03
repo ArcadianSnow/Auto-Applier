@@ -21,6 +21,8 @@ import pytest
 
 from auto_applier.gui.steps.sites import (
     STARTER_PACK_SLUGS,
+    STARTER_PACKS_BY_CATEGORY,
+    _starter_pack_slugs_for_category,
     detect_ats_from_url,
 )
 
@@ -59,6 +61,91 @@ class TestStarterPackContent:
             f"Total starter slugs = {total}; aim for ≥12 across all 3 "
             "ATSes so users see real variety on click."
         )
+
+
+# ----------------------------------------------------------------------
+# Category packs — multiple curated starter sets by role-shape
+# ----------------------------------------------------------------------
+
+class TestCategoryPacks:
+    """ATS APIs are per-company by design — there's no global title
+    search. Category packs let users pick a role-shape (Big Tech /
+    Data+AI / Startups) and get a curated set of slugs without
+    knowing company names. The wizard's keyword field then narrows
+    by title via the existing word-level OR filter.
+    """
+
+    def test_three_categories_present(self):
+        """Tech generalist + Data/AI + Startups is the minimum
+        useful set. Pin so a future trim doesn't drop a category
+        without thinking."""
+        keys = set(STARTER_PACKS_BY_CATEGORY.keys())
+        assert "tech_generalist" in keys
+        assert "data_ai" in keys
+        assert "startups" in keys
+
+    def test_each_category_has_label_description_boards(self):
+        """Wizard UI assumes the meta dict has these keys; pin
+        the schema so a refactor doesn't crash the platforms step
+        at render time."""
+        for category_id, meta in STARTER_PACKS_BY_CATEGORY.items():
+            assert "label" in meta, f"{category_id} missing label"
+            assert "description" in meta, f"{category_id} missing description"
+            assert "boards" in meta, f"{category_id} missing boards"
+            assert isinstance(meta["boards"], list)
+            assert len(meta["boards"]) >= 5, (
+                f"{category_id} only has {len(meta['boards'])} boards; "
+                "categories need at least 5 to feel substantive."
+            )
+
+    def test_each_board_is_ats_slug_tuple(self):
+        """Every board entry must be ``(ats_id, slug)`` so the
+        wizard can index per-ATS. ats_id must be one of the three
+        we have adapters for."""
+        valid_ats = {"greenhouse", "lever", "ashby"}
+        for category_id, meta in STARTER_PACKS_BY_CATEGORY.items():
+            for entry in meta["boards"]:
+                assert isinstance(entry, tuple) and len(entry) == 2, (
+                    f"{category_id}: bad board entry {entry!r}"
+                )
+                ats_id, slug = entry
+                assert ats_id in valid_ats, (
+                    f"{category_id}: unknown ATS {ats_id!r}"
+                )
+                assert isinstance(slug, str) and slug, (
+                    f"{category_id}: empty slug for {ats_id}"
+                )
+
+    def test_category_to_dict_shape_dedups(self):
+        """``_starter_pack_slugs_for_category`` converts a category
+        list to ``{ats_id: [slug, ...]}`` and dedups within each
+        ATS. Some slugs (e.g. anthropic, openai, ramp) appear in
+        multiple categories — within ONE category they shouldn't
+        appear twice."""
+        for category_id in STARTER_PACKS_BY_CATEGORY:
+            grouped = _starter_pack_slugs_for_category(category_id)
+            for ats_id, slugs in grouped.items():
+                assert len(slugs) == len(set(s.lower() for s in slugs)), (
+                    f"{category_id}/{ats_id} has duplicate slugs: {slugs}"
+                )
+
+    def test_unknown_category_returns_empty_dict(self):
+        assert _starter_pack_slugs_for_category("nonexistent") == {}
+
+    def test_legacy_starter_pack_synced_with_tech_generalist(self):
+        """STARTER_PACK_SLUGS is now derived from the
+        tech_generalist category. Confirm the back-compat shape
+        matches what tests / external callers expect."""
+        synthesized = _starter_pack_slugs_for_category("tech_generalist")
+        assert STARTER_PACK_SLUGS == synthesized
+
+    def test_data_ai_category_includes_at_least_one_per_ats(self):
+        """The data/AI category should mix slugs from at least
+        Greenhouse and Ashby (both have AI-focused boards). Lever
+        is OK if missing — Lever has very few AI companies left."""
+        grouped = _starter_pack_slugs_for_category("data_ai")
+        assert len(grouped.get("greenhouse", [])) >= 1
+        assert len(grouped.get("ashby", [])) >= 1
 
     def test_slugs_are_lowercase_and_hyphen_safe(self):
         """Slugs are URL path segments — only ascii alphanum + hyphen
