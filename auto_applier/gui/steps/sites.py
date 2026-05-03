@@ -19,6 +19,7 @@ hit for the same listings, and competing browsers fight over the
 profile dir).
 """
 import logging
+import re
 import subprocess
 import sys
 import threading
@@ -32,6 +33,98 @@ from auto_applier.gui.styles import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ----------------------------------------------------------------------
+# Starter-pack slugs for the "Try popular companies" quick-start button.
+# Curated for tech-leaning candidates — these are well-known boards on
+# each ATS that we've manually verified produce real jobs in 2026.
+#
+# Updating this list: pick companies most relevant to the user base
+# (right now: tech / data / SWE) and verify the slug works by visiting
+# ``boards.greenhouse.io/<slug>`` etc. One-line companies only — long
+# lists hide the curation. If a friend asks "why isn't X here", they
+# can add it themselves; the starter pack is for "I have no idea what
+# to type, give me jobs."
+# ----------------------------------------------------------------------
+STARTER_PACK_SLUGS: dict[str, list[str]] = {
+    "greenhouse": [
+        "stripe", "github", "airbnb", "plaid", "robinhood",
+        "discord", "anthropic", "dropbox",
+    ],
+    "lever": [
+        "netflix", "shopify", "palantir",
+    ],
+    "ashby": [
+        "openai", "ramp", "linear", "vanta",
+    ],
+}
+
+
+# ATS URL patterns. Tuple is (ats_id, regex). The regex captures the
+# slug as group 1. We keep this list module-level so the pure parser
+# is testable without instantiating Tk.
+#
+# Pattern notes:
+#   - greenhouse: boards.greenhouse.io/<slug>[/jobs/...]
+#                 boards-api.greenhouse.io/v1/boards/<slug>/jobs
+#                 job-boards.greenhouse.io/<slug>/jobs/...
+#   - lever:      jobs.lever.co/<slug>[/<post-id>]
+#                 api.lever.co/v0/postings/<slug>?...
+#   - ashby:      jobs.ashbyhq.com/<slug>[/<post-id>]
+#                 api.ashbyhq.com/posting-api/job-board/<slug>
+_ATS_URL_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
+    ("greenhouse", re.compile(
+        r"https?://boards(?:-api)?\.greenhouse\.io/(?:v\d+/boards/)?([A-Za-z0-9_-]+)",
+        re.IGNORECASE,
+    )),
+    ("greenhouse", re.compile(
+        r"https?://job-boards\.greenhouse\.io/([A-Za-z0-9_-]+)",
+        re.IGNORECASE,
+    )),
+    ("lever", re.compile(
+        r"https?://(?:jobs|api)\.lever\.co/(?:v\d+/postings/)?([A-Za-z0-9_-]+)",
+        re.IGNORECASE,
+    )),
+    ("ashby", re.compile(
+        r"https?://(?:jobs\.ashbyhq\.com|api\.ashbyhq\.com/posting-api/job-board)/([A-Za-z0-9_-]+)",
+        re.IGNORECASE,
+    )),
+)
+
+
+def detect_ats_from_url(url: str) -> tuple[str, str] | None:
+    """Parse a careers-page URL and return ``(ats_id, slug)`` if
+    recognized, ``None`` otherwise.
+
+    Recognized hosts (any path on these is fair game):
+      - boards.greenhouse.io / boards-api.greenhouse.io /
+        job-boards.greenhouse.io
+      - jobs.lever.co / api.lever.co
+      - jobs.ashbyhq.com / api.ashbyhq.com
+
+    The slug is the first ``[A-Za-z0-9_-]+`` segment after the host.
+    Some patterns nest the slug after a versioned API prefix (e.g.
+    ``boards-api.greenhouse.io/v1/boards/<slug>/jobs``); the regex
+    handles that.
+
+    Pure function, no I/O. Returns ``None`` for unrecognized URLs
+    so the caller can show "we don't know that site yet" rather
+    than misclassify.
+    """
+    if not url:
+        return None
+    cleaned = url.strip()
+    # Tolerate users pasting the URL with surrounding whitespace,
+    # quote chars from a copy/paste, or trailing punctuation.
+    cleaned = cleaned.strip("\"'<> \t\n\r")
+    for ats_id, pattern in _ATS_URL_PATTERNS:
+        m = pattern.match(cleaned)
+        if m:
+            slug = m.group(1).strip()
+            if slug:
+                return (ats_id, slug)
+    return None
 
 
 # Platform metadata. Tuple shape is intentional; new fields opt-in
@@ -92,29 +185,29 @@ PLATFORMS = [
     ),
     (
         "ats_greenhouse",
-        "Greenhouse boards (no browser, JSON API)  ⚡",
-        "Pulls jobs directly from companies hosted on Greenhouse "
-        "(boards.greenhouse.io). No browser, no anti-bot, no rate "
-        "limit. Add the company slugs below — find a slug by "
-        "visiting a posting URL like 'boards.greenhouse.io/STRIPE/...' "
-        "where STRIPE is the slug.",
+        "Greenhouse boards (Stripe, GitHub, Airbnb, Plaid, …)  ⚡",
+        "Greenhouse hosts careers pages for thousands of companies. "
+        "Use the Quick-start card above to add boards in one click, "
+        "or list company slugs below (one per line). Tip: the slug "
+        "is the company name in URLs like boards.greenhouse.io/<slug>.",
         {"ats": True, "ats_id": "greenhouse"},
     ),
     (
         "ats_lever",
-        "Lever boards (no browser, JSON API)  ⚡",
-        "Pulls jobs from companies hosted on Lever (jobs.lever.co). "
-        "Same fast, anti-bot-free flow as Greenhouse. Slug is the "
-        "second URL segment, e.g. 'jobs.lever.co/NETFLIX/...' "
-        "where NETFLIX is the slug.",
+        "Lever boards (Netflix, Shopify, Palantir, …)  ⚡",
+        "Lever hosts careers pages for many tech companies. Use the "
+        "Quick-start card above to add boards in one click, or list "
+        "company slugs below (one per line). Tip: the slug is the "
+        "company name in URLs like jobs.lever.co/<slug>.",
         {"ats": True, "ats_id": "lever"},
     ),
     (
         "ats_ashby",
-        "Ashby boards (no browser, JSON API)  ⚡",
-        "Pulls jobs from companies hosted on Ashby (jobs.ashbyhq.com). "
-        "Slug is the path segment, e.g. 'jobs.ashbyhq.com/OPENAI' "
-        "where OPENAI is the slug.",
+        "Ashby boards (OpenAI, Ramp, Linear, Vanta, …)  ⚡",
+        "Ashby is a newer ATS used by many AI-era startups. Use the "
+        "Quick-start card above to add boards in one click, or list "
+        "company slugs below (one per line). Tip: the slug is the "
+        "company name in URLs like jobs.ashbyhq.com/<slug>.",
         {"ats": True, "ats_id": "ashby"},
     ),
 ]
@@ -165,6 +258,14 @@ class SitesStep(ttk.Frame):
             fill="both", expand=True, padx=PAD_X, pady=(0, PAD_Y),
         )
         _canvas, inner = make_scrollable(scroll_container)
+
+        # Quick-start card for the ATS API discovery channels. Comes
+        # BEFORE the platform cards because the user has to understand
+        # the ATS concept before deciding whether to enable Greenhouse
+        # / Lever / Ashby. Without this card the cards below were
+        # presenting "type slugs here" with no context — friends had
+        # no idea what a slug was or how to find one.
+        self._build_ats_quickstart_card(inner)
 
         # Platform cards
         for key, name, desc, options in PLATFORMS:
@@ -232,6 +333,283 @@ class SitesStep(ttk.Frame):
     # ------------------------------------------------------------------
     # Per-card extras
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # ATS quick-start card (above the platform cards)
+    # ------------------------------------------------------------------
+
+    def _build_ats_quickstart_card(self, parent: tk.Widget) -> None:
+        """Friendly intro to the ATS API discovery feature.
+
+        Three blocks:
+
+          1. **What this is** — one-paragraph plain-English
+             explanation of "ATS API discovery" so users without a
+             recruiting background know what they're enabling.
+          2. **Try popular companies** — single button that loads
+             curated starter slugs into all three ATS StringVars
+             AND auto-enables the corresponding platform cards.
+             Lets a user with zero research see real jobs on the
+             first run.
+          3. **Add by URL** — paste any careers-page URL (Greenhouse,
+             Lever, or Ashby), we auto-detect the ATS and slug. No
+             knowledge of "what a slug is" required.
+
+        Both 2 and 3 are fail-soft — they never crash on a malformed
+        input; they show a friendly message and leave existing slug
+        lists alone.
+        """
+        card = tk.Frame(
+            parent, bg=BG_CARD,
+            highlightbackground=PRIMARY, highlightthickness=1,
+            padx=16, pady=12,
+        )
+        card.pack(fill="x", padx=4, pady=(0, 8))
+
+        # --- Block 1: explainer ---
+        tk.Label(
+            card, text="✨ Quick-start: get jobs from company boards",
+            font=FONT_SUBHEADING, fg=PRIMARY, bg=BG_CARD,
+            anchor="w",
+        ).pack(anchor="w", pady=(0, 4))
+
+        tk.Label(
+            card,
+            text=(
+                "Many companies post jobs through one of three "
+                "Applicant Tracking Systems — Greenhouse, Lever, or "
+                "Ashby. Auto Applier can pull jobs straight from "
+                "those systems with no browser, no rate limits, and "
+                "no anti-bot risk. You just need to tell us WHICH "
+                "companies to watch (their identifier on each system, "
+                "called a \"slug\")."
+            ),
+            font=FONT_SMALL, fg=TEXT, bg=BG_CARD,
+            anchor="w", justify="left", wraplength=720,
+        ).pack(anchor="w", pady=(0, 8))
+
+        # --- Block 2: starter pack button ---
+        starter_row = tk.Frame(card, bg=BG_CARD)
+        starter_row.pack(fill="x", pady=(0, 8))
+        ttk.Button(
+            starter_row, text="Try popular companies",
+            style="Primary.TButton",
+            command=self._apply_starter_pack,
+        ).pack(side="left")
+        tk.Label(
+            starter_row,
+            text=(
+                f"  Loads {sum(len(v) for v in STARTER_PACK_SLUGS.values())} "
+                "well-known boards (Stripe, GitHub, Netflix, OpenAI, …) "
+                "into all three ATSes at once."
+            ),
+            font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
+            anchor="w", justify="left",
+        ).pack(side="left")
+
+        # --- Block 3: paste-URL helper ---
+        url_label = tk.Label(
+            card, text="Or paste a company's careers URL:",
+            font=FONT_SMALL, fg=TEXT, bg=BG_CARD,
+            anchor="w",
+        )
+        url_label.pack(anchor="w", pady=(4, 2))
+
+        url_row = tk.Frame(card, bg=BG_CARD)
+        url_row.pack(fill="x")
+        self._url_entry = ttk.Entry(url_row, width=64, font=FONT_BODY)
+        self._url_entry.pack(side="left", fill="x", expand=True)
+        # Hitting Return runs the same handler as the button.
+        self._url_entry.bind(
+            "<Return>", lambda _e: self._add_slug_from_url(),
+        )
+        ttk.Button(
+            url_row, text="Add",
+            command=self._add_slug_from_url,
+        ).pack(side="left", padx=(8, 0))
+
+        # Status line for paste-URL feedback. Shows "✓ Added stripe
+        # to Greenhouse" or "✗ Couldn't recognize this URL" inline.
+        self._url_status = tk.Label(
+            card, text="",
+            font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
+            anchor="w", justify="left", wraplength=720,
+        )
+        self._url_status.pack(anchor="w", pady=(2, 0))
+
+        # Help footnote — tells users where to look for slugs if
+        # they want to expand beyond the starter pack.
+        tk.Label(
+            card,
+            text=(
+                "Need to find a slug yourself? Visit the company's "
+                "careers page. If the URL contains "
+                "\"boards.greenhouse.io/X\", \"jobs.lever.co/X\", or "
+                "\"jobs.ashbyhq.com/X\", that X is the slug."
+            ),
+            font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
+            anchor="w", justify="left", wraplength=720,
+        ).pack(anchor="w", pady=(8, 0))
+
+    def _apply_starter_pack(self) -> None:
+        """Load the curated starter slugs into all three ATS
+        StringVars and auto-enable the matching platform cards.
+
+        Idempotent — adds slugs without removing whatever the user
+        already typed, dedups case-insensitively, refreshes the
+        text widgets to reflect the new list, and reveals the now-
+        enabled extras.
+        """
+        added_total = 0
+        for ats_id, slugs in STARTER_PACK_SLUGS.items():
+            var_name = f"ats_{ats_id}_slugs"
+            var = self.wizard.data.get(var_name)
+            if var is None:
+                continue
+            existing_text = var.get()
+            existing_set = {
+                line.strip().lower() for line in existing_text.splitlines()
+                if line.strip()
+            }
+            new_lines = list(existing_text.splitlines()) if existing_text else []
+            for slug in slugs:
+                if slug.lower() in existing_set:
+                    continue
+                new_lines.append(slug)
+                existing_set.add(slug.lower())
+                added_total += 1
+            joined = "\n".join(line for line in new_lines if line.strip())
+            var.set(joined)
+
+            # Sync the text widget (the StringVar isn't bidirectional
+            # with Text widgets — we built our own one-way sync).
+            text_widget = getattr(self, f"_ats_text_{ats_id}", None)
+            if text_widget is not None:
+                try:
+                    text_widget.delete("1.0", "end")
+                    text_widget.insert("1.0", joined)
+                except tk.TclError:
+                    pass
+
+            # Auto-enable the corresponding platform card.
+            enabled_var = self.wizard.data.get(f"ats_{ats_id}_enabled")
+            if enabled_var is not None and not enabled_var.get():
+                enabled_var.set(True)
+                # Reveal the extras frame the same way a manual
+                # toggle would.
+                self._on_toggle(f"ats_{ats_id}")
+
+        if hasattr(self, "_url_status") and self._url_status is not None:
+            try:
+                self._url_status.configure(
+                    text=(
+                        f"✓ Loaded the starter pack — "
+                        f"{added_total} new board(s) added across "
+                        f"Greenhouse, Lever, and Ashby. Click a card "
+                        f"below to see / edit each list."
+                    ),
+                )
+            except tk.TclError:
+                pass
+
+    def _add_slug_from_url(self) -> None:
+        """Parse the URL in the entry box and add its slug to the
+        right ATS list (auto-enabling the platform if needed).
+
+        Recognized URLs: Greenhouse / Lever / Ashby boards. Any
+        other URL gets a friendly "we don't recognize that site"
+        message — no crash.
+        """
+        if not hasattr(self, "_url_entry") or not hasattr(self, "_url_status"):
+            return
+        try:
+            raw_url = self._url_entry.get()
+        except tk.TclError:
+            return
+        url = (raw_url or "").strip()
+        if not url:
+            self._url_status.configure(
+                text="(paste a URL like https://boards.greenhouse.io/stripe)",
+            )
+            return
+
+        detected = detect_ats_from_url(url)
+        if detected is None:
+            self._url_status.configure(
+                text=(
+                    "✗ We don't recognize that URL. It needs to be a "
+                    "Greenhouse, Lever, or Ashby board (host like "
+                    "boards.greenhouse.io, jobs.lever.co, or "
+                    "jobs.ashbyhq.com). For other companies, you'll "
+                    "have to apply manually for now."
+                ),
+            )
+            return
+
+        ats_id, slug = detected
+        var_name = f"ats_{ats_id}_slugs"
+        var = self.wizard.data.get(var_name)
+        if var is None:
+            self._url_status.configure(
+                text=f"(internal error: no var for {ats_id})",
+            )
+            return
+
+        existing_text = var.get()
+        existing_set = {
+            line.strip().lower() for line in existing_text.splitlines()
+            if line.strip()
+        }
+        if slug.lower() in existing_set:
+            self._url_status.configure(
+                text=(
+                    f"⚠ '{slug}' is already in your "
+                    f"{ats_id.title()} list — no change."
+                ),
+            )
+            # Still auto-enable the ATS card if it's off — user
+            # might have added the slug manually but forgotten to
+            # tick the platform.
+            self._auto_enable_ats(ats_id)
+            return
+
+        new_lines = list(existing_text.splitlines()) if existing_text else []
+        new_lines.append(slug)
+        joined = "\n".join(line for line in new_lines if line.strip())
+        var.set(joined)
+
+        # Sync the text widget so the user sees their slug appear
+        # in the ATS card below.
+        text_widget = getattr(self, f"_ats_text_{ats_id}", None)
+        if text_widget is not None:
+            try:
+                text_widget.delete("1.0", "end")
+                text_widget.insert("1.0", joined)
+            except tk.TclError:
+                pass
+
+        self._auto_enable_ats(ats_id)
+
+        # Clear the entry so the user can paste another URL.
+        try:
+            self._url_entry.delete(0, "end")
+        except tk.TclError:
+            pass
+        self._url_status.configure(
+            text=(
+                f"✓ Added '{slug}' to your {ats_id.title()} list. "
+                f"Add more URLs above, or scroll down to see the "
+                f"{ats_id.title()} card."
+            ),
+        )
+
+    def _auto_enable_ats(self, ats_id: str) -> None:
+        """If the ATS platform isn't enabled yet, enable it AND
+        reveal its slug-list extras frame. Idempotent."""
+        enabled_var = self.wizard.data.get(f"ats_{ats_id}_enabled")
+        if enabled_var is not None and not enabled_var.get():
+            enabled_var.set(True)
+            self._on_toggle(f"ats_{ats_id}")
 
     def _build_ats_extra(
         self, parent: tk.Widget, platform_key: str, ats_id: str,
