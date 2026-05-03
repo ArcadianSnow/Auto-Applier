@@ -263,6 +263,35 @@ class DashboardWindow(tk.Toplevel):
                 "status": status_lbl,
             }
 
+        # --- Reasoning panel ---
+        # Surfaces the dimensional breakdown of the most recently
+        # scored job. Per Tier 4 research feedback: the trust gap
+        # for these tools is "why did it pick THAT?". The
+        # multi-axis scoring already computes per-dimension
+        # rationale; this panel just exposes it. Read-only;
+        # `cli why <job_id>` is the persistent-history version.
+        reasoning_frame = tk.Frame(self, bg=BG)
+        reasoning_frame.pack(fill="x", padx=PAD_X, pady=(4, 0))
+        tk.Label(
+            reasoning_frame, text="Last Decision",
+            font=FONT_SUBHEADING, fg=PRIMARY, bg=BG,
+        ).pack(anchor="w", pady=(0, 4))
+        # 4-line text widget — wide enough for one rationale line
+        # per top dimension without dominating the dashboard.
+        self._reasoning_text = tk.Text(
+            reasoning_frame,
+            font=FONT_MONO,
+            bg=BG_CARD,
+            fg=TEXT,
+            wrap="word",
+            state="disabled",
+            height=4,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=BORDER,
+        )
+        self._reasoning_text.pack(fill="x")
+
         # --- Activity log ---
         log_frame = tk.Frame(self, bg=BG)
         log_frame.pack(fill="both", expand=True, padx=PAD_X, pady=(4, 8))
@@ -508,10 +537,45 @@ class DashboardWindow(tk.Toplevel):
             s = getattr(score, "score", 0)
             decision = getattr(score, "decision", None)
             d_name = decision.value if decision else "?"
+            resume_label = getattr(score, "resume_label", "") or "?"
+
+            # Find the top contributing dimension so the user sees
+            # WHY the score landed where it did at a glance. Using
+            # .total here would just re-show the headline number;
+            # the per-dimension peek is what makes the log useful
+            # for "did this match my skills or just my title?"-style
+            # questions. Falls back silently when dimensions are
+            # missing (rule-based fallback or legacy rows).
+            dimensions = getattr(score, "dimensions", None) or []
+            top_line = ""
+            try:
+                if dimensions:
+                    top = max(
+                        dimensions,
+                        key=lambda d: float(getattr(d, "score", 0))
+                        * float(getattr(d, "weight", 0)),
+                    )
+                    name = getattr(top, "name", "?")
+                    top_score = float(getattr(top, "score", 0))
+                    top_line = f"  top={name}={top_score:.1f}"
+            except Exception:
+                top_line = ""
+
             self.after(0, lambda: self.log(
-                f"  Scored: {title} -- {s}/10 ({d_name})", "score"
+                f"  Scored: {title} -- {s}/10 ({d_name}) "
+                f"[resume={resume_label}]{top_line}", "score"
             ))
             self.after(0, lambda: self._update_score(s))
+            # Hand off the full breakdown to the reasoning panel
+            # (if present). Wrapped in try so panel-less builds /
+            # tests don't choke.
+            try:
+                self.after(
+                    0,
+                    lambda j=job, sc=score: self._update_reasoning(j, sc),
+                )
+            except Exception:
+                pass
 
     def _on_user_review(self, **kw):
         """Increment the pending-review counter and update the log.
@@ -720,6 +784,64 @@ class DashboardWindow(tk.Toplevel):
         self._score_count += 1
         avg = self._score_sum / self._score_count
         self._update_stat("score_avg", f"{avg:.1f}")
+
+    def _update_reasoning(self, job, score) -> None:
+        """Render the per-dimension breakdown for the most-recently
+        scored job into the Reasoning panel.
+
+        Best-effort: any AttributeError or missing-field condition
+        falls through to a brief "couldn't render" message rather
+        than crashing the dashboard. The CLI ``why <job_id>``
+        command is the persistent / authoritative view; this panel
+        is just a live mirror.
+        """
+        widget = getattr(self, "_reasoning_text", None)
+        if widget is None:
+            return
+        try:
+            title = (getattr(job, "title", "") or "Unknown")[:60]
+            company = (getattr(job, "company", "") or "")[:40]
+            decision = getattr(score, "decision", None)
+            d_name = decision.value if decision else "?"
+            total = getattr(score, "score", 0)
+            resume = getattr(score, "resume_label", "") or "?"
+            dimensions = getattr(score, "dimensions", None) or []
+
+            lines: list[str] = []
+            header = (
+                f"{title}{(' @ ' + company) if company else ''}  "
+                f"-> {total}/10  ({d_name})  resume={resume}"
+            )
+            lines.append(header)
+            if dimensions:
+                # Top 3 dimensions by weighted contribution.
+                ranked = sorted(
+                    dimensions,
+                    key=lambda d: float(getattr(d, "score", 0))
+                    * float(getattr(d, "weight", 0)),
+                    reverse=True,
+                )[:3]
+                for d in ranked:
+                    name = getattr(d, "name", "?")
+                    s = float(getattr(d, "score", 0))
+                    w = float(getattr(d, "weight", 0))
+                    lines.append(
+                        f"  {name:14s}  score={s:4.1f}  weight={w:.2f}  "
+                        f"contrib={s*w:4.2f}"
+                    )
+
+            widget.configure(state="normal")
+            widget.delete("1.0", "end")
+            widget.insert("1.0", "\n".join(lines))
+            widget.configure(state="disabled")
+        except Exception:
+            try:
+                widget.configure(state="normal")
+                widget.delete("1.0", "end")
+                widget.insert("1.0", "(reasoning unavailable for this job)")
+                widget.configure(state="disabled")
+            except Exception:
+                pass
 
     def _increment_applied(self) -> None:
         self._applied += 1

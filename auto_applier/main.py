@@ -1523,6 +1523,106 @@ def show(job_id: str):
 
 
 @cli.command()
+@click.argument("job_id")
+def why(job_id: str):
+    """Explain why a job was scored / applied / skipped.
+
+    Reads the persisted scoring breakdown from ``applications.csv``
+    (the ``dimensions_json`` field captures the full multi-axis
+    rationale at apply time). Prints each dimension with its weight,
+    score, weighted contribution, and the LLM's per-axis explanation.
+
+    Useful when the user asks "why did the bot pick this resume?"
+    or "why did it skip a job that looked perfect?". Everything
+    needed is already saved — this is just the read-side view.
+    """
+    import json as _json
+    from auto_applier.analysis.observability import get_job_detail
+
+    detail = get_job_detail(job_id)
+    if not detail:
+        click.echo(f"No job with id '{job_id}'.")
+        return
+
+    apps = detail.get("applications") or []
+    if not apps:
+        click.echo(
+            f"Job '{job_id}' exists but was never scored — no Application "
+            f"row was written for it (likely deduped or outside budget)."
+        )
+        return
+
+    # Most recent application first; show the latest decision when
+    # there are multiple (continuous-run mode can produce more than
+    # one row per job over time).
+    apps.sort(key=lambda a: a.get("applied_at", ""), reverse=True)
+    app = apps[0]
+    job_rows = detail.get("jobs") or []
+    job_title = (job_rows[0].get("title") if job_rows else "?") or "?"
+    job_company = (job_rows[0].get("company") if job_rows else "?") or "?"
+
+    click.echo(f"\n=== Why: {job_title} @ {job_company} ===")
+    click.echo(f"Job id:       {job_id}")
+    click.echo(f"Status:       {app.get('status', '?')}")
+    click.echo(f"Source:       {app.get('source', '?')}")
+    click.echo(f"Resume used:  {app.get('resume_used', '?')}")
+    click.echo(f"Total score:  {app.get('score', 0)} / 10")
+    click.echo(f"Applied at:   {app.get('applied_at', '?')}")
+    if app.get("failure_reason"):
+        click.echo(f"Failure:      {app['failure_reason']}")
+    if app.get("outcome") and app.get("outcome") != "pending":
+        click.echo(
+            f"Outcome:      {app.get('outcome', '?')}"
+            + (f" ({app['outcome_at']})" if app.get("outcome_at") else "")
+        )
+
+    # Decode dimension breakdown if persisted.
+    dimensions_raw = app.get("dimensions_json") or ""
+    if not dimensions_raw:
+        click.echo(
+            "\n(No dimensional breakdown saved — this Application row "
+            "was created before multi-axis scoring shipped, or via the "
+            "rule-based fallback.)"
+        )
+        return
+    try:
+        dims = _json.loads(dimensions_raw)
+    except (ValueError, TypeError):
+        click.echo("\n(dimensions_json is malformed — can't decode.)")
+        return
+    if not isinstance(dims, list) or not dims:
+        click.echo("\n(No dimensional breakdown — empty list.)")
+        return
+
+    click.echo("\n[Dimensions — sorted by contribution]")
+    # Sort by weighted contribution descending so the user sees
+    # what drove the decision first.
+    def _weighted(d):
+        return float(d.get("score", 0)) * float(d.get("weight", 0))
+    dims_sorted = sorted(dims, key=_weighted, reverse=True)
+    name_w = max(len(str(d.get("name", ""))) for d in dims_sorted)
+    name_w = min(max(name_w, 8), 24)
+    for d in dims_sorted:
+        name = str(d.get("name", "?"))[:name_w]
+        score = float(d.get("score", 0))
+        weight = float(d.get("weight", 0))
+        weighted = score * weight
+        explanation = (d.get("explanation") or "").strip()
+        click.echo(
+            f"  {name.ljust(name_w)}  score={score:4.1f}/10  "
+            f"weight={weight:.2f}  → {weighted:4.2f}"
+        )
+        if explanation:
+            # Wrap rationale at ~76 chars, indenting continuation
+            # lines so the output stays scannable.
+            import textwrap as _tw
+            for line in _tw.wrap(explanation, width=76):
+                click.echo(f"      {line}")
+
+    click.echo()  # trailing blank line for readability
+
+
+@cli.command()
 @click.option(
     "--output", "-o", default="auto_applier_export.json",
     help="Output file path (default: auto_applier_export.json)",

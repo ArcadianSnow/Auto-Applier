@@ -17,6 +17,7 @@ GENERATED_RESUMES_DIR = PROFILES_DIR / "generated"
 RESEARCH_DIR = DATA_DIR / "research"
 LOGS_DIR = DATA_DIR / "logs"
 COVER_LETTERS_DIR = DATA_DIR / "cover_letters"
+OUTREACH_DIR = DATA_DIR / "outreach"
 
 # CSV data files
 JOBS_CSV = DATA_DIR / "jobs.csv"
@@ -28,7 +29,7 @@ ANSWERS_FILE = DATA_DIR / "answers.json"
 UNANSWERED_FILE = DATA_DIR / "unanswered.json"
 
 # Ensure data directories exist
-for d in [DATA_DIR, BROWSER_PROFILE_DIR, RESUMES_DIR, CONVERTED_RESUMES_DIR, PROFILES_DIR, CACHE_DIR, BACKUP_DIR, GENERATED_RESUMES_DIR, RESEARCH_DIR, LOGS_DIR, COVER_LETTERS_DIR]:
+for d in [DATA_DIR, BROWSER_PROFILE_DIR, RESUMES_DIR, CONVERTED_RESUMES_DIR, PROFILES_DIR, CACHE_DIR, BACKUP_DIR, GENERATED_RESUMES_DIR, RESEARCH_DIR, LOGS_DIR, COVER_LETTERS_DIR, OUTREACH_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # Load .env from project root
@@ -38,6 +39,14 @@ load_dotenv(PROJECT_ROOT / ".env")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
 OLLAMA_MIN_VERSION = "0.8.0"  # Minimum Ollama version for Gemma 4 support
+
+# Whether the engine generates a LinkedIn outreach message after each
+# successful application. Default off — outreach involves messaging
+# real humans on a third-party platform, so it's opt-in. When on, the
+# engine spawns a background task per applied job (same pattern as
+# story-bank) and writes the message to data/outreach/<job_id>.txt
+# for the user to copy/paste into LinkedIn. We never auto-send.
+DEFAULT_AUTO_OUTREACH = False
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 

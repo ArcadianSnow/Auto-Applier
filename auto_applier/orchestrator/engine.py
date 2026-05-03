@@ -1233,6 +1233,21 @@ class ApplicationEngine:
                         ),
                         name=f"story-gen:{job.job_id}",
                     ))
+                    # Optional outreach generation. Off by default —
+                    # involves messaging real humans on a third-party
+                    # platform, so we don't enable it without the
+                    # user's explicit opt-in via auto_outreach in
+                    # user_config.json. Output is text only; never
+                    # auto-sent.
+                    from auto_applier.config import DEFAULT_AUTO_OUTREACH
+                    if self.config.get("auto_outreach", DEFAULT_AUTO_OUTREACH):
+                        self._background_tasks.append(asyncio.create_task(
+                            self._generate_outreach_for_job(
+                                resume_text=resume_text,
+                                job=job,
+                            ),
+                            name=f"outreach:{job.job_id}",
+                        ))
 
     # ------------------------------------------------------------------
     # Helpers
@@ -1283,6 +1298,67 @@ class ApplicationEngine:
         except Exception as exc:
             logger.warning(
                 "Story generation failed for %s @ %s (job_id=%s): %s",
+                job.title[:50], job.company[:40], job.job_id, exc,
+            )
+
+    async def _generate_outreach_for_job(
+        self,
+        resume_text: str,
+        job,
+    ) -> None:
+        """Background-task body for LinkedIn outreach generation.
+
+        Off-by-default opt-in. When enabled, generates a connection-
+        request message (~280 chars, LinkedIn cap) for each successful
+        application and writes it to ``data/outreach/<job_id>.txt`` so
+        the user can copy/paste it themselves. We never auto-send;
+        messaging real humans is the user's call.
+
+        Failure is silent (logged at WARNING) so outreach issues
+        don't affect the run's success count.
+        """
+        try:
+            from auto_applier.config import OUTREACH_DIR
+            from auto_applier.resume.outreach import OutreachWriter
+
+            writer = OutreachWriter(self.router)
+            message = await writer.generate(
+                resume_text=resume_text,
+                job_description=job.description,
+                company_name=job.company,
+                job_title=job.title,
+            )
+            if not message:
+                logger.warning(
+                    "Outreach: empty message for %s @ %s (job_id=%s) — "
+                    "LLM may be down or content-filtered.",
+                    job.title[:50], job.company[:40], job.job_id,
+                )
+                return
+            OUTREACH_DIR.mkdir(parents=True, exist_ok=True)
+            # Sanitize job_id for filesystem use — IDs from ATS
+            # adapters can contain slashes etc.
+            safe_id = "".join(
+                c if c.isalnum() or c in "-_" else "_"
+                for c in (job.job_id or "unknown")
+            )[:120]
+            out_path = OUTREACH_DIR / f"{safe_id}.txt"
+            header = (
+                f"# Outreach draft\n"
+                f"# Job: {job.title} @ {job.company}\n"
+                f"# URL: {job.url}\n"
+                f"# Edit before sending. Never auto-sent.\n\n"
+            )
+            out_path.write_text(header + message + "\n", encoding="utf-8")
+            logger.info(
+                "Outreach: wrote draft for %s @ %s -> %s",
+                job.title[:50], job.company[:40], out_path,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Outreach generation failed for %s @ %s (job_id=%s): %s",
                 job.title[:50], job.company[:40], job.job_id, exc,
             )
 
