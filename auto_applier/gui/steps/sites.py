@@ -28,7 +28,7 @@ from tkinter import messagebox, ttk
 from auto_applier.gui.styles import (
     BG, BG_CARD, PRIMARY, TEXT, TEXT_LIGHT, BORDER,
     FONT_HEADING, FONT_SUBHEADING, FONT_BODY, FONT_SMALL,
-    PAD_X, PAD_Y,
+    PAD_X, PAD_Y, make_scrollable,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,7 +140,7 @@ class SitesStep(ttk.Frame):
         self._build()
 
     def _build(self) -> None:
-        # Heading
+        # Heading (outside the scroll area so it stays pinned)
         ttk.Label(
             self, text="Pick which job sites to use", style="Heading.TLabel",
         ).pack(anchor="w", padx=PAD_X, pady=(PAD_Y, 4))
@@ -156,13 +156,23 @@ class SitesStep(ttk.Frame):
             style="Small.TLabel",
         ).pack(anchor="w", padx=PAD_X, pady=(0, PAD_Y))
 
+        # Scroll container — 8 platform cards now overflow the wizard at
+        # default size, especially on smaller monitors. Mirror the
+        # personal/answers/ready steps' pattern so the user can always
+        # reach the cards below the fold.
+        scroll_container = ttk.Frame(self)
+        scroll_container.pack(
+            fill="both", expand=True, padx=PAD_X, pady=(0, PAD_Y),
+        )
+        _canvas, inner = make_scrollable(scroll_container)
+
         # Platform cards
         for key, name, desc, options in PLATFORMS:
             card = tk.Frame(
-                self, bg=BG_CARD, highlightbackground=BORDER,
+                inner, bg=BG_CARD, highlightbackground=BORDER,
                 highlightthickness=1, padx=16, pady=12,
             )
-            card.pack(fill="x", padx=PAD_X, pady=4)
+            card.pack(fill="x", padx=4, pady=4)
 
             var = self.wizard.data[f"{key}_enabled"]
 
@@ -197,9 +207,11 @@ class SitesStep(ttk.Frame):
             if key in self._extras and var.get():
                 self._extras[key].pack(fill="x", padx=(24, 0), pady=(8, 0))
 
-        # Note
-        note_frame = tk.Frame(self, bg=BG)
-        note_frame.pack(fill="x", padx=PAD_X, pady=(PAD_Y, 0))
+        # Note — packed inside `inner` (not `self`) so it scrolls with
+        # the cards above it. On small monitors the note is part of
+        # what the user has to scroll to reach.
+        note_frame = tk.Frame(inner, bg=BG)
+        note_frame.pack(fill="x", padx=4, pady=(PAD_Y, 4))
 
         tk.Label(
             note_frame,

@@ -88,10 +88,30 @@ class ReadyStep(ttk.Frame):
             "something (for example, after turning on the AI).",
         )
 
+        # Close (right-most)
         ttk.Button(
             btn_frame, text="Close",
             command=self.wizard.destroy,
         ).pack(side="right")
+
+        # Save settings — explicit "save without running" path. Both
+        # launch buttons (Start / Test) call save_config internally,
+        # but a user who just wants to update their config and come
+        # back later needed a button that wasn't hidden inside a
+        # launch action. Lives between the launch buttons and Close
+        # so it's the obvious "I'm done editing" affordance.
+        save_btn = ttk.Button(
+            btn_frame, text="Save settings",
+            style="Primary.TButton",
+            command=self._save_only,
+        )
+        save_btn.pack(side="right", padx=(0, 8))
+        Tooltip(
+            save_btn,
+            "Save your settings without starting a run. Use this when "
+            "you've changed something on an earlier page and want to "
+            "make sure it's persisted before closing.",
+        )
 
         # ------------------------------------------------------------------
         # After-Run tools — surfaces the new differentiation features
@@ -385,6 +405,34 @@ class ReadyStep(ttk.Frame):
     # ------------------------------------------------------------------
     # Launch
     # ------------------------------------------------------------------
+
+    def _save_only(self) -> None:
+        """Persist all wizard state without launching a run.
+
+        Mirrors the save semantics of ``_launch`` (config + answers
+        both written, with a friendly error dialog if disk is read-
+        only) but stops there — no dashboard, no engine.
+        """
+        try:
+            self.wizard.save_config()
+            self.wizard.save_answers()
+        except Exception as exc:
+            messagebox.showerror(
+                "Couldn't save",
+                (
+                    "Auto Applier couldn't save your settings. This "
+                    "usually means the data folder is read-only. Error "
+                    f"details:\n\n{exc}"
+                ),
+                parent=self.wizard,
+            )
+            return
+        messagebox.showinfo(
+            "Saved",
+            "Your settings have been saved. You can close the wizard "
+            "or come back later to make more changes.",
+            parent=self.wizard,
+        )
 
     def _launch(self, dry_run: bool) -> None:
         """Save all config and open the dashboard."""

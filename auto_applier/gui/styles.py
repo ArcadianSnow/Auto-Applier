@@ -307,7 +307,7 @@ def make_scrollable(parent: tk.Widget) -> tuple[tk.Canvas, ttk.Frame]:
         except Exception:
             return
         try:
-            # widget position relative to canvas
+            # widget position relative to canvas viewport
             wy = widget.winfo_rooty() - canvas.winfo_rooty()
             wh = widget.winfo_height()
             ch = canvas.winfo_height()
@@ -318,13 +318,23 @@ def make_scrollable(parent: tk.Widget) -> tuple[tk.Canvas, ttk.Frame]:
             # Convert pixel-space to fraction-space
             top_frac = (wy / inner_h) + scroll_top
             bot_frac = ((wy + wh) / inner_h) + scroll_top
-            if wy < 0:
-                # Widget is above the viewport — scroll up so its top
+            # Auto-scroll ONLY when the widget is fully outside the
+            # viewport. The previous trigger (``wy + wh > ch``) fired
+            # whenever the widget was even partially below the visible
+            # bottom, which meant clicking any button / dropdown /
+            # entry near the bottom edge of the screen aggressively
+            # scrolled the page — user-reported as "page jumps to the
+            # very bottom when I click things". Symmetric clamp at
+            # the top: only fire when widget is fully above viewport,
+            # not when it's partially clipped (the user can already
+            # see most of it).
+            if wy + wh <= 0:
+                # Widget fully above viewport — scroll up so its top
                 # is at the viewport top (with a small padding).
                 target = max(top_frac - 0.02, 0.0)
                 canvas.yview_moveto(target)
-            elif wy + wh > ch:
-                # Widget is below the viewport — scroll down so its
+            elif wy >= ch:
+                # Widget fully below viewport — scroll down so its
                 # bottom is at the viewport bottom (with padding).
                 visible_frac = ch / inner_h
                 target = min(bot_frac - visible_frac + 0.02, 1.0)
