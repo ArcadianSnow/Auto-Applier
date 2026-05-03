@@ -268,11 +268,23 @@ async def simulate_organic_behavior(page: Page) -> None:
         await human_move(page, x, y)
 
     elif action == "hover":
-        # Hover over a random visible link or button
+        # Hover over a random visible link or button.
+        # ZipRecruiter ships an X close button at the top-right of its
+        # apply iframe; sweeping the mouse through it has fired the
+        # "Save & Exit" confirmation popup mid-application. Filter
+        # close/exit/dismiss-shaped controls out of the candidate pool
+        # AND reject elements whose bounding box lives in the top-right
+        # corner zone where unlabeled glyph-X buttons hide.
         try:
             links = await page.query_selector_all("a, button")
             if links:
-                el = random.choice(links[:10])
+                candidates = []
+                for el in links:
+                    if await _is_safe_hover_target(el):
+                        candidates.append(el)
+                if not candidates:
+                    return  # Nothing safe to hover; skip rather than risk an exit-trigger.
+                el = random.choice(candidates[:10])
                 box = await el.bounding_box()
                 if box:
                     await human_move(
@@ -283,3 +295,88 @@ async def simulate_organic_behavior(page: Page) -> None:
                     await asyncio.sleep(random.uniform(0.3, 0.8))
         except Exception:
             pass
+
+
+# ── Hover-target safety filter ───────────────────────────────────────
+
+
+# Substrings that flag a control as a close/exit/dismiss action.
+_CLOSE_LABEL_SUBSTRINGS = ("close", "dismiss", "exit")
+# Whole-text glyphs/labels (compared lowercased + stripped) that mean "close".
+_CLOSE_TEXT_EXACT = {"x", "✕", "✖", "×"}
+# Phrases that, if found anywhere in the visible text, mean "exit the flow".
+_EXIT_TEXT_PHRASES = (
+    "save and exit",
+    "save & exit",
+    "exit application",
+    "discard",
+    "cancel",
+    "back to job",
+)
+# Class-name fragments that flag close-shaped controls.
+_CLOSE_CLASS_FRAGMENTS = ("close", "dismiss", "exit")
+# Top-right corner danger zone — browser/site chrome lives here and an
+# unlabeled glyph-X close button is often styled purely via CSS.
+_CORNER_EDGE_PADDING_PX = 60
+
+
+async def _is_safe_hover_target(el) -> bool:
+    """Return True if `el` is safe to hover (not a close/exit control).
+
+    Cheap inspection: a handful of attribute reads + one bounding-box
+    call per element. Any failure is treated as unsafe (fail closed).
+    """
+    try:
+        aria_label = await el.get_attribute("aria-label")
+        if aria_label:
+            lowered = aria_label.lower()
+            if any(s in lowered for s in _CLOSE_LABEL_SUBSTRINGS):
+                return False
+            # aria-label of just "x" is a close button glyph hint.
+            if lowered.strip() in _CLOSE_TEXT_EXACT:
+                return False
+
+        cls = await el.get_attribute("class")
+        if cls:
+            lowered_cls = cls.lower()
+            if any(frag in lowered_cls for frag in _CLOSE_CLASS_FRAGMENTS):
+                return False
+
+        try:
+            text = await el.inner_text()
+        except Exception:
+            text = ""
+        if text:
+            stripped = text.strip()
+            if stripped in _CLOSE_TEXT_EXACT or stripped.lower() in _CLOSE_TEXT_EXACT:
+                return False
+            lowered_text = stripped.lower()
+            if any(phrase in lowered_text for phrase in _EXIT_TEXT_PHRASES):
+                return False
+
+        # Bounding-box safety net: reject elements that sit in the
+        # top-right corner where glyph-X close buttons hide.
+        try:
+            box = await el.bounding_box()
+        except Exception:
+            box = None
+        if box:
+            try:
+                viewport = await el.evaluate(
+                    "() => ({ w: window.innerWidth, h: window.innerHeight })"
+                )
+            except Exception:
+                viewport = None
+            if viewport and viewport.get("w") and viewport.get("h"):
+                vw = viewport["w"]
+                right_edge = box.get("x", 0) + box.get("width", 0)
+                top_edge = box.get("y", 0)
+                if (
+                    right_edge >= vw - _CORNER_EDGE_PADDING_PX
+                    and top_edge <= _CORNER_EDGE_PADDING_PX
+                ):
+                    return False
+        return True
+    except Exception:
+        # Fail closed — anything we can't inspect is treated as unsafe.
+        return False

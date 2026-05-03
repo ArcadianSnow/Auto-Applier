@@ -171,6 +171,71 @@ def check_user_config() -> CheckResult:
     return CheckResult("user_config.json", PASS, "name + email + recommended fields")
 
 
+def check_ziprecruiter_profile() -> CheckResult:
+    """Warn if ZipRecruiter is enabled but local profile data is incomplete.
+
+    Yesterday's silent-failure mode: ZR's QuickApply iframe demands
+    contact info on every apply when the underlying ZR account profile
+    is empty. Our walker filled the popup, but ZR rejected the apply
+    silently because the *account-side* profile data wasn't saved.
+    The CSV showed "applied"; ZR's dashboard showed "Application
+    Incomplete". We only caught it after manual verification.
+
+    We can't actually verify ZR's remote profile state without
+    launching a browser (too expensive for doctor). So we do a
+    cheap proxy check: if the user's *local* personal_info has all
+    the fields ZR's profile needs, they have the data we'd want to
+    see saved on ZR's side. If not, they can't even fill it in
+    manually — fail fast and tell them to fill it in via the wizard.
+    If everything's local, WARN regardless and tell the user to
+    eyeball ziprecruiter.com → Account → Profile before running.
+    """
+    from auto_applier.config import USER_CONFIG_FILE
+
+    if not USER_CONFIG_FILE.exists():
+        # check_user_config already FAILs on this; don't double-report.
+        return CheckResult(
+            "ZipRecruiter profile", PASS, "(user_config.json missing — see earlier check)",
+        )
+    try:
+        data = json.loads(USER_CONFIG_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        # Same — check_user_config already covers unreadable config.
+        return CheckResult(
+            "ZipRecruiter profile", PASS, "(user_config.json unreadable — see earlier check)",
+        )
+
+    enabled = data.get("enabled_platforms", []) or []
+    if "ziprecruiter" not in enabled:
+        return CheckResult(
+            "ZipRecruiter profile", PASS, "(not configured)",
+        )
+
+    personal = data.get("personal_info", {}) or data.get("personal", {}) or {}
+    required = ("first_name", "last_name", "phone", "city", "state", "zip_code")
+    missing = [k for k in required if not personal.get(k)]
+    if missing:
+        return CheckResult(
+            "ZipRecruiter profile", FAIL,
+            f"missing local personal_info: {', '.join(missing)}",
+            fix=(
+                "Fill in personal_info in the wizard before running ZR. "
+                "Empty ZR profile -> silent rejection at apply time "
+                "(CSV says 'applied' but ZR dashboard shows 'Application Incomplete')."
+            ),
+        )
+    return CheckResult(
+        "ZipRecruiter profile", WARN,
+        "local personal_info OK; verify remote ZR profile manually",
+        fix=(
+            "Verify Jordan's ZR profile is populated at "
+            "ziprecruiter.com -> Account -> Profile. "
+            "Empty ZR profile -> silent rejection at apply time. "
+            "(Could not verify automatically — too expensive to launch browser during doctor.)"
+        ),
+    )
+
+
 def check_resumes_loaded() -> CheckResult:
     from auto_applier.config import RESUMES_DIR, PROFILES_DIR
 
@@ -515,6 +580,7 @@ async def _run_all() -> list[CheckResult]:
         check_data_dirs_writable,
         check_env_file,
         check_user_config,
+        check_ziprecruiter_profile,
         check_resumes_loaded,
         check_resume_files_unlocked,
         check_answers_file,

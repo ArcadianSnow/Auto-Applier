@@ -14,35 +14,15 @@ from dataclasses import dataclass, field
 
 from playwright.async_api import ElementHandle, Page
 
-logger = logging.getLogger(__name__)
-
-
-# Labels that look like questions but aren't — they're page chrome,
-# section headers, file-upload affordance text, or accessibility helper
-# text we should never try to LLM-answer. Matched as a substring (after
-# lowercasing the detected label) so minor wording variants still hit.
-# User explicitly called out the first three from a dry-run audit; the
-# rest were observed in run logs as "filled" with junk answers.
-_PHANTOM_LABEL_PATTERNS = (
-    "voluntary self identification",
-    "voluntary self-identification",
-    "self-identification questions",
-    "self identification questions",
-    "upload a file",
-    "drag and drop",
-    "drag & drop",
-    "drop your file here",
-    "current page",
-    "page navigation",
-    "powered by",
-    "click to upload",
-    "browse files",
-    "choose file",
-    "no file chosen",
-    "accepted formats",
-    "max size",
-    "maximum file size",
+from auto_applier.browser.label_filters import (
+    PHANTOM_LABEL_PATTERNS as _PHANTOM_LABEL_PATTERNS,
+    PROMPT_LEAK_MARKERS as _PROMPT_LEAK_MARKERS,
+    USER_REJECTED_FRAGMENTS as _USER_REJECTED_FRAGMENTS,
+    is_phantom_label as _is_phantom_label_canonical,
+    is_prompt_leak,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _clean_compound_label(raw: str) -> str:
@@ -93,77 +73,17 @@ def _clean_compound_label(raw: str) -> str:
 def _is_phantom_label(label: str) -> bool:
     """Return True for labels that look like form chrome, not a question.
 
-    Conservative — only patterns we've seen produce nonsense answers.
-    Real questions occasionally contain phrases like ``upload`` (e.g.
-    "Upload your resume — required"), so we only block when the label
-    is *dominated* by chrome text. The two-pronged rule:
-
-      1. The label substring-matches a phantom pattern, AND
-      2. The label is short (<= 80 chars) — long labels usually wrap a
-         real question around any upload-flavoured noise.
+    Thin wrapper around :func:`auto_applier.browser.label_filters.is_phantom_label`
+    preserved as the public name other modules / tests import from this
+    package.
     """
-    if not label:
-        return True
-    s = label.strip().lower()
-    if not s:
-        return True
-    if len(s) > 80:
-        return False
-    # Pure punctuation / digits-only stays out of the form filler.
-    if not re.search(r"[a-z]", s):
-        return True
-    for pat in _PHANTOM_LABEL_PATTERNS:
-        if pat in s:
-            return True
-    return False
+    return _is_phantom_label_canonical(label)
 
 
 # Minimum length for a "real" question. Anything shorter is fragment
 # chrome ("X", "Yes", "*") that slipped past the phantom filter.
 # "Country *" is 9 chars, so 8 is a safe lower bound.
 _MIN_QUESTION_LEN = 8
-
-
-# Markers that ONLY appear in LLM prompt bodies, not real form-field
-# labels. If any of these appear, the "question" is actually a leaked
-# prompt context and must NOT be persisted to unanswered.json.
-# Live audit 2026-05-02 found a 1900-char "question" containing
-# "Resume:" + the candidate's full resume + "Job description:" + part
-# of a JD — the form_filler had passed the LLM prompt instead of the
-# field label to _record_unanswered. Defensive cap at the storage
-# layer so the bug can't pollute data even if the upstream caller
-# mis-passes again.
-_PROMPT_LEAK_MARKERS = (
-    "resume:\n", "resume:\r",
-    "job description:\n", "job description:\r",
-    "candidate profile:",
-    "applicant resume:",
-    "you are answering",
-    "you are filling",
-    "respond only with",
-    "respond ONLY with",
-    "json shape",
-    "available options",
-    "system_prompt",
-    "candidate's resume",
-)
-
-
-# Question categories the user explicitly rejected from the wizard's
-# unanswered queue: referral / "how did you hear about" variants.
-# These are per-application context (the form_filler answers them
-# at run time via SOURCE_QUESTION_KEYWORDS using the platform
-# display name), not gaps the user can usefully fill in advance.
-_USER_REJECTED_FRAGMENTS = (
-    "referred by an employee",
-    "referred by a current",
-    "employee referral",
-    "how did you hear about",
-    "where did you hear about",
-    "how did you find this",
-    "where did you find this",
-    "referral source",
-)
 
 
 def _load_answers_keys(answers_path) -> tuple[set[str], set[str]]:
@@ -255,9 +175,8 @@ def should_skip_unanswered(question: str, answers_path=None) -> bool:
     lowered = trimmed.lower()
     # Prompt-leak markers — substrings that only appear in LLM
     # context blobs, never in real form-field labels.
-    for marker in _PROMPT_LEAK_MARKERS:
-        if marker in lowered:
-            return True
+    if is_prompt_leak(trimmed):
+        return True
     # User-rejected categories (referral, "how did you hear") —
     # per-application context that the form_filler resolves at
     # run time via SOURCE_QUESTION_KEYWORDS, not gaps the user

@@ -1838,6 +1838,120 @@ def prune_unanswered(dry_run: bool):
     click.echo(f"\nWrote {len(kept)} cleaned entries back to {UNANSWERED_FILE.name}.")
 
 
+@cli.command("prune-orphan-stories")
+@click.option(
+    "--dry-run", is_flag=True,
+    help="Preview what would be removed without writing the file",
+)
+@click.option(
+    "--yes", is_flag=True,
+    help="Skip the confirmation prompt",
+)
+def prune_orphan_stories(dry_run: bool, yes: bool):
+    """Remove orphan entries from data/story_bank.json.
+
+    The story bank is append-only: once stories are generated for a
+    successful apply they stay forever, even if the underlying
+    Application row is later re-classified from 'applied' to 'failed'
+    (e.g. a false-positive submit detected during audit). This command
+    drops stories whose job_id no longer maps to an Application with
+    status in {applied, dry_run}.
+
+    Mirrors the structure of `cli prune-failed`. The bank is backed up
+    to data/.backups/ before any write.
+    """
+    from shutil import copy2
+    from datetime import datetime, timezone
+    import csv as _csv
+    from auto_applier.config import APPLICATIONS_CSV, BACKUP_DIR
+    from auto_applier.resume.story_bank import STORY_BANK_FILE
+
+    if not STORY_BANK_FILE.exists():
+        click.echo("No story_bank.json file — nothing to prune.")
+        return
+
+    try:
+        raw = json.loads(STORY_BANK_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        click.echo(f"Could not read story_bank.json: {exc}", err=True)
+        return
+
+    items = raw if isinstance(raw, list) else raw.get("stories", [])
+    if not isinstance(items, list) or not items:
+        click.echo("story_bank.json is empty.")
+        return
+
+    # Build a set of job_ids that have a real apply record.
+    valid_job_ids: set[str] = set()
+    if APPLICATIONS_CSV.exists():
+        with open(APPLICATIONS_CSV, "r", newline="", encoding="utf-8") as f:
+            reader = _csv.DictReader(f)
+            for row in reader:
+                status = (row.get("status") or "").strip()
+                if status in ("applied", "dry_run"):
+                    jid = (row.get("job_id") or "").strip()
+                    if jid:
+                        valid_job_ids.add(jid)
+
+    kept: list[dict] = []
+    orphan: list[dict] = []
+    for entry in items:
+        if not isinstance(entry, dict):
+            # Preserve unrecognized payloads rather than silently drop —
+            # mirrors load_bank's defensive behavior.
+            kept.append(entry)
+            continue
+        jid = str(entry.get("job_id") or "").strip()
+        if jid and jid in valid_job_ids:
+            kept.append(entry)
+        else:
+            orphan.append(entry)
+
+    click.echo(
+        f"story_bank.json: {len(items)} total, "
+        f"{len(orphan)} orphan (would remove), "
+        f"{len(kept)} kept."
+    )
+    if not orphan:
+        click.echo("Nothing to prune.")
+        return
+
+    click.echo("\nExamples (up to 10):")
+    for s in orphan[:10]:
+        title = str(s.get("title") or "")[:40]
+        jid = str(s.get("job_id") or "")[:30]
+        company = str(s.get("company") or "")[:30]
+        click.echo(f"  - {title}  (job_id={jid}, {company})")
+
+    if dry_run:
+        click.echo("\n--dry-run: no file changes made.")
+        return
+
+    if not yes:
+        if not click.confirm(
+            f"\nRemove {len(orphan)} orphan story (or stories)?",
+            default=False,
+        ):
+            click.echo("Aborted.")
+            return
+
+    # Backup before write.
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    backup = BACKUP_DIR / f"story_bank.{ts}.before_prune_orphan.json"
+    copy2(STORY_BANK_FILE, backup)
+    click.echo(f"Backup: {backup}")
+
+    try:
+        STORY_BANK_FILE.write_text(
+            json.dumps(kept, indent=2), encoding="utf-8",
+        )
+    except OSError as exc:
+        click.echo(f"Failed to write {STORY_BANK_FILE}: {exc}", err=True)
+        return
+    click.echo(f"Removed {len(orphan)} orphan stor(y/ies).")
+
+
 @cli.command()
 def fsck():
     """Check CSV data for integrity issues (read-only)."""

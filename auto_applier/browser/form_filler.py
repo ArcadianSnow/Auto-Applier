@@ -20,6 +20,7 @@ from typing import Optional
 from playwright.async_api import Page
 
 from auto_applier.browser.anti_detect import human_fill, random_delay
+from auto_applier.browser.label_filters import is_non_skill_label
 from auto_applier.browser.selector_utils import FormField
 from auto_applier.config import ANSWERS_FILE, UNANSWERED_FILE
 from auto_applier.llm.prompts import ANSWER_FROM_HINT, FORM_FILL
@@ -2556,87 +2557,24 @@ class FormFiller:
     # unanswered fields (the LLM still gets them via _record_unanswered
     # so the user can teach answers.json), but they don't belong in
     # the skill-gap → resume-bullet pipeline.
-    _NON_SKILL_LABEL_FRAGMENTS = (
-        # EEO / demographics — never surface as skills
-        "voluntary self identif",
-        "self-identification",
-        "race", "ethnicity", "gender", "sex",
-        "veteran", "military",
-        "disability", "disabled",
-        "pronoun",
-        "lgbt",
-        "sexual orientation",
-        "marital status",
-        # Age compliance
-        "18 years of age",
-        "at least 18",
-        "minimum age",
-        # Address / contact (handled by personal_info)
-        "street address", "mailing address", "home address",
-        "city ", "city,", "city*", " city",
-        "zip code", "postal code",
-        "phone number", "mobile number",
-        # Authorization / sponsorship — handled by work_auth + answers.json
-        "work authorization",
-        "authorized to work",
-        "require sponsorship", "visa sponsorship",
-        "visa",
-        "us citizen", "u.s. citizen",
-        "permanent resident",
-        # Education credentialing — degree-checks aren't skills
-        "bachelor's degree", "bachelors degree",
-        "master's degree", "masters degree",
-        "ph.d", "phd",
-        "diploma",
-        # Employment-status compliance — not a skill
-        "employed with", "currently employed",
-        # Salary / compensation — handled by smart_fallback
-        "desired salary", "expected salary",
-        "salary expectation",
-        "hourly rate",
-        # Compliance yes/no boilerplate
-        "background check",
-        "drug test",
-        "criminal", "felony", "convicted",
-        "non-compete", "ndas", "non-disclosure",
-        "debarred", "excluded",
-        "physical requirements",
-        "certify that the information",
-        # Communications opt-in
-        "text messages", "sms",
-        "receive emails", "email updates",
-        # Source attribution
-        "how did you hear",
-        "where did you hear",
-        "referred by",
-    )
-
-    # Label-prefix patterns rejected as non-skill. Substring matching
-    # in _NON_SKILL_LABEL_FRAGMENTS is too greedy for these (every
-    # short stem like "do you" appears in genuine skill questions),
-    # so we anchor them to the start of the (lowered, stripped) label.
-    _NON_SKILL_LABEL_PREFIXES = (
-        "are you currently",
-        "do you have a ",
-    )
+    #
+    # The fragment / prefix tuples and the actual classification logic
+    # live in :mod:`auto_applier.browser.label_filters` so the form-
+    # field detector and the unanswered-queue gate can apply the same
+    # taxonomy without drift. ``_is_skill_shaped`` here is just the
+    # inverse of :func:`label_filters.is_non_skill_label`.
 
     @classmethod
     def _is_skill_shaped(cls, label: str) -> bool:
         """True if the field label looks like a skill / experience question.
 
         Negative signal beats positive signal: anything matching the
-        EEO/demographic/compliance fragments above is not a skill,
-        no matter what other words appear.
+        EEO / demographic / compliance / personal-info / salary /
+        comms / source-attribution fragments in
+        :mod:`auto_applier.browser.label_filters` is not a skill, no
+        matter what other words appear.
         """
-        lower = label.lower()
-        stripped = lower.lstrip()
-        for prefix in cls._NON_SKILL_LABEL_PREFIXES:
-            if stripped.startswith(prefix):
-                return False
-        for frag in cls._NON_SKILL_LABEL_FRAGMENTS:
-            if frag in lower:
-                return False
-        return True
+        return not is_non_skill_label(label)
 
     async def _dump_failed_element(
         self, field: FormField, answer: str, source: str,

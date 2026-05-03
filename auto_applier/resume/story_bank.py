@@ -114,6 +114,10 @@ class StoryGenerator:
         Returns an empty list on LLM failure or malformed response.
         Never raises — callers hook this into APPLICATION_COMPLETE
         and failure here should not affect the application pipeline.
+
+        Logs an INFO-level explanation whenever the return value is ``[]``
+        so silent no-ops show up in run logs (the engine call site only
+        sees the empty list, not the upstream reason).
         """
         try:
             result = await self.router.complete_json(
@@ -126,11 +130,35 @@ class StoryGenerator:
                 system_prompt=STAR_STORIES.system,
             )
         except Exception as e:
-            logger.debug("Story generation raised: %s", e)
+            logger.warning(
+                "Story generation raised for job %s: %s", job_id or "?", e
+            )
+            return []
+
+        # Empty {} from the router (parse failure, model returned nothing
+        # actionable, etc.) — surface this so it doesn't disappear.
+        if not result:
+            logger.info(
+                "LLM returned empty response — no stories generated for job %s",
+                job_id or "?",
+            )
             return []
 
         items = result.get("stories", [])
         if not isinstance(items, list):
+            logger.info(
+                "Story response had non-list 'stories' field — no stories "
+                "generated for job %s",
+                job_id or "?",
+            )
+            return []
+
+        if not items:
+            logger.info(
+                "Story response had an empty 'stories' list — no stories "
+                "generated for job %s",
+                job_id or "?",
+            )
             return []
 
         stories: list[Story] = []
@@ -154,6 +182,14 @@ class StoryGenerator:
                 job_title=job_title,
                 resume_label=resume_label,
             ))
+
+        if not stories:
+            logger.info(
+                "All %d candidate stories filtered out (missing STAR+R "
+                "segments) — no stories saved for job %s",
+                len(items), job_id or "?",
+            )
+
         return stories
 
 

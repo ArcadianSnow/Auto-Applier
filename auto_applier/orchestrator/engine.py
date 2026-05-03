@@ -1207,10 +1207,16 @@ class ApplicationEngine:
                             resume_label=job_score.resume_label,
                         )
                         append_stories(stories)
+                        if not stories:
+                            logger.warning(
+                                "No stories saved for %s @ %s (job_id=%s) — "
+                                "see earlier story_bank logs for the reason.",
+                                job.title[:50], job.company[:40], job.job_id,
+                            )
                     except Exception as exc:
-                        logger.debug(
-                            "Story generation failed for %s: %s",
-                            job.job_id, exc,
+                        logger.warning(
+                            "Story generation failed for %s @ %s (job_id=%s): %s",
+                            job.title[:50], job.company[:40], job.job_id, exc,
                         )
 
     # ------------------------------------------------------------------
