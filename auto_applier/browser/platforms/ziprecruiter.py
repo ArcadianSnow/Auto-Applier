@@ -167,7 +167,14 @@ FORM_SUBMIT_SELECTORS = [
     "button.btn-primary",
 ]
 
-# Application success indicators
+# Application success indicators. Strong, apply-flow-specific
+# selectors only. Live run 2026-05-03 12:00:08 hit a false-applied
+# scenario where the walker stayed on the search-results page for
+# 6 steps, then matched ``[class*='success']`` against some random
+# element on the search results UI (success-themed toast, unrelated
+# button class, etc.) and reported "1-click apply confirmed". The
+# loose substring match has been removed; only selectors that are
+# unambiguously part of ZR's post-apply confirmation card remain.
 SUCCESS_SELECTORS = [
     "[data-testid='application-success']",
     ".application-success",
@@ -175,9 +182,28 @@ SUCCESS_SELECTORS = [
     "[data-testid='success-message']",
     ".success-message",
     ".application-confirmation",
-    "[class*='success']",
-    ".congratulations",
 ]
+
+
+# URL paths that, when present in the page URL, definitively prove
+# we are NOT on a post-apply confirmation page. Used to reject
+# success-checks that fire on the wrong page entirely (e.g. when
+# the apply click failed silently and the walker stayed on the
+# search-results page). Anchored — substring match against the
+# lower-cased URL.
+_NON_APPLY_URL_FRAGMENTS = (
+    "/jobs-search",   # search results
+    "/jobs/search",   # search results (older URL shape)
+    "/jobs-feed",     # personalized job feed
+    "/dashboard",     # account dashboard
+    "/saved-jobs",    # saved jobs list
+    "/applied-jobs",  # the user's "you've applied to these" page
+    "/login",
+    "/signin",
+    "/auth",
+    "/register",
+    "/profile",
+)
 
 # "Apply on company site" indicators (external apply)
 EXTERNAL_APPLY_SELECTORS = [
@@ -1579,20 +1605,34 @@ class ZipRecruiterPlatform(JobPlatform):
 
         Resolution order:
 
-        1. URL-pattern match — cheapest and strongest. ZR redirects
+        1. URL non-apply guard — if URL is clearly NOT a post-apply
+           page (search results, login, dashboard, etc.), bail out
+           immediately. This catches the 2026-05-03 12:00:08 bug
+           where the walker stayed on /jobs-search across 6 empty
+           steps and a random ``[class*='success']`` element fired.
+        2. URL-pattern match — cheapest and strongest. ZR redirects
            to ``/apply/successful``, ``/apply/confirmation``,
            ``/apply/thank``, ``/post-apply``, ``/thanks``, or
            ``/applied`` after a real submission.
-        2. Success selector visible — ``safe_query`` already filters
+        3. Success selector visible — ``safe_query`` already filters
            to ``state="visible"`` so an off-screen / hidden React
            component pre-rendered in a closed accordion can't fire.
-        3. Strong full-sentence phrases only. No loose fragments.
+        4. Strong full-sentence phrases only. No loose fragments.
         """
-        # 1. URL-based signal (cheapest, strongest).
+        # 1. URL non-apply guard. If we're clearly on the wrong
+        # page, no signal can be trusted — refuse to claim success.
+        # This is the single most important defense against the
+        # "walker lost the apply iframe and is reading random
+        # elements on the search results page" failure mode.
         try:
             url = page.url.lower()
         except Exception:
             url = ""
+        for frag in _NON_APPLY_URL_FRAGMENTS:
+            if frag in url:
+                return False
+
+        # 2. URL-based signal (cheapest, strongest).
         for pat in (
             "/apply/successful",
             "/apply/confirmation",
@@ -1604,7 +1644,7 @@ class ZipRecruiterPlatform(JobPlatform):
             if pat in url:
                 return True
 
-        # 2. Visible success selector.
+        # 3. Visible success selector.
         el = await self.safe_query(page, SUCCESS_SELECTORS, timeout=2000)
         if el:
             return True

@@ -112,6 +112,64 @@ class TestCheckSuccess:
 
         assert _run(do()) is False
 
+    def test_search_results_url_blocks_success_even_with_visible_match(self):
+        """The 2026-05-03 12:00:08 false-success regression: walker
+        stayed on /jobs-search across 6 steps; a random visible
+        element with 'success' in its class matched and reported
+        '1-click apply confirmed'. Now: URL non-apply guard must
+        short-circuit before any selector / phrase check fires."""
+        platform = _make_platform()
+        page = MagicMock()
+        page.url = (
+            "https://www.ziprecruiter.com/jobs-search?"
+            "search=data+analyst&location=Remote&lk=abcd1234"
+        )
+        # Even if a 'success'-classed element WOULD match (we mock
+        # safe_query to return one), the URL guard must reject.
+        fake_el = MagicMock()
+        page.inner_text = AsyncMock(
+            return_value="Your application has been submitted successfully!"
+        )
+
+        async def do():
+            with patch.object(platform, "safe_query", return_value=fake_el):
+                return await platform._check_success(page)
+
+        assert _run(do()) is False
+
+    def test_dashboard_url_blocks_success(self):
+        """ZR's dashboard page can have a 'success' toast (e.g. a
+        save-search confirmation) that would otherwise misclassify
+        as apply-success."""
+        platform = _make_platform()
+        page = MagicMock()
+        page.url = "https://www.ziprecruiter.com/dashboard"
+        page.inner_text = AsyncMock(return_value="Your application has been submitted")
+
+        async def do():
+            with patch.object(platform, "safe_query", return_value=None):
+                return await platform._check_success(page)
+
+        assert _run(do()) is False
+
+    def test_loose_class_selector_no_longer_in_success_list(self):
+        """SUCCESS_SELECTORS used to include ``[class*='success']``
+        which matched any visible element with 'success' anywhere in
+        any class name. Removed. Pin the contents so a future
+        refactor doesn't re-add it."""
+        from auto_applier.browser.platforms.ziprecruiter import (
+            SUCCESS_SELECTORS,
+        )
+        for sel in SUCCESS_SELECTORS:
+            assert sel != "[class*='success']", (
+                f"Loose substring class selector re-added: {sel}. "
+                "Use specific classnames only."
+            )
+            assert sel != ".congratulations", (
+                f"Loose '.congratulations' selector re-added. "
+                "Matches profile-completion banners."
+            )
+
 
 # ------------------------------------------------------------------
 # External Apply Detection
