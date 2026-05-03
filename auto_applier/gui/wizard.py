@@ -171,7 +171,12 @@ class WizardApp(tk.Tk):
         # Job preferences
         self.data["search_keywords"] = tk.StringVar(value="")
         self.data["location"] = tk.StringVar(value="")
-        self.data["max_applications_per_day"] = tk.IntVar(value=10)
+        # Default raised from 10 → 15 on 2026-05-03 per Phase 1
+        # research (see config.MAX_APPLICATIONS_PER_DAY for the
+        # full citation). Users still have the wizard slider to
+        # adjust, but the default reflects the documented sweet
+        # spot rather than the conservative pre-research value.
+        self.data["max_applications_per_day"] = tk.IntVar(value=15)
         self.data["auto_apply_min"] = tk.IntVar(value=7)
         self.data["cli_auto_apply_min"] = tk.IntVar(value=7)
         self.data["review_min"] = tk.IntVar(value=4)

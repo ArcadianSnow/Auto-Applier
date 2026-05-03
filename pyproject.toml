@@ -31,6 +31,20 @@ dev = [
 nodriver = [
     "nodriver>=0.40",
 ]
+# Optional Camoufox anti-detect backend (Phase 1 scaffold, 2026-05-03).
+# Camoufox patches Firefox at the C++/engine level — the only OSS
+# tool credibly attacking the JA4/JA3 + canvas/WebGL fingerprint
+# surface that defeats Chrome-based stealth on Cloudflare-fronted
+# sites. The maintainer was inactive Q1 2026 but resumed mid-April
+# 2026 (PRs #576/579/586 dated 2026-04-24 through 2026-04-29).
+# Latest cut is still v146.0.1-beta.25 from January 2026 and is
+# explicitly experimental — we ship the scaffold so we're ready
+# when a stable release lands. Install with:
+#   pip install -e ".[camoufox]"
+# Then run: camoufox fetch  (downloads the patched Firefox ~200 MB)
+camoufox = [
+    "camoufox[geoip]>=0.4",
+]
 
 [project.scripts]
 auto-applier = "auto_applier.main:cli"

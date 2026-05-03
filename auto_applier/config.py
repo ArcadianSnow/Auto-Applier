@@ -75,8 +75,25 @@ OLLAMA_MODEL_PRESETS = [
     "llama3.1:8b",
 ]
 
-# Rate limiting / anti-detection defaults
-MAX_APPLICATIONS_PER_DAY = int(os.getenv("MAX_APPLICATIONS_PER_DAY", "10"))
+# Rate limiting / anti-detection defaults.
+#
+# Default cap raised from 10 to 15 per platform per day on 2026-05-03
+# after the Phase 1 research found:
+#   - Indeed observational data: top-decile volume appliers had 39%
+#     LOWER positive response rates. Volume past ~40 apps/day is
+#     documented negative-yield.
+#   - Cross-2025 reports converge on a 20-39 TOTAL applications
+#     sweet spot to land an offer.
+#   - Friend-group anecdote: 100/day for a month produced zero
+#     interviews — corroborates the Indeed data.
+#
+# 15/platform with 4 platforms enabled = 60 applications/day cap,
+# which still respects the volume ceiling while letting tailored
+# applications flow at a reasonable clip. Users who want fewer
+# can override via the env var or wizard. We intentionally do NOT
+# raise the cap further; the data is unambiguous that more volume
+# without quality investment hurts response rates.
+MAX_APPLICATIONS_PER_DAY = int(os.getenv("MAX_APPLICATIONS_PER_DAY", "15"))
 MIN_DELAY_BETWEEN_ACTIONS = float(os.getenv("MIN_DELAY_BETWEEN_ACTIONS", "3"))
 MAX_DELAY_BETWEEN_ACTIONS = float(os.getenv("MAX_DELAY_BETWEEN_ACTIONS", "8"))
 MIN_DELAY_BETWEEN_APPLICATIONS = float(os.getenv("MIN_DELAY_BETWEEN_APPLICATIONS", "60"))

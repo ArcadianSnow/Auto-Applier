@@ -49,6 +49,26 @@ class BrowserSession:
                 "Install Chrome for a better browser fingerprint."
             )
 
+        # JA4 fingerprint hygiene (audited 2026-05-03 per Phase 1
+        # research). Cloudflare's 2026 detection cross-correlates
+        # JA4 + User-Agent + IP-ASN + eBPF TCP-stack signature; any
+        # mismatch is a soft-block signal. Our posture:
+        #
+        #   - Real Chrome via ``channel="chrome"`` → JA4 matches the
+        #     actual Chrome binary on the user's platform.
+        #   - No UA override anywhere — Chrome's native UA is sent
+        #     (matching its native JA4).
+        #   - ``--enable-automation`` and ``--no-sandbox`` stripped
+        #     (both flip detectable Chrome state).
+        #   - ``--disable-blink-features=AutomationControlled`` is
+        #     NOT set — it's now itself a detection signal.
+        #   - ``no_viewport=True`` lets Chrome use its natural
+        #     viewport (matches real-user fingerprint).
+        #
+        # If you add new launch flags or override UA, JA4 audit MUST
+        # re-confirm the cross-correlation hasn't broken. Test via
+        # tls.peet.ws/api/all from the browser context.
+
         launch_args = {
             "user_data_dir": str(BROWSER_PROFILE_DIR),
             "headless": False,

@@ -7,7 +7,9 @@ import pytest
 from auto_applier.resume.tailor import (
     ResumeTailor,
     TailoredResume,
+    render_docx,
     render_html,
+    tailored_docx_path,
     tailored_pdf_path,
 )
 
@@ -196,3 +198,144 @@ class TestResumeTailor:
         assert "42" in result.skills
         assert "None" in result.skills  # None→"None" is non-empty
         assert "" not in result.skills
+
+
+# ----------------------------------------------------------------------
+# DOCX render — Phase 1 addition for Workday/Taleo parser preference
+# ----------------------------------------------------------------------
+
+class TestTailoredDocxPath:
+    """DOCX path mirrors the PDF path layout: <job_dir>/<name>_Resume.docx
+    so the basename uploaded to a job board is candidate-named, not
+    job_id-named."""
+
+    def test_sibling_of_pdf_path(self):
+        pdf = tailored_pdf_path("ind-abc123")
+        docx = tailored_docx_path("ind-abc123")
+        # Same parent dir, different suffix
+        assert docx.parent == pdf.parent
+        assert pdf.suffix == ".pdf"
+        assert docx.suffix == ".docx"
+
+    def test_filename_does_not_contain_job_id(self):
+        path = tailored_docx_path("ind-9934dbc8cae647b8")
+        assert "ind-9934" not in path.name
+        assert path.name.endswith("_Resume.docx") or path.name == "Resume.docx"
+
+    def test_sanitizes_unsafe_chars_in_job_dir(self):
+        path = tailored_docx_path("li/../etc/passwd")
+        assert "/" not in path.parent.name
+        assert "\\" not in path.parent.name
+
+
+class TestRenderDocx:
+    """The DOCX renderer produces a real .docx file with parseable
+    content. We don't try to validate Word's full schema — we just
+    confirm:
+      - file is created
+      - file is non-trivial size (would be ~0 bytes on render fail)
+      - doc opens with python-docx and contains our text
+    """
+
+    def _resume(self):
+        return TailoredResume(
+            summary="Senior data analyst with 5 years of experience.",
+            skills=["Python", "SQL", "Tableau"],
+            experience=[{
+                "title": "Senior Analyst",
+                "company": "Acme Corp",
+                "dates": "2021-Present",
+                "bullets": [
+                    "Built revenue dashboards used by exec team weekly",
+                    "Led SQL training across 3 teams",
+                ],
+            }],
+            education=[{
+                "school": "State University",
+                "degree": "BS Computer Science",
+                "year": "2019",
+            }],
+        )
+
+    def test_renders_real_docx_file(self, tmp_path):
+        out = tmp_path / "test.docx"
+        ok = asyncio.run(render_docx(
+            self._resume(), out, name="Jane Doe", contact="jane@example.com",
+        ))
+        assert ok is True
+        assert out.exists()
+        assert out.stat().st_size > 1000  # real docx, not empty
+
+    def test_docx_contains_expected_content(self, tmp_path):
+        out = tmp_path / "test.docx"
+        asyncio.run(render_docx(
+            self._resume(), out, name="Jane Doe", contact="jane@example.com",
+        ))
+        from docx import Document
+        doc = Document(str(out))
+        all_text = "\n".join(p.text for p in doc.paragraphs)
+        assert "Jane Doe" in all_text
+        assert "jane@example.com" in all_text
+        assert "Senior data analyst" in all_text
+        # Skills joined as prose, not bullets, for parser-friendliness
+        assert "Python, SQL, Tableau" in all_text
+        # Experience block
+        assert "Senior Analyst" in all_text
+        assert "Acme Corp" in all_text
+        assert "Built revenue dashboards" in all_text
+        # Education block
+        assert "State University" in all_text
+        assert "BS Computer Science" in all_text
+
+    def test_docx_uses_section_headings_uppercase(self, tmp_path):
+        """Section headings should be uppercase ('SUMMARY', 'EXPERIENCE',
+        etc.) to match the PDF template's visual style."""
+        out = tmp_path / "test.docx"
+        asyncio.run(render_docx(
+            self._resume(), out, name="Jane", contact="",
+        ))
+        from docx import Document
+        doc = Document(str(out))
+        all_text = "\n".join(p.text for p in doc.paragraphs)
+        assert "SUMMARY" in all_text
+        assert "SKILLS" in all_text
+        assert "EXPERIENCE" in all_text
+        assert "EDUCATION" in all_text
+
+    def test_render_docx_handles_empty_sections(self, tmp_path):
+        """A resume with no experience or education shouldn't crash —
+        just emit empty sections."""
+        out = tmp_path / "test.docx"
+        empty_resume = TailoredResume(
+            summary="Just starting out.",
+            skills=["enthusiasm"],
+            experience=[],
+            education=[],
+        )
+        ok = asyncio.run(render_docx(
+            empty_resume, out, name="Jane", contact="",
+        ))
+        assert ok is True
+        assert out.exists()
+
+    def test_render_docx_returns_false_on_python_docx_missing(
+        self, tmp_path, monkeypatch
+    ):
+        """Defensive: if python-docx is missing (it's a dep but a
+        future build could omit), we return False and let the caller
+        fall back to PDF rather than crash."""
+        import builtins
+        original_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "docx" or name.startswith("docx."):
+                raise ImportError("pretend python-docx isn't installed")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        out = tmp_path / "test.docx"
+        ok = asyncio.run(render_docx(
+            self._resume(), out, name="Jane", contact="",
+        ))
+        assert ok is False
+        assert not out.exists()

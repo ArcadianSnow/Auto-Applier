@@ -257,6 +257,125 @@ def tailored_pdf_path(job_id: str) -> Path:
     return GENERATED_RESUMES_DIR / safe_job / filename
 
 
+def tailored_docx_path(job_id: str) -> Path:
+    """Sibling of :func:`tailored_pdf_path` for the .docx variant.
+
+    Workday and Taleo parse DOCX with ~97% field-extraction accuracy
+    vs. ~83% for PDF (per the Phase 1 resume-tailoring research).
+    Greenhouse/Lever/Ashby/Indeed/Dice/ZR all parse PDF fine, so PDF
+    stays the default — but we generate DOCX alongside so the form
+    filler can prefer it on platforms where it's empirically better.
+    """
+    safe_job = "".join(c if c.isalnum() or c in "-_." else "_" for c in job_id)
+    prefix = _user_filename_prefix()
+    filename = f"{prefix}_Resume.docx" if prefix else "Resume.docx"
+    return GENERATED_RESUMES_DIR / safe_job / filename
+
+
+async def render_docx(tailored: TailoredResume, out_path: Path,
+                      name: str = "", contact: str = "") -> bool:
+    """Render a TailoredResume to a single-column ATS-friendly DOCX.
+
+    Per Phase 1 research: Workday/Taleo prefer DOCX (97% extraction
+    vs 83% for PDF), iCIMS slightly prefers DOCX too. Single-column,
+    plain-font is mandatory for parser-friendliness — multi-column
+    layouts and graphical skill bars still break parsers in 2026.
+
+    Returns True on success, False on any failure (caller falls back
+    to PDF). Async-signatured to mirror :func:`render_pdf` so the
+    engine's call sites stay symmetric.
+    """
+    try:
+        from docx import Document
+        from docx.shared import Pt, Inches
+    except ImportError:
+        logger.warning("python-docx not installed — cannot render DOCX")
+        return False
+
+    try:
+        doc = Document()
+
+        # Page margins — 0.6" matches the 0.5" PDF margin closely.
+        for section in doc.sections:
+            section.left_margin = Inches(0.6)
+            section.right_margin = Inches(0.6)
+            section.top_margin = Inches(0.6)
+            section.bottom_margin = Inches(0.6)
+
+        # Set base font for the whole doc to a parser-friendly
+        # plain font. ATS parsers fail on uncommon fonts.
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = "Calibri"
+        font.size = Pt(11)
+
+        # Header — name + contact info
+        if name:
+            heading = doc.add_paragraph()
+            run = heading.add_run(name)
+            run.bold = True
+            run.font.size = Pt(20)
+        if contact:
+            doc.add_paragraph(contact)
+
+        def _section(title: str) -> None:
+            """Add a section heading; matches the PDF template's
+            uppercased + small-letter-spaced look."""
+            p = doc.add_paragraph()
+            run = p.add_run(title.upper())
+            run.bold = True
+            run.font.size = Pt(12)
+
+        # Summary
+        _section("Summary")
+        doc.add_paragraph(tailored.summary or "")
+
+        # Skills — comma-joined for easier parsing than
+        # bullet-per-skill (parsers handle prose better than columns)
+        _section("Skills")
+        if tailored.skills:
+            doc.add_paragraph(", ".join(str(s) for s in tailored.skills))
+
+        # Experience
+        _section("Experience")
+        for exp in tailored.experience:
+            if not isinstance(exp, dict):
+                continue
+            title_run = doc.add_paragraph()
+            r = title_run.add_run(
+                f"{exp.get('title', '')} — {exp.get('company', '')}"
+            )
+            r.bold = True
+            dates = exp.get("dates", "")
+            if dates:
+                meta = doc.add_paragraph(dates)
+                # Italic, smaller — same emphasis as PDF role-meta
+                for run in meta.runs:
+                    run.italic = True
+                    run.font.size = Pt(10)
+            for bullet in exp.get("bullets", []) or []:
+                doc.add_paragraph(str(bullet), style="List Bullet")
+
+        # Education
+        _section("Education")
+        for edu in tailored.education:
+            if not isinstance(edu, dict):
+                continue
+            line = (
+                f"{edu.get('school', '')} — "
+                f"{edu.get('degree', '')} "
+                f"({edu.get('year', '')})"
+            ).strip()
+            doc.add_paragraph(line)
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(str(out_path))
+        return True
+    except Exception as exc:
+        logger.warning("DOCX render failed: %s", exc)
+        return False
+
+
 def save_tailored_json(tailored: TailoredResume) -> Path:
     """Persist the structured TailoredResume next to the PDF."""
     from dataclasses import asdict

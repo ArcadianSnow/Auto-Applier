@@ -541,6 +541,25 @@ def check_patchright() -> CheckResult:
         )
 
 
+def check_camoufox() -> CheckResult:
+    """Camoufox is opt-in. Phase 1 scaffolded the integration but
+    no platform adapter currently uses it (waiting on a stable
+    Camoufox release + a test account). Doctor reports its install
+    state as informational only — never FAIL since nothing depends
+    on it yet."""
+    try:
+        import camoufox  # noqa: F401
+        return CheckResult(
+            "Camoufox", PASS,
+            "available — experimental anti-detect backend ready",
+        )
+    except ImportError:
+        return CheckResult(
+            "Camoufox", PASS,
+            "(not installed — optional Phase 1 scaffold)",
+        )
+
+
 def check_nodriver() -> CheckResult:
     """Check if the optional Nodriver backend is available.
 
@@ -639,6 +658,7 @@ async def _run_all() -> list[CheckResult]:
         check_playwright,
         check_patchright,
         check_nodriver,
+        check_camoufox,
         check_disk_space,
         check_screen_resolution,
     ]
