@@ -205,7 +205,11 @@ class TrendsPanel(tk.Toplevel):
         inner = tk.Frame(card, bg=BG_CARD)
         inner.pack(fill="x", padx=12, pady=8)
 
-        # Top row: count badge + skill name + learning badge
+        # Top row: count badge on left, skill name + learning badge
+        # in a wrapping sub-frame to the right. Long skill names like
+        # "Direct GIS experience within the telecommunications industry"
+        # used to overflow because ``ttk.Label`` packed ``side='left'``
+        # doesn't wrap text — it just runs off the card edge.
         row = tk.Frame(inner, bg=BG_CARD)
         row.pack(fill="x")
 
@@ -213,20 +217,35 @@ class TrendsPanel(tk.Toplevel):
             row, text=f" {count} ", bg=PRIMARY, fg="white",
             font=FONT_SUBHEADING, padx=4,
         )
-        count_lbl.pack(side="left")
+        count_lbl.pack(side="left", anchor="n")
 
-        ttk.Label(
-            row, text=skill, style="CardSubheading.TLabel",
-        ).pack(side="left", padx=(8, 0))
+        # Skill column — fills remaining row width and wraps long
+        # text. Using ``tk.Label`` (not ttk) so we can set
+        # ``wraplength`` and ``justify='left'`` directly.
+        skill_col = tk.Frame(row, bg=BG_CARD)
+        skill_col.pack(side="left", fill="x", expand=True, padx=(8, 0))
+
+        # wraplength=560 fits comfortably inside a 760px panel after
+        # accounting for the count badge + scroll bar + card padding.
+        # Tk uses pixels here, not characters.
+        skill_lbl = tk.Label(
+            skill_col, text=skill,
+            font=FONT_SUBHEADING, fg=PRIMARY, bg=BG_CARD,
+            wraplength=560, justify="left", anchor="w",
+        )
+        skill_lbl.pack(anchor="w", fill="x")
 
         if is_learning:
-            ttk.Label(
-                row, text="[learning]", style="Warning.TLabel",
-            ).pack(side="left", padx=(8, 0))
+            tk.Label(
+                skill_col, text="[learning]",
+                font=FONT_SMALL, fg=WARNING, bg=BG_CARD,
+            ).pack(anchor="w")
 
         if extra:
-            ttk.Label(
-                inner, text=extra, style="CardSmall.TLabel",
+            tk.Label(
+                inner, text=extra,
+                font=FONT_SMALL, fg=TEXT_LIGHT, bg=BG_CARD,
+                wraplength=620, justify="left", anchor="w",
             ).pack(anchor="w", pady=(2, 0))
 
         # Buttons
@@ -245,6 +264,26 @@ class TrendsPanel(tk.Toplevel):
             btns, text="Not interested",
             command=lambda s=skill: self._mark_state(s, "not_interested"),
         ).pack(side="left", padx=(8, 0))
+        # New "Discuss this skill" button — opens a chat dialog so
+        # the user can ask the LLM what the skill is, learning
+        # paths, time-to-proficiency, alternatives, etc. Same
+        # back-and-forth shape as the wizard's Answers AI assist.
+        ttk.Button(
+            btns, text="Discuss",
+            command=lambda s=skill: self._open_skill_chat(s),
+        ).pack(side="left", padx=(8, 0))
+
+    def _open_skill_chat(self, skill: str) -> None:
+        """Open the skill discussion dialog for ``skill``.
+
+        Lazy-imported so the trends panel module loads cleanly
+        without circular imports against the dialog's own
+        dependencies (LLM router, threading, etc.).
+        """
+        from auto_applier.gui.panels.trends_skill_chat import (
+            TrendsSkillChatDialog,
+        )
+        TrendsSkillChatDialog(self, skill=skill)
 
     def _mark_state(self, skill: str, state: str) -> None:
         from auto_applier.analysis import learning_goals
