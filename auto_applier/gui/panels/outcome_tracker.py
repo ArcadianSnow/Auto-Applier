@@ -41,6 +41,7 @@ class OutcomeTrackerPanel(tk.Toplevel):
         self.title("Track application outcomes")
         self.configure(bg=BG)
         self.geometry("820x680")
+        self.resizable(True, True)
         self.minsize(640, 480)
 
         self._filter_var = tk.StringVar(value="all")

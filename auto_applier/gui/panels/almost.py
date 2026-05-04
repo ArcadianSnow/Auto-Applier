@@ -40,10 +40,14 @@ class AlmostPanel(tk.Toplevel):
         super().__init__(parent)
         self.min_score = min_score
         self._job_lookup: dict[str, dict] = {}  # job_id -> Job dict snapshot
+        # Show-all toggle: panel renders top 50 by default for speed,
+        # full list on demand. Reset to False on each fresh load.
+        self._show_all: bool = False
 
         self.title("Jobs to apply manually")
         self.configure(bg=BG)
         self.geometry("780x620")
+        self.resizable(True, True)
         self.minsize(560, 420)
 
         self._build_ui()
@@ -148,12 +152,25 @@ class AlmostPanel(tk.Toplevel):
         jobs = {j.job_id: j for j in load_all(Job)}
         self._job_lookup = {jid: j for jid, j in jobs.items()}
 
-        candidates = [
+        raw_candidates = [
             a for a in apps
             if a.status == "skipped"
             and a.score >= self.min_score
             and a.resume_used
         ]
+        # Dedupe by job_id — keep the most recent Application per
+        # job. The same job_id can have multiple skipped rows from
+        # repeated runs, and rendering 9 copies of one MongoDB job
+        # is both wrong AND slow (each row spawns ~12 widgets, so
+        # 800 dupes = 10k widget creations and 5+ seconds of Tk lag).
+        raw_candidates.sort(key=lambda a: a.applied_at or "", reverse=True)
+        _seen: set[str] = set()
+        candidates: list = []
+        for a in raw_candidates:
+            if a.job_id in _seen:
+                continue
+            _seen.add(a.job_id)
+            candidates.append(a)
 
         if not candidates:
             ttk.Label(
@@ -175,8 +192,17 @@ class AlmostPanel(tk.Toplevel):
         ))
 
         # Group by recommended resume
+        # Cap rendered rows. Each row creates ~12 Tk widgets; an
+        # uncapped run with 200+ unique candidates spawned 2400+
+        # widgets and blocked the UI thread for 5+ seconds. The
+        # cap keeps the panel snappy; a "Show all" button reveals
+        # the rest on demand.
+        DEFAULT_ROW_CAP = 50
+        total_count = len(candidates)
+        showing = candidates if self._show_all else candidates[:DEFAULT_ROW_CAP]
+
         by_resume: dict[str, list] = defaultdict(list)
-        for app in candidates:
+        for app in showing:
             by_resume[app.resume_used].append(app)
 
         for resume_label in sorted(by_resume):
@@ -191,9 +217,37 @@ class AlmostPanel(tk.Toplevel):
             for app in by_resume[resume_label]:
                 self._render_job_card(self._list_inner, app, jobs.get(app.job_id))
 
-        self._status_label.configure(
-            text=f"{len(candidates)} job(s) shown across {len(by_resume)} resume(s)",
-        )
+        # If we capped, show a button to load the rest. Helps on
+        # systems with hundreds of high-score skipped jobs without
+        # blocking the panel open for users with normal counts.
+        if not self._show_all and total_count > DEFAULT_ROW_CAP:
+            more_btn_row = tk.Frame(self._list_inner, bg=BG)
+            more_btn_row.pack(fill="x", pady=(PAD_Y, 0))
+            remaining = total_count - DEFAULT_ROW_CAP
+            ttk.Button(
+                more_btn_row,
+                text=f"Show all ({remaining} more)",
+                command=self._load_all_rows,
+            ).pack(anchor="w")
+
+        if self._show_all or total_count <= DEFAULT_ROW_CAP:
+            self._status_label.configure(
+                text=f"{total_count} job(s) shown across {len(by_resume)} resume(s)",
+            )
+        else:
+            self._status_label.configure(
+                text=(
+                    f"Showing top {len(showing)} of {total_count} job(s) "
+                    f"across {len(by_resume)} resume(s) — click \"Show all\" "
+                    f"below to render the rest."
+                ),
+            )
+
+    def _load_all_rows(self) -> None:
+        """Re-render the panel with the full candidate list (no
+        50-row cap). Used by the "Show all (N more)" button."""
+        self._show_all = True
+        self._load_data()
 
     def _render_job_card(self, parent: tk.Widget, app, job) -> None:
         """Render a single job entry with action buttons."""
@@ -323,6 +377,8 @@ class AlmostPanel(tk.Toplevel):
         win.title("Cover letter preview")
         win.configure(bg=BG)
         win.geometry("700x520")
+        win.resizable(True, True)
+        win.minsize(500, 400)
 
         ttk.Label(
             win, text="Cover letter (saved to disk, also shown below)",

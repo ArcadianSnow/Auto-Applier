@@ -42,6 +42,7 @@ class RefinePanel(tk.Toplevel):
         self.title("Refine your resume")
         self.configure(bg=BG)
         self.geometry("780x680")
+        self.resizable(True, True)
         self.minsize(640, 520)
 
         self._cards: dict[str, dict] = {}  # skill -> widget dict

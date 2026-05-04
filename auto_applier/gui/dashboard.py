@@ -1118,6 +1118,42 @@ class DashboardWindow(tk.Toplevel):
         self._close_btn.configure(state="normal")
         self.log("Run complete.", "info")
 
+        # Phase 1.x — surface ATS discoveries in the dashboard log.
+        # The CLI handler (main.py:_on_run_finished) prints a 💡
+        # hint directly to stdout; users running via the GUI never
+        # saw it. Mirror the surface here so a wizard-launched run
+        # ends with a visible "you've got high-score manual-apply
+        # candidates" line in the dashboard's Activity Log.
+        try:
+            from auto_applier.storage.repository import load_all
+            from auto_applier.storage.models import Application
+            from datetime import datetime, timedelta, timezone
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+            apps = load_all(Application)
+            ats_recent = []
+            for a in apps:
+                if not (a.source or "").startswith("ats_"):
+                    continue
+                if a.status != "skipped":
+                    continue
+                try:
+                    ts = datetime.fromisoformat(
+                        a.applied_at.replace("Z", "+00:00")
+                    )
+                except Exception:
+                    continue
+                if ts >= cutoff and a.score >= 7:
+                    ats_recent.append(a)
+            if ats_recent:
+                self.log(
+                    f"💡 {len(ats_recent)} ATS-discovered job(s) scored "
+                    f"≥7/10 in this run — click \"Jobs to apply manually\" "
+                    f"below to review them.",
+                    "success",
+                )
+        except Exception as exc:
+            logger.debug("ATS-hint surface failed (non-fatal): %s", exc)
+
     # ------------------------------------------------------------------
     # Review panel bridge
     # ------------------------------------------------------------------

@@ -563,12 +563,24 @@ def almost(min_score, cover):
     jobs = {j.job_id: j for j in _load_all(Job)}
 
     # Find skipped applications with preserved scores
-    candidates = [
+    raw_candidates = [
         a for a in apps
         if a.status == "skipped"
         and a.score >= min_score
         and a.resume_used  # must have a resume recorded
     ]
+    # Dedupe by job_id — keep the most recent Application per job.
+    # User-visible bug 2026-05-04: same MongoDB job listed 9 times
+    # because 9 prior runs all wrote a skipped row for the same
+    # job_id. Sort by applied_at descending, take first per id.
+    raw_candidates.sort(key=lambda a: a.applied_at or "", reverse=True)
+    seen_ids: set[str] = set()
+    candidates: list = []
+    for a in raw_candidates:
+        if a.job_id in seen_ids:
+            continue
+        seen_ids.add(a.job_id)
+        candidates.append(a)
 
     if not candidates:
         click.echo(

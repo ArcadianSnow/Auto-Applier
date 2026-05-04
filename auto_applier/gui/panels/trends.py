@@ -28,6 +28,7 @@ class TrendsPanel(tk.Toplevel):
         self.title("Trends — what to learn next")
         self.configure(bg=BG)
         self.geometry("760x640")
+        self.resizable(True, True)
         self.minsize(560, 480)
 
         self._build_ui()

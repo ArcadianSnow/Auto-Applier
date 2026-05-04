@@ -674,6 +674,7 @@ class ChatAssistDialog(tk.Toplevel):
         self.title("AI assist — chat about this answer")
         self.configure(bg=BG)
         self.geometry("720x680")
+        self.resizable(True, True)
         self.minsize(560, 520)
 
         self._build_ui()

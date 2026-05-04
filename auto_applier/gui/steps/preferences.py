@@ -441,6 +441,7 @@ class TitleSuggesterDialog(tk.Toplevel):
         self.title("Suggest related job titles")
         self.configure(bg=BG)
         self.geometry("520x500")
+        self.resizable(True, True)
         self.minsize(420, 380)
 
         self._build_ui()
