@@ -188,6 +188,47 @@ needs proxies — and LinkedIn is cut from v3 anyway, so use JobSpy for Indeed/Z
    real submit resolves it.
 3. **Adopt JobSpy** for Phase-2 board discovery (validated working).
 
+### Note — can we measure our reCAPTCHA *Enterprise* score safely? (the GH unknown)
+
+**No public per-visitor Enterprise score-detector exists.** Enterprise scores are computed
+server-side and returned only to the **site administrator** via the Google Cloud reCAPTCHA
+assessment API / console — never exposed to the client (this is *why* antcpt can show a
+standard-v3 score: antcpt owns the key + a backend; no equivalent exists for arbitrary
+Enterprise sites). So the GH-Enterprise auto-pass unknown can be resolved only by:
+- **(a) a gated real submit** to a live Greenhouse Enterprise form (user decision — sends a
+  real application), or
+- **(b) a self-hosted measurement rig (free, safe):** create our OWN Google Cloud reCAPTCHA
+  **Enterprise score-based key** (free tier ~10k assessments/mo), serve a tiny local HTML page
+  with it, load it with our `BrowserSession` to mint a token, then call the assessment API with
+  our secret to read *our own* Enterprise score. Needs the user's GCP account/consent but sends
+  **zero** job applications. **Recommended next de-risking step for the GH-Enterprise question.**
+
+## 7. Strategic synthesis — where v3 sits vs the field
+
+**Three independent credible tools — `neonwatty/job-apply-plugin`, `career-ops`, and the
+commercial Simplify/LazyApply — all REFUSE to auto-submit** (human clicks final submit).
+`career-ops` is explicit: *"The system never submits an application — you always have the final
+call,"* and it carries **no CAPTCHA/anti-detect code at all** because not-auto-submitting means
+never fighting a CAPTCHA. The only tools that claim hands-off auto-submit are either LinkedIn
+Easy-Apply (a structurally easier, login-gated surface — and cut from v3) or the "spray 1000
+apps" SaaS (Sonara) widely flagged as spammy/low-quality.
+
+**Implication — this is the most important strategic read of the night:**
+- **v3's `BROWSER_AUTO`-where-safe ambition is *more aggressive than the entire established
+  field*.** That's a genuine differentiator **iff** the auto-pass holds — but the field's
+  unanimous retreat to assisted (plus GH = 100% Enterprise) says the safe bet is: **ship
+  assisted as the rock-solid default; treat auto as a measured, per-tier *upside*** earned only
+  where the data supports it (Lever hCaptcha + Ashby/GH *invisible* reCAPTCHA, where our stack's
+  0.9 standard-v3 score makes silent passing plausible). **Never bet the product on
+  auto-through-Enterprise.**
+- v3's *real* moats over all of them: the **fabrication guard** (none verify generated-résumé
+  claims — they let the LLM lie), the **SQLite state machine + observability spine** (they're
+  fire-and-forget scripts), and **API-first discovery breadth** feeding scoring before any
+  browser opens. Lean into these; don't over-index on winning the CAPTCHA arms race.
+- Adoptable patterns confirmed across the field: structured profile → field mapping (= fact
+  bank), LLM for free-text answers (= resolver, + our guard), per-listing résumé adaptation
+  (= generation), YAML/JSON portal config, Playwright PDF generation, human-approval gate.
+
 ---
 
 ## Sources
