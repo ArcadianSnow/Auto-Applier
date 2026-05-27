@@ -137,6 +137,11 @@ class Settings(BaseModel):
         return self.data_dir / "artifacts"
 
     @property
+    def browser_profile_dir(self) -> Path:
+        """One persistent shared Chrome profile across all sites (spec §8c)."""
+        return self.data_dir / "browser_profile"
+
+    @property
     def config_path(self) -> Path:
         return self.data_dir / "user_config.json"
 
