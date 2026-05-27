@@ -116,15 +116,17 @@ def test_dry_run_visible_challenge_not_auto_eligible():
 
 def test_summarize_survey():
     rows = [
-        SurveyRow("a", "u1", "t", "recaptcha_invisible", True, False, 3, True),
-        SurveyRow("b", "u2", "t", "recaptcha_enterprise", True, True, 5, True),
-        SurveyRow("c", "u3", "t", "visible_challenge", False, False, 0, False),
+        SurveyRow("a", "u1", "t", "recaptcha_invisible", True, False, 3, True, form_present=True),
+        SurveyRow("b", "u2", "t", "recaptcha_enterprise", True, True, 5, True, form_present=True),
+        SurveyRow("c", "u3", "t", "visible_challenge", False, False, 0, False, form_present=True),
+        SurveyRow("d", "u4", "t", "none", False, False, 0, False, form_present=False),  # wrapper
     ]
     s = summarize_survey(rows)
-    assert s["n"] == 3
-    assert s["pct_invisible"] == round(100 * 2 / 3, 1)
-    assert s["pct_enterprise"] == round(100 * 1 / 3, 1)
-    assert s["pct_auto_eligible"] == round(100 * 2 / 3, 1)
+    assert s["n"] == 4
+    assert s["forms_present"] == 3  # the wrapper-redirect row excluded from form stats
+    assert s["pct_invisible_of_forms"] == round(100 * 2 / 3, 1)
+    assert s["pct_enterprise_of_forms"] == round(100 * 1 / 3, 1)
+    assert s["pct_auto_eligible_of_forms"] == round(100 * 2 / 3, 1)
     assert s["by_captcha_type"]["recaptcha_invisible"] == 1
 
 

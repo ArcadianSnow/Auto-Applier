@@ -593,6 +593,17 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
   résumé → **fabrication guard** → `BROWSER_AUTO` on the hosted form → **positive-confirmation** detection.
   **Decision gate:** if generate + guard + auto-apply + confirm hold on real jobs, proceed; if not, revisit
   the auto-apply thesis *before* building the platform. Cheapest place to learn the core risk.
+  - **IN PROGRESS (2026-05-26).** Built + verified in code: Greenhouse **discovery** (live API, risk ①
+    retired), **fabrication guard L1** (deterministic, 13-case eval, risk ③ retired), **confirmation +
+    CAPTCHA detectors** (risk ④ retired), and the **apply driver + dry-run CAPTCHA-presence survey**.
+    First live survey result (n=3 real forms, directional): **100% reCAPTCHA *Enterprise* on real GH forms**
+    — leading indicator that GH auto-pass will be LOW (→ value prop tilts to discovery+generation+**assisted**
+    on GH). Also: ~40% of valid GH tokens redirect to wrappers (skip), and seed tokens decay (confirm-probe
+    always). See `research/ats-form-automation.md` "First live CAPTCHA-presence survey".
+  - **STILL OPEN (the decision-gate inputs):** (a) the **actual auto-pass rate** — needs gated real submits
+    (presence ≠ pass); (b) **score + generate** steps still use stubs (need Ollama/Gemini wiring); (c) a
+    **larger confirm-probed survey** to firm up the n=3 Enterprise read; (d) likely **pull Lever/Ashby
+    forward** (lighter-touch CAPTCHA than GH Enterprise) before over-investing in the GH auto path.
 - **Phase 2 — Source breadth.** Formalize the capability model; add Lever/Ashby/Workable/SmartRecruiters
   (no-login ATS first), then browser boards (Dice/ZipRecruiter/Indeed); discovery producer; canonical dedup
   + ghost filter; per-source breadth policy; resolve the company-list seeding approach.

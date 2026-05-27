@@ -9,6 +9,15 @@ import sys
 
 import click
 
+# The Windows console defaults to cp1252 and raises UnicodeEncodeError on non-ASCII
+# (job titles, company names, JD text). Emit UTF-8 with replacement so output never
+# crashes the command, regardless of the terminal's codepage.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 from av3 import __version__
 from av3.config import load_settings
 from av3.db import init_app_db
@@ -103,11 +112,33 @@ def survey(tokens: str, max_jobs: int, resume_path: str) -> None:
         run_survey(token_list, applicant, resume_path, settings.browser_profile_dir, max_jobs)
     )
 
+    # Persist BEFORE printing so a display issue can never lose the measurement.
+    from dataclasses import asdict
+    from datetime import datetime, timezone
+
+    summary = summarize_survey(rows)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out_path = settings.data_dir / f"survey_{ts}.json"
+    out_path.write_text(
+        _json.dumps({"rows": [asdict(r) for r in rows], "summary": summary}, indent=2),
+        encoding="utf-8",
+    )
+
     for r in rows:
-        flag = "ENTERPRISE" if r.enterprise else ("invisible" if r.is_invisible else "VISIBLE")
-        click.echo(f"  {r.token:14} {r.captcha_type:22} [{flag}] q={r.custom_questions}  {r.title[:40]}")
+        if not r.form_present:
+            flag = "no-form"
+        elif r.captcha_type == "none":
+            flag = "none"
+        elif r.enterprise:
+            flag = "ENTERPRISE"
+        elif r.is_invisible:
+            flag = "invisible"
+        else:
+            flag = "VISIBLE"
+        click.echo(f"  {r.token:14} {r.captcha_type:22} [{flag:10}] q={r.custom_questions:<3} {r.title[:40]}")
     click.echo("\nSummary:")
-    click.echo(_json.dumps(summarize_survey(rows), indent=2))
+    click.echo(_json.dumps(summary, indent=2))
+    click.echo(f"\nSaved -> {out_path}")
 
 
 @cli.command()

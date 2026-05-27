@@ -28,6 +28,7 @@ class SurveyRow:
     enterprise: bool
     custom_questions: int
     auto_eligible: bool
+    form_present: bool = True  # False ⇒ canonical URL redirected to a non-GH wrapper
 
 
 def summarize_survey(rows: list[SurveyRow]) -> dict:
@@ -36,16 +37,20 @@ def summarize_survey(rows: list[SurveyRow]) -> dict:
     if n == 0:
         return {"n": 0}
     by_type = Counter(r.captcha_type for r in rows)
+    forms = [r for r in rows if r.form_present]
+    nf = len(forms) or 1
     return {
         "n": n,
+        "forms_present": len(forms),
         "by_captcha_type": dict(by_type),
-        "pct_invisible": round(100 * sum(r.is_invisible for r in rows) / n, 1),
-        "pct_enterprise": round(100 * sum(r.enterprise for r in rows) / n, 1),
-        "pct_auto_eligible": round(100 * sum(r.auto_eligible for r in rows) / n, 1),
-        "avg_custom_questions": round(sum(r.custom_questions for r in rows) / n, 1),
+        # percentages over real GH forms only (a wrapper redirect isn't a form to apply to)
+        "pct_invisible_of_forms": round(100 * sum(r.is_invisible for r in forms) / nf, 1),
+        "pct_enterprise_of_forms": round(100 * sum(r.enterprise for r in forms) / nf, 1),
+        "pct_auto_eligible_of_forms": round(100 * sum(r.auto_eligible for r in forms) / nf, 1),
+        "avg_custom_questions_of_forms": round(sum(r.custom_questions for r in forms) / nf, 1),
         "note": (
-            "auto_eligible = no visible challenge + fields filled; NOT the auto-pass "
-            "rate (which requires real submits)."
+            "auto_eligible = no visible challenge + standard fields present; NOT the "
+            "auto-pass rate (which requires real submits). Percentages are over forms_present."
         ),
     }
 
@@ -84,6 +89,9 @@ async def run_survey(
 @stage("survey")
 async def _survey_one(*, page, listing, applicant, resume_path, platform):
     outcome = await prepare_application(page, listing, applicant, resume_path, dry_run=True)
+    # if the standard #first_name field is absent, the canonical URL didn't land on a
+    # real Greenhouse form (e.g. a company wrapper/redirect — stripe → stripe.com).
+    form_present = bool(outcome.filled.get("first_name") or outcome.filled.get("email"))
     return SurveyRow(
         token=listing.board_token,
         job_url=listing.url,
@@ -92,5 +100,6 @@ async def _survey_one(*, page, listing, applicant, resume_path, platform):
         is_invisible=outcome.captcha.is_invisible,
         enterprise=outcome.captcha.enterprise,
         custom_questions=len(outcome.custom_questions),
-        auto_eligible=outcome.auto_eligible,
+        auto_eligible=outcome.auto_eligible and form_present,
+        form_present=form_present,
     )
