@@ -66,56 +66,57 @@ def doctor() -> None:
     sys.exit(1 if fails else 0)
 
 
-# A small curated Greenhouse seed list (research/ats-discovery-seeding.md) for the
-# Phase 1 survey. Real boards verified live (anthropic/stripe/databricks etc.).
-_DEFAULT_SEED = [
-    "anthropic", "stripe", "databricks", "cloudflare", "coinbase",
-    "doordash", "cribl", "ecobee", "cargurus", "tripadvisor",
-]
+# Curated seed tokens per ATS (research/ats-discovery-seeding.md), confirmed live where
+# noted. Dead tokens are skipped at discovery, so generous lists are safe.
+# Confirmed live 2026-05-26 (confirm-probe sweep). Dead tokens are skipped at discovery.
+_GH_SEED = ["anthropic", "cloudflare", "tripadvisor", "figma", "discord", "reddit", "gitlab", "robinhood"]
+_LEVER_SEED = ["matchgroup", "highspot"]
+_ASHBY_SEED = ["Ashby", "Linear", "Ramp", "Vanta", "Notion", "OpenAI"]
 
 
 @cli.command()
-@click.option("--tokens", default=",".join(_DEFAULT_SEED), help="Comma-separated Greenhouse board tokens.")
-@click.option("--max", "max_jobs", default=1, help="Jobs to inspect per board token.")
-@click.option("--resume", "resume_path", default="", help="Résumé file to attach (optional in dry-run).")
-def survey(tokens: str, max_jobs: int, resume_path: str) -> None:
-    """Phase 1 CAPTCHA-presence survey: load real Greenhouse forms (dry-run, NEVER submit),
-    classify the anti-bot challenge, and report the distribution. Opens a headed browser.
+@click.option("--gh", "gh_tokens", default=",".join(_GH_SEED), help="Greenhouse board tokens.")
+@click.option("--lever", "lever_sites", default=",".join(_LEVER_SEED), help="Lever site names.")
+@click.option("--ashby", "ashby_slugs", default=",".join(_ASHBY_SEED), help="Ashby board slugs.")
+@click.option("--max", "max_jobs", default=1, help="Jobs to inspect per token.")
+def survey(gh_tokens: str, lever_sites: str, ashby_slugs: str, max_jobs: int) -> None:
+    """Multi-ATS CAPTCHA-presence survey: load real Greenhouse/Lever/Ashby apply forms
+    (dry-run, NEVER submit), classify the anti-bot challenge, report per-source. Opens a
+    headed browser.
 
-    This measures CAPTCHA *prevalence* (the problem ceiling), NOT the auto-pass rate —
-    the pass rate needs real submits (a separate, gated run)."""
+    Measures CAPTCHA *prevalence* (the ceiling) to compare auto-apply viability across
+    ATSes — NOT the auto-pass rate, which needs real submits (a separate, gated run)."""
     import asyncio
     import json as _json
+    from dataclasses import asdict
+    from datetime import datetime, timezone
 
-    from av3.resume.factbank import Contact, FactBank
-    from av3.sources.browser.greenhouse_apply import Applicant
-    from av3.sources.browser.survey import run_survey, summarize_survey
+    from av3.sources.browser.survey import (
+        ashby_targets,
+        gh_targets,
+        lever_targets,
+        run_multi_survey,
+        summarize_survey,
+    )
     from av3.telemetry import EventSink, configure_sink
 
     settings = load_settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     configure_sink(EventSink(settings.events_db_path))
 
-    # Applicant from the fact bank if present, else a benign placeholder (dry-run only).
-    bank_path = settings.data_dir / "profile" / "master.json"
-    if bank_path.exists():
-        bank = FactBank.load(bank_path)
-        applicant = Applicant.from_contact(bank.contact)
-    else:
-        applicant = Applicant.from_contact(
-            Contact(name="Survey Tester", email="survey@example.com")
-        )
+    def _split(s: str) -> list[str]:
+        return [x.strip() for x in s.split(",") if x.strip()]
 
-    token_list = [t.strip() for t in tokens.split(",") if t.strip()]
-    click.echo(f"Surveying {len(token_list)} boards (dry-run, no submits)...")
-    rows = asyncio.run(
-        run_survey(token_list, applicant, resume_path, settings.browser_profile_dir, max_jobs)
+    click.echo("Building targets (confirm-probing tokens via public APIs)...")
+    targets = (
+        gh_targets(_split(gh_tokens), max_jobs)
+        + lever_targets(_split(lever_sites), max_jobs)
+        + ashby_targets(_split(ashby_slugs), max_jobs)
     )
+    click.echo(f"Surveying {len(targets)} live apply forms (dry-run, no submits)...")
+    rows = asyncio.run(run_multi_survey(targets, settings.browser_profile_dir))
 
     # Persist BEFORE printing so a display issue can never lose the measurement.
-    from dataclasses import asdict
-    from datetime import datetime, timezone
-
     summary = summarize_survey(rows)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_path = settings.data_dir / f"survey_{ts}.json"
@@ -135,7 +136,7 @@ def survey(tokens: str, max_jobs: int, resume_path: str) -> None:
             flag = "invisible"
         else:
             flag = "VISIBLE"
-        click.echo(f"  {r.token:14} {r.captcha_type:22} [{flag:10}] q={r.custom_questions:<3} {r.title[:40]}")
+        click.echo(f"  {r.source:11} {r.token:14} {r.captcha_type:22} [{flag:10}] {r.title[:36]}")
     click.echo("\nSummary:")
     click.echo(_json.dumps(summary, indent=2))
     click.echo(f"\nSaved -> {out_path}")
