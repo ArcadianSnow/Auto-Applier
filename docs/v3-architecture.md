@@ -419,6 +419,16 @@ release. Two layers, both required — fingerprint *and* behavior:
   (Greenhouse reCAPTCHA/Enterprise, Lever hCaptcha, Ashby reCAPTCHA), and clearing it without triggering a
   *visible* challenge is exactly what determines the auto-vs-assisted split (§11 Phase -1 outcome). Stealth
   quality ≈ auto-apply rate. A visible challenge always → assisted (never solved/retried).
+  - **Measured finding (2026-05-26 smoketest, `research/prior-art-and-methodology.md` §6 S1):** our
+    patchright + **real Chrome** + **persistent profile** stack scores **0.9 on standard reCAPTCHA v3**
+    (≥0.5 pass threshold) — *beating* the "Chromium ceiling ~0.3–0.5" that 2026 stealth blogs report for
+    *clean/fresh* fingerprints. The delta is **profile reputation**: reCAPTCHA v3 weights IP reputation +
+    browser history + cookies, which our real-Chrome persistent profile already carries. So **profile
+    reputation is a first-class stealth lever we already pull**, and a Firefox engine
+    (`invisible_playwright`/Camoufox, ~0.9) is a documented **fallback, not a required switch**. Standard
+    invisible reCAPTCHA (Ashby's lighter half, non-Enterprise GH) and hCaptcha (Lever) look auto-viable on
+    the current stack; **reCAPTCHA *Enterprise* (100% of GH in our survey) remains the sole auto-pass
+    unknown** — only a gated real submit resolves it.
 - **Behavioral layer:** Bezier mouse paths, typing jitter, randomized delays, distraction pauses, and the
   **strategy-profile pacing + per-source session rotation** (§8a). This is what offsets the behavioral
   signal of 24/7 operation — a maxed fingerprint that applies like a robot still gets caught.
