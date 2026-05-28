@@ -444,6 +444,96 @@ it into `prepare_application(..., resolver=...)`. That worker also owns the
 emit themselves (they just return `ApplyOutcome`). Both fall under the next
 Phase-2 piece: the apply worker.
 
+## Apply worker landed (2026-05-28, commit `e17f92f`)
+
+Phase 2 (3/N) — `av3/pipeline/apply_worker.py`. The worker is the drain side of the
+`QUEUED_APPLY` queue and the spec §7 #7 implementation. It is the smallest distance
+to a real end-to-end pipeline and the prerequisite for the first live Lever smoke test.
+
+What it does (per spec §7 + the per-ATS findings above):
+
+- **Constructs the resolver once per run** from injected `FactBank` + `AnswerRepo`
+  (+ optional `EmbeddingClient` / `CompletionClient`). Both LLM clients are optional —
+  exact-text bank matches + sensitive-field policy still work with neither installed,
+  so Ollama is never a hard dependency of the worker.
+- **Drains `QUEUED_APPLY` jobs** via `JobRepo.list_by_state(..., limit=)`, dispatching
+  by `Job.source` through a `DriverEntry` registry (`lever` → `lever_apply`, `greenhouse`
+  → `greenhouse_apply`). Unknown sources are silently skipped (no state change). The
+  registry is injectable so worker tests stub the driver entirely instead of dragging
+  in `FakePage` — keeps the worker's contract tests focused on what the worker actually
+  owns (state, isolation, telemetry).
+- **Translates `ApplyOutcome.status` → `JobState`** via the strict state machine:
+  - `APPLIED` → `APPLYING → APPLIED` (terminal; dedup source of truth).
+  - `ASSISTED_PENDING` → `APPLYING → REVIEW` (a deliberate human handoff, NOT a
+    failure; the §5 state-machine docstring already noted that going via FAILED
+    "would muddy the event spine"; the edge was added in this commit).
+  - `UNCONFIRMED` / `FAILED` → `APPLYING → FAILED → REVIEW` (spec §5 wording —
+    "no confirmation / mid-form break → FAILED → REVIEW"). Dedup keys off APPLIED,
+    so an UNCONFIRMED attempt is safely retryable.
+  - `dry_run=True` skips the APPLYING transition entirely — no state ping-pong in
+    the event log for dev/test runs.
+- **Per-job error isolation** (matches v2's hard-won pattern from
+  `orchestrator/engine.py`): driver exceptions are caught at the `run_once` level;
+  the job's state is recovered (`APPLYING → FAILED → REVIEW`) and a `FAILED`
+  application row is written so the dashboard's "what happened to this job?" view has
+  the attempt recorded.
+- **Per-company/day rate limit** (spec §7 re-apply policy): silent skip when
+  `JobRepo.company_applied_count(company) >= settings.pacing.max_per_company_per_day`.
+  The job stays in `QUEUED_APPLY` so the next cycle picks it up tomorrow.
+- **Pacing** (spec §8a v3.0 fixed): random `uniform(min_delay_s, max_delay_s)`
+  between *successful* applies. Skips (rate-limit, unknown source) don't burn a
+  delay slot.
+- **Inferred-resolution telemetry mirror** (spec §8b iteration loop / §9): one
+  `resolver_inferred` event per `ResolutionSource.INFERRED` answer, carrying
+  `{question, category, confidence, outcome}` only. The answer value never enters
+  the mirrored payload. **EEO resolutions never mirror at all**, even when inferred
+  (§8d — EEO self-ID stays 100% local).
+- Writes an `Application` row for every real (non-dry-run) attempt with `mode`,
+  `status`, `generated_resume_path`, and `submitted_at` populated on positive submit.
+
+### State machine addition (`av3/domain/state.py`)
+
+Added `JobState.REVIEW` to `APPLYING`'s allowed-targets set. Rationale in the
+docstring: ASSISTED_PENDING is a deliberate handoff, and going through `FAILED`
+muddies the event spine. The crash-sweep (`APPLYING → QUEUED_APPLY`),
+positive-confirm (`APPLYING → APPLIED`), and mid-form-break (`APPLYING → FAILED →
+REVIEW`) paths are unchanged.
+
+### Operating defaults
+
+| Knob | Default | Why |
+|---|---|---|
+| `mode` | `BROWSER_AUTO` | Spec §7a — bias toward auto where safe; the drivers' own §8b downgrade catches required-Q REVIEW + visible challenges. |
+| `dry_run` | `True` | Dev-safe default. CLI flips it to `False` for real apply runs. |
+| `pacing.min_delay_s` / `max_delay_s` | 60 / 180 (settings default) | v3.0 fixed pacing; strategy profiles land in v3.1. |
+| `pacing.max_per_company_per_day` | 2 (settings default) | Re-apply rate limit (spec §7 — never look spammy to one employer). |
+
+### Validation: 147/147 v3 tests pass (+23)
+
+Worker tests (22 cases) cover all four `ApplyOutcome.status` outcomes, dry-run
+state preservation, per-company rate-limit silent skip, unknown-source skip,
+single-driver exception isolation across multiple jobs, pacing on success/skip
+boundaries, `--limit` honoring, resolver construction with + without LLM/embed
+clients, applicant build from fact-bank contact, and the §8b/§8d/§9 telemetry
+policy (INFERRED-only mirror, EEO drop, bank-hit silence). Plus one
+state-machine test asserting the new `APPLYING → REVIEW` edge.
+
+### What still needs wiring
+
+- **First live Lever smoketest.** The worker's first real submit is a gated user
+  decision (sends a real application). A `cli apply --once --source lever` would
+  be the entry point; not built yet. Lever was chosen as the field-validated
+  auto-viable target per the n=16 survey above — start there, not Greenhouse.
+- **Ashby SPA driver.** Same dispatch shape as Lever/GH but no `<form>`, XHR
+  submit, in-place success panel. `detect_confirmation` already has the design
+  notes (§Ashby above). Once that lands the worker only needs the registry entry.
+- **Phase-3 staged worker scheduler.** This worker handles the apply *step*; the
+  surrounding pipeline (discover/score/optimize as background workers) is still
+  Phase 3. For now, a CLI invocation drives `worker.run_once()` once per cycle.
+- **Crash-sweep on startup.** Spec §5 mandates re-queueing jobs left in `APPLYING`
+  from a crashed prior run — owed at worker-service boot, not implemented yet
+  (the edge `APPLYING → QUEUED_APPLY` exists for it; just no caller).
+
 ## Sources
 
 - [Greenhouse — Invisible reCAPTCHA](https://support.greenhouse.io/hc/en-us/articles/115005448066-Invisible-reCAPTCHA)
