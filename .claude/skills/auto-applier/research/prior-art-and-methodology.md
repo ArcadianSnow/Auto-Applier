@@ -178,6 +178,24 @@ discovery source** (Indeed/ZipRecruiter/Glassdoor), wrapped behind our source-ca
 instead of hand-rolling + maintaining scrapers. Note for LinkedIn via JobSpy: rate-limits ~p10,
 needs proxies — and LinkedIn is cut from v3 anyway, so use JobSpy for Indeed/ZipRecruiter only.
 
+### S4 — reCAPTCHA *Enterprise* self-hosted rig → **BUILT, awaiting user GCP key + run** ⏳
+
+The §6-note option (b) measurement rig now exists: `scripts/measure_enterprise_score.py` +
+setup `scripts/recaptcha_enterprise_setup.md`. It serves a one-page Enterprise score-key harness
+on `localhost`, mints tokens with our real apply-path `BrowserSession` (patchright + real Chrome
++ persistent profile), and reads the score back via the Assessment API — **zero job
+applications**. Verified buildable end-to-end *except* the live measurement: imports + guard
+path + HTML-template `.format()` (JS braces) + local server serving all green; the request shape
+(`POST .../projects/{project}/assessments?key={api_key}` with `event.{token,siteKey,
+expectedAction}`) and **API-key auth** (vs service account) both confirmed against Google docs;
+`localhost` is an allowed domain for a score-based *dev* key (Google explicitly supports it).
+
+**Blocked on the user only:** provision a free Enterprise score-based key + API key in their GCP
+account (steps in the setup doc), set 3 env vars, run `--trials 3`. **RESULT: <pending — fill in
+mean/min/max + verdict here after the run>.** Honest caveat baked into the doc: our key ≠
+Greenhouse's key (different threshold + server-side signals), and new keys score conservatively
+until they've seen traffic — read a *persistently* high score as the signal, not one cold-key low.
+
 ### Smoketest bottom line
 
 1. **Our existing stealth stack already scores 0.9 on standard reCAPTCHA v3** — the auto path is
