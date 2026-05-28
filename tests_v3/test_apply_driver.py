@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 
+from av3.domain.state import ApplicationStatus, ApplyMode
 from av3.sources.browser.greenhouse_apply import Applicant, prepare_application
 from av3.sources.browser.survey import SurveyRow, summarize_survey
 from av3.sources.greenhouse import JobListing
@@ -112,6 +113,27 @@ def test_dry_run_visible_challenge_not_auto_eligible():
     )
     assert outcome.captcha.type.value == "visible_challenge"
     assert outcome.auto_eligible is False  # visible → would route to assisted
+
+
+def test_browser_assisted_fills_and_stops_with_status():
+    """Production assisted: bot pre-fills, status=ASSISTED_PENDING, never clicks submit.
+    Validates the v3 safe-default posture on Greenhouse (which leans assisted anyway given
+    100% reCAPTCHA Enterprise in the survey)."""
+    html = '<textarea id="g-recaptcha-response"></textarea><form>...</form>'
+    scripts = ["https://www.gstatic.com/recaptcha/enterprise.js"]
+    page = FakePage(html, scripts, questions=[])
+    outcome = asyncio.run(
+        prepare_application(
+            page, _listing(), Applicant("Pat", "Doe", "pat@example.com", "555"),
+            resume_path="/tmp/r.pdf",
+            dry_run=False, mode=ApplyMode.BROWSER_ASSISTED,
+        )
+    )
+    assert outcome.status is ApplicationStatus.ASSISTED_PENDING
+    assert outcome.submitted is False
+    assert page.submit_clicked is False
+    assert page.elements["#first_name"].typed == "Pat"
+    assert outcome.mode is ApplyMode.BROWSER_ASSISTED
 
 
 def test_summarize_survey():

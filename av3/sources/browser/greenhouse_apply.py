@@ -3,8 +3,8 @@
 100% of submits go through the browser (APIs can't submit, §6a). This drives the canonical
 ``job-boards.greenhouse.io/<token>/jobs/<id>`` form: classify the CAPTCHA, fill the standard
 fields (stable element IDs), attach the résumé via the native file input, discover custom
-questions at runtime by reading labels, then either STOP (dry-run, the dev default) or
-submit and detect confirmation.
+questions at runtime by reading labels, then dispatch by mode (dev dry-run / production
+assisted / production auto).
 
 > **Measurement note (Phase 1 finding).** The headline metric — the *invisible-CAPTCHA
 > auto-pass rate* — only resolves at submit time (the behavioral score is evaluated when
@@ -21,17 +21,29 @@ from __future__ import annotations
 
 import asyncio
 import random
-from dataclasses import dataclass, field
 
-from av3.domain.state import ApplicationStatus
+from av3.domain.state import ApplicationStatus, ApplyMode
+from av3.sources.browser.apply_base import (
+    Applicant,
+    ApplyOutcome,
+    CustomQuestion,
+    human_type,
+)
 from av3.sources.browser.detect import (
-    CaptchaResult,
     ConfirmationOutcome,
-    ConfirmationResult,
     classify_captcha,
     detect_confirmation,
 )
 from av3.sources.greenhouse import JobListing
+
+__all__ = [
+    "Applicant",
+    "ApplyMode",
+    "ApplyOutcome",
+    "CustomQuestion",
+    "discover_custom_questions",
+    "prepare_application",
+]
 
 # Standard Greenhouse field selectors — stable across companies (research §Greenhouse).
 _FIELD_SELECTORS = {
@@ -42,60 +54,6 @@ _FIELD_SELECTORS = {
 }
 _RESUME_SELECTOR = "#resume"
 _SUBMIT_SELECTOR = "button[type=submit]"
-
-
-@dataclass
-class Applicant:
-    first_name: str
-    last_name: str
-    email: str
-    phone: str = ""
-
-    @classmethod
-    def from_contact(cls, contact) -> "Applicant":
-        parts = (contact.name or "").split()
-        first = parts[0] if parts else ""
-        last = " ".join(parts[1:]) if len(parts) > 1 else ""
-        return cls(first_name=first, last_name=last, email=contact.email, phone=contact.phone)
-
-
-@dataclass
-class CustomQuestion:
-    field_id: str
-    label: str
-    required: bool
-    kind: str  # input | textarea | select
-
-
-@dataclass
-class ApplyOutcome:
-    job_url: str
-    captcha: CaptchaResult
-    filled: dict[str, bool] = field(default_factory=dict)
-    custom_questions: list[CustomQuestion] = field(default_factory=list)
-    submitted: bool = False
-    confirmation: ConfirmationResult | None = None
-    status: ApplicationStatus | None = None
-    note: str = ""
-
-    @property
-    def auto_eligible(self) -> bool:
-        """In a dry-run: would this have been eligible for an auto-submit attempt?
-        (No visible challenge; all standard fields filled.) NOT a measure of whether
-        the invisible CAPTCHA would actually pass — that needs a real submit."""
-        return self.captcha.is_invisible or not self.captcha.present
-
-
-async def _human_type(page, selector: str, text: str) -> bool:
-    """Fill a field with human-like per-keystroke jitter. Returns False if absent."""
-    el = await page.query_selector(selector)
-    if el is None:
-        return False
-    await el.click()
-    for ch in text:
-        await el.type(ch)
-        await asyncio.sleep(random.uniform(0.03, 0.12))
-    return True
 
 
 async def _collect_script_srcs(page) -> list[str]:
@@ -154,12 +112,20 @@ async def prepare_application(
     resume_path: str,
     *,
     dry_run: bool = True,
+    mode: ApplyMode = ApplyMode.BROWSER_AUTO,
     confirm_timeout_s: float = 20.0,
 ) -> ApplyOutcome:
     """Navigate, classify CAPTCHA, fill, attach résumé, discover custom questions, then
-    stop (dry-run) or submit + confirm (live). One call per job.
+    dispatch by ``(dry_run, mode)``:
 
-    Live submit is refused when a *visible* challenge is detected (→ assisted, never solved).
+    * ``dry_run=True`` (default, dev-safe) → stop after fill; status=None; auto_eligible
+      tells whether a real run *would* have tried to submit. Never sends an application.
+    * ``dry_run=False, mode=BROWSER_ASSISTED`` → stop after fill; status=ASSISTED_PENDING;
+      caller hands the open browser to the human, who reviews and clicks submit. The
+      field-validated safe default.
+    * ``dry_run=False, mode=BROWSER_AUTO`` → submit + confirm. A *visible* challenge always
+      downgrades to ASSISTED_PENDING (never solved/retried — project invariant). APPLIED
+      only on a positive confirmation signal.
     """
     await page.goto(listing.url, wait_until="domcontentloaded")
     await asyncio.sleep(random.uniform(1.0, 2.5))  # let scripts (recaptcha) load
@@ -167,14 +133,14 @@ async def prepare_application(
     html = await page.content()
     scripts = await _collect_script_srcs(page)
     captcha = classify_captcha(html, scripts)
-    outcome = ApplyOutcome(job_url=listing.url, captcha=captcha)
+    outcome = ApplyOutcome(job_url=listing.url, captcha=captcha, mode=mode)
 
     # Fill standard fields.
-    outcome.filled["first_name"] = await _human_type(page, _FIELD_SELECTORS["first_name"], applicant.first_name)
-    outcome.filled["last_name"] = await _human_type(page, _FIELD_SELECTORS["last_name"], applicant.last_name)
-    outcome.filled["email"] = await _human_type(page, _FIELD_SELECTORS["email"], applicant.email)
+    outcome.filled["first_name"] = await human_type(page, _FIELD_SELECTORS["first_name"], applicant.first_name)
+    outcome.filled["last_name"] = await human_type(page, _FIELD_SELECTORS["last_name"], applicant.last_name)
+    outcome.filled["email"] = await human_type(page, _FIELD_SELECTORS["email"], applicant.email)
     if applicant.phone:
-        outcome.filled["phone"] = await _human_type(page, _FIELD_SELECTORS["phone"], applicant.phone)
+        outcome.filled["phone"] = await human_type(page, _FIELD_SELECTORS["phone"], applicant.phone)
 
     # Attach résumé via the native file input.
     resume_el = await page.query_selector(_RESUME_SELECTOR)
@@ -191,7 +157,13 @@ async def prepare_application(
         outcome.note = "dry-run: filled, not submitted (CAPTCHA presence surveyed, not pass-rate)"
         return outcome
 
-    # --- live submit path (gated; sends a real application) ---
+    # --- production: branch by mode ---
+    if mode is ApplyMode.BROWSER_ASSISTED:
+        outcome.status = ApplicationStatus.ASSISTED_PENDING
+        outcome.note = "assisted: pre-filled; human reviews and clicks submit"
+        return outcome
+
+    # BROWSER_AUTO from here on.
     if captcha.present and not captcha.is_invisible:
         outcome.status = ApplicationStatus.ASSISTED_PENDING
         outcome.note = "visible challenge — handed to assisted (never solved/retried)"

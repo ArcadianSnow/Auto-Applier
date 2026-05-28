@@ -338,6 +338,52 @@ pass-rate measurement, which needs gated real submits — presence ≠ pass.)
 Secondary: this larger run showed **16/16 `form_present`** — the earlier 4/7 wrapper-redirect
 rate was token-specific (stripe/databricks proxy GH behind their own sites), not systemic.
 
+## Phase 2 implementation findings (2026-05-28)
+
+Built the **Lever apply driver** + the **universal assisted-apply branch** that both
+Greenhouse and Lever now share. Two structural additions:
+
+1. **`av3/sources/browser/apply_base.py`** — extracted the cross-ATS primitives
+   (`Applicant`, `CustomQuestion`, `ApplyOutcome`, `human_type`) and a single source for
+   the `(dry_run, mode)` dispatch contract. This keeps per-ATS modules to just selectors +
+   quirks; adding the next ATS doesn't duplicate dataclasses or the mode logic.
+
+2. **`av3/sources/browser/lever_apply.py`** — drives the canonical
+   `jobs.lever.co/<company>/<uuid>/apply` URL. Highlights from the research baked into
+   code: name-keyed selectors (`input[name='name']`, etc.), single full-name field, async
+   résumé-parse wait (poll `resumeStorageId` for up to 8s before reading custom-Q state so
+   we don't race Lever's prefill), `cards[<uuid>]` + `eeo[...]` + pronouns discovery,
+   `#btn-submit`, `/thanks` URL signal (already handled by `detect_confirmation`).
+
+**Mode dispatch contract** (now identical in `greenhouse_apply.py` and `lever_apply.py`):
+
+| `(dry_run, mode)` | Behavior | Status set |
+|---|---|---|
+| `dry_run=True` (default, dev-safe) | Fill + discover, never submit | `None` |
+| `dry_run=False, mode=BROWSER_ASSISTED` | Fill + discover, never submit, pre-filled browser handed to human | `ASSISTED_PENDING` |
+| `dry_run=False, mode=BROWSER_AUTO` + visible challenge | No submit (project invariant: never retry through CAPTCHA) | `ASSISTED_PENDING` |
+| `dry_run=False, mode=BROWSER_AUTO` + no submit button | Fail fast | `FAILED` |
+| `dry_run=False, mode=BROWSER_AUTO` + clean form | Submit + run `detect_confirmation` | `APPLIED` / `UNCONFIRMED` / `FAILED` / `ASSISTED_PENDING` per confirmation outcome |
+
+Validation: **86/86 unit tests pass** (`tests_v3/test_lever_apply.py` adds 7 cases covering
+dry-run, missing-phone, BROWSER_ASSISTED, visible-challenge downgrade, full auto path with
+`/thanks` confirmation, missing-submit fail-fast, and UNCONFIRMED-no-positive-signal;
+`test_apply_driver.py` adds the Greenhouse BROWSER_ASSISTED case). No live submits.
+
+**What's still pending in Phase 2** (build order, decreasing priority):
+- **Resolver / answer engine for custom questions.** The drivers *discover* the questions
+  (~21 per GH form on average) but don't *answer* them yet. Without this the assisted path
+  works (human answers everything in the open browser); the auto path can only submit
+  forms whose custom-Q count is 0.
+- **Ashby SPA driver.** Same dispatch shape but no `<form>` and no URL transition — must
+  detect submit via the in-place success panel (or hook the `applicationForm.submit` XHR).
+  Lower priority than the resolver because Ashby is 50% Enterprise anyway.
+- **JobSpy discovery integration** (Indeed/ZipRecruiter) wrapped behind the source-
+  capability model — verified working in S3 but not yet wired into `av3/sources/`.
+- **Pipeline integration** — none of the drivers actually transition jobs through
+  `APPLYING → APPLIED/FAILED/etc.` in the SQLite state machine yet; they return outcomes
+  the (not-yet-built) apply worker would translate to state changes.
+
 ## Sources
 
 - [Greenhouse — Invisible reCAPTCHA](https://support.greenhouse.io/hc/en-us/articles/115005448066-Invisible-reCAPTCHA)
