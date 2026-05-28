@@ -55,8 +55,11 @@ ALLOWED_TRANSITIONS: dict[JobState, frozenset[JobState]] = {
     ),
     JobState.QUEUED_APPLY: frozenset({JobState.APPLYING, JobState.REVIEW}),
     # confirmation→APPLIED; no-confirm/break→FAILED; crash-sweep→QUEUED_APPLY re-queue.
+    # ASSISTED_PENDING (bot pre-fills, human submits) goes straight to REVIEW — the
+    # auto attempt deliberately handed off; not a failure, so going through FAILED
+    # would muddy the event spine. UNCONFIRMED/FAILED still route via FAILED (spec §5).
     JobState.APPLYING: frozenset(
-        {JobState.APPLIED, JobState.FAILED, JobState.QUEUED_APPLY}
+        {JobState.APPLIED, JobState.FAILED, JobState.REVIEW, JobState.QUEUED_APPLY}
     ),
     JobState.FAILED: frozenset({JobState.REVIEW, JobState.QUEUED_APPLY}),
     # REVIEW is human-driven; a human may queue it for (assisted) apply or skip it.

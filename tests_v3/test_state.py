@@ -41,6 +41,13 @@ def test_crash_sweep_can_requeue_applying():
     assert can_transition(JobState.APPLYING, JobState.FAILED)
 
 
+def test_assisted_pending_goes_directly_to_review():
+    # ASSISTED_PENDING is a deliberate handoff (bot pre-fills, human submits) — not a
+    # failure. The apply worker uses APPLYING → REVIEW directly so the event spine
+    # doesn't record it as an error. UNCONFIRMED/FAILED still route through FAILED.
+    assert can_transition(JobState.APPLYING, JobState.REVIEW)
+
+
 def test_terminal_states_have_no_exits():
     for term in TERMINAL_STATES:
         assert transition_targets(term) == set()
