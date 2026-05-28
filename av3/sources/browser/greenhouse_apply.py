@@ -27,6 +27,8 @@ from av3.sources.browser.apply_base import (
     Applicant,
     ApplyOutcome,
     CustomQuestion,
+    any_required_unresolved,
+    fill_resolutions,
     human_type,
 )
 from av3.sources.browser.detect import (
@@ -114,9 +116,10 @@ async def prepare_application(
     dry_run: bool = True,
     mode: ApplyMode = ApplyMode.BROWSER_AUTO,
     confirm_timeout_s: float = 20.0,
+    resolver=None,
 ) -> ApplyOutcome:
-    """Navigate, classify CAPTCHA, fill, attach résumé, discover custom questions, then
-    dispatch by ``(dry_run, mode)``:
+    """Navigate, classify CAPTCHA, fill, attach résumé, discover + resolve custom
+    questions, then dispatch by ``(dry_run, mode)``:
 
     * ``dry_run=True`` (default, dev-safe) → stop after fill; status=None; auto_eligible
       tells whether a real run *would* have tried to submit. Never sends an application.
@@ -126,6 +129,12 @@ async def prepare_application(
     * ``dry_run=False, mode=BROWSER_AUTO`` → submit + confirm. A *visible* challenge always
       downgrades to ASSISTED_PENDING (never solved/retried — project invariant). APPLIED
       only on a positive confirmation signal.
+
+    Resolver wiring (spec §8b): when ``resolver`` is supplied, each discovered question
+    is run through it. Required questions that come back as REVIEW downgrade
+    ``BROWSER_AUTO`` to ``ASSISTED_PENDING`` (we never submit a form with missing
+    required answers). When omitted (Phase-1 tests), behavior is unchanged — discovery
+    happens, no answers are typed.
     """
     await page.goto(listing.url, wait_until="domcontentloaded")
     await asyncio.sleep(random.uniform(1.0, 2.5))  # let scripts (recaptcha) load
@@ -153,11 +162,30 @@ async def prepare_application(
 
     outcome.custom_questions = await discover_custom_questions(page)
 
+    # Resolve + fill custom questions (spec §8b). Resolver is optional so existing
+    # tests + the survey path don't change shape.
+    if resolver is not None and outcome.custom_questions:
+        outcome.resolutions = await resolver.resolve_all(outcome.custom_questions)
+        custom_filled = await fill_resolutions(page, outcome.custom_questions, outcome.resolutions)
+        for fid, ok in custom_filled.items():
+            outcome.filled[f"q:{fid}"] = ok
+
     if dry_run:
         outcome.note = "dry-run: filled, not submitted (CAPTCHA presence surveyed, not pass-rate)"
         return outcome
 
     # --- production: branch by mode ---
+    # If any REQUIRED custom question lacked a confident answer, downgrade BROWSER_AUTO
+    # to assisted (a missing required answer would either fail validation or submit a
+    # broken application). Optional unresolved questions are benign.
+    if (
+        mode is ApplyMode.BROWSER_AUTO
+        and any_required_unresolved(outcome.custom_questions, outcome.resolutions)
+    ):
+        outcome.status = ApplicationStatus.ASSISTED_PENDING
+        outcome.note = "required custom question unresolved — downgraded to assisted (spec §8b)"
+        return outcome
+
     if mode is ApplyMode.BROWSER_ASSISTED:
         outcome.status = ApplicationStatus.ASSISTED_PENDING
         outcome.note = "assisted: pre-filled; human reviews and clicks submit"

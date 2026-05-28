@@ -2,9 +2,10 @@
 
 Greenhouse and Lever (and Ashby once its SPA driver is built) share the same shape:
 classify CAPTCHA -> fill standard fields -> attach resume -> discover custom questions ->
-branch by mode (dev dry-run / production assisted / production auto). Per-ATS selectors,
-URL patterns, and parse-quirks live in the per-ATS module; everything else lives here so
-adding a new ATS only adds selectors + one driver function, not a copy of the dataclasses.
+**resolve answers (§8b)** -> branch by mode (dev dry-run / production assisted /
+production auto). Per-ATS selectors, URL patterns, and parse-quirks live in the per-ATS
+module; everything else lives here so adding a new ATS only adds selectors + one driver
+function, not a copy of the dataclasses.
 
 Why ``dry_run`` AND ``mode`` (not one knob):
   * ``dry_run`` is the dev-safe default for tests + manual smoketests — it never submits
@@ -31,6 +32,8 @@ __all__ = [
     "ApplyMode",
     "ApplyOutcome",
     "CustomQuestion",
+    "any_required_unresolved",
+    "fill_resolutions",
     "human_type",
 ]
 
@@ -86,6 +89,12 @@ class ApplyOutcome:
     mode: ApplyMode = ApplyMode.BROWSER_AUTO
     filled: dict[str, bool] = field(default_factory=dict)
     custom_questions: list[CustomQuestion] = field(default_factory=list)
+    #: Per-question resolutions in the same order as ``custom_questions``. Empty when no
+    #: resolver was passed in (Phase-1 dry-runs / tests that only exercise the form
+    #: skeleton). Carries the source (bank / inferred / sensitive / review) so the
+    #: §8e feedback loop and §9 telemetry policy can see *why* each question resolved
+    #: the way it did.
+    resolutions: list = field(default_factory=list)
     submitted: bool = False
     confirmation: ConfirmationResult | None = None
     status: ApplicationStatus | None = None
@@ -117,3 +126,80 @@ async def human_type(page, selector: str, text: str) -> bool:
         await el.type(ch)
         await asyncio.sleep(random.uniform(0.03, 0.12))
     return True
+
+
+# --- resolver wiring (shared across ATSes) --------------------------------------
+
+def _selector_for(question: CustomQuestion) -> str:
+    """Build the most-portable selector for a discovered question.
+
+    GH uses ``[name='job_application_answers[...]']`` and ``#question_<id>`` shapes;
+    Lever uses ``[name=\"cards[<uuid>][field0]\"]``. The discovered ``field_id`` is the
+    element's ``name`` (preferred — survives DOM reflows that move the wrapper) falling
+    back to ``id``. We try ``[name='<id>']`` first, then ``#<id>`` — the per-ATS module
+    can override via ``selector_for_question`` if a quirk demands it.
+    """
+    fid = (question.field_id or "").strip()
+    if not fid:
+        return ""
+    # Heuristic: name-keyed (most ATSes use brackets in name) vs. id-keyed.
+    if "[" in fid or "]" in fid:
+        return f"[name='{fid}']"
+    return f"#{fid}"
+
+
+async def fill_resolutions(
+    page,
+    questions: list[CustomQuestion],
+    resolutions: list,
+    *,
+    selector_for=None,
+) -> dict[str, bool]:
+    """Type/select each resolved answer onto its field. Returns ``{field_id: filled?}``.
+
+    Skips:
+      * any resolution with ``value is None`` / ``needs_review`` (driver will downgrade
+        to assisted if it was required — see :func:`any_required_unresolved`).
+      * any selector that doesn't resolve to an element on the page (mid-form break →
+        caller decides; we just report False so the outcome is observable).
+    """
+    selector_for = selector_for or _selector_for
+    filled: dict[str, bool] = {}
+    for q, r in zip(questions, resolutions):
+        if not getattr(r, "fills", False):
+            filled[q.field_id] = False
+            continue
+        sel = selector_for(q)
+        if not sel:
+            filled[q.field_id] = False
+            continue
+        if q.kind == "select":
+            el = await page.query_selector(sel)
+            if el is None:
+                filled[q.field_id] = False
+                continue
+            try:
+                await page.select_option(sel, str(r.value))
+                filled[q.field_id] = True
+            except Exception:  # noqa: BLE001 — mid-form break -> fail closed
+                filled[q.field_id] = False
+        else:
+            # Both <input> and <textarea> take typed text. Same human_type for both
+            # keeps the behavioral signal uniform across ATSes.
+            ok = await human_type(page, sel, str(r.value))
+            filled[q.field_id] = ok
+    return filled
+
+
+def any_required_unresolved(questions: list[CustomQuestion], resolutions: list) -> bool:
+    """True iff a REQUIRED question came back as REVIEW (no confident answer).
+
+    The driver uses this to downgrade ``BROWSER_AUTO`` to ``ASSISTED_PENDING`` —
+    auto-submitting a form with a missing required answer would either fail validation
+    (FAILED) or, worse, submit a partial/garbled application. Optional REVIEWs are
+    benign; we just don't fill them.
+    """
+    for q, r in zip(questions, resolutions):
+        if q.required and getattr(r, "needs_review", False):
+            return True
+    return False

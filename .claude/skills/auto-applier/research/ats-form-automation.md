@@ -371,10 +371,8 @@ dry-run, missing-phone, BROWSER_ASSISTED, visible-challenge downgrade, full auto
 `test_apply_driver.py` adds the Greenhouse BROWSER_ASSISTED case). No live submits.
 
 **What's still pending in Phase 2** (build order, decreasing priority):
-- **Resolver / answer engine for custom questions.** The drivers *discover* the questions
-  (~21 per GH form on average) but don't *answer* them yet. Without this the assisted path
-  works (human answers everything in the open browser); the auto path can only submit
-  forms whose custom-Q count is 0.
+- ~~**Resolver / answer engine for custom questions.**~~ — landed 2026-05-28; see the
+  Phase-2 resolver section below.
 - **Ashby SPA driver.** Same dispatch shape but no `<form>` and no URL transition — must
   detect submit via the in-place success panel (or hook the `applicationForm.submit` XHR).
   Lower priority than the resolver because Ashby is 50% Enterprise anyway.
@@ -383,6 +381,68 @@ dry-run, missing-phone, BROWSER_ASSISTED, visible-challenge downgrade, full auto
 - **Pipeline integration** — none of the drivers actually transition jobs through
   `APPLYING → APPLIED/FAILED/etc.` in the SQLite state machine yet; they return outcomes
   the (not-yet-built) apply worker would translate to state changes.
+
+### Answer resolver landed (2026-05-28, commit pending)
+
+The two-tier resolver from spec §8b/§8d is now wired into both apply drivers. Architecture:
+
+- **`av3/llm/embed.py`** — Ollama `nomic-embed-text` client + cosine helper +
+  `float32` BLOB codec for `answers.embedding`. No numpy dependency — bank is bounded
+  (dozens-low-hundreds), a Python loop is fine and one less wheel to ship.
+- **`av3/llm/complete.py`** — Ollama-JSON → Gemini-JSON → raises. Tier-3 backup only.
+- **`av3/resume/answer_resolver.py`** — the resolver itself:
+  - **Tier 0 (sensitive, §8d).** Regex-classifies the label → EEO / work-auth /
+    sponsorship / salary. EEO: user self-ID or "Prefer not to answer" (still a valid
+    submission, not a REVIEW). Work-auth + sponsorship: explicit fact-bank field, REVIEW
+    if blank (no silent default — explicitly retires v2's "authorized=Yes" from
+    [[project_us_default_assumption]]). Salary: v3.0 fills user-configured expectation,
+    intelligence-layer deferred to v3.1.
+  - **Tier 1 (bank).** Exact question-text match first (skips embedding round-trip —
+    cheap path for users who seeded v2's flat `answers.json`). Then semantic match:
+    embed the question, cosine vs stored vectors, hit on ≥ 0.78.
+  - **Tier 2 (LLM).** Bank misses → fact-bank + question goes to the LLM, which returns
+    `{answer, confidence}`. Above 0.7 → submit, flagged as `inferred` (feeds the §8e
+    promotion loop). Below → REVIEW.
+- **`av3/sources/browser/apply_base.py`** — added `fill_resolutions()` and
+  `any_required_unresolved()` as cross-ATS primitives. Both drivers now accept an
+  optional `resolver` param; when supplied they resolve each discovered question, type
+  text answers via `human_type` (preserves the behavioral signal), select-option for
+  selects, and **downgrade `BROWSER_AUTO` to `ASSISTED_PENDING` if any *required*
+  question came back as REVIEW** (never auto-submit a form with missing required
+  answers).
+- **`av3/resume/seed_answers.py`** — one-shot importer for v2's `data/answers.json`.
+  Idempotent (UPSERT keyed by question text); computes embeddings if an embedding
+  client is available.
+
+Tuning operating points (conservative, fail-closed):
+
+| Knob | Value | Why |
+|---|---|---|
+| `semantic_match_threshold` | 0.78 | High enough that "what's your favorite color?" doesn't get answered with a SQL-years string; low enough that genuine paraphrases ("Years of SQL experience" ≡ "How many years of SQL?") hit. Tunable per §10. |
+| `llm_confidence_threshold` | 0.70 | Mirrors the v2 score-band lessons — borderline LLM proposals route to REVIEW rather than risk a confidently-wrong answer that submits on auto. |
+
+**Validation: 124/124 unit tests pass** (38 new): full resolver coverage (sensitive
+classification matrix; work-auth bail-to-review when bank blank; sponsorship
+true/false/None; EEO with and without self-ID; salary user-config and missing-config;
+exact + semantic + below-threshold bank paths; LLM high/low/unavailable/malformed
+replies; batch order preservation; cosine + codec sanity; v2 seeder idempotency +
+missing-file no-op). Driver wiring tests in both `test_apply_driver.py` and
+`test_lever_apply.py` verify that resolved answers reach the right DOM element (typed
+text for input/textarea, `select_option` for select), and that a required-Q REVIEW
+downgrades `BROWSER_AUTO` to `ASSISTED_PENDING` *before* CAPTCHA / submit-button
+checks. No live submits.
+
+**What this unblocks.** The auto path can now submit forms with custom questions
+when the bank covers them (most common ones — work-auth, years-of-X — are seeded from
+v2's `answers.json` on Day-1 of onboarding). The assisted path becomes legitimately
+*assisted*: the human reviews pre-filled answers rather than typing them from scratch.
+
+**What still needs wiring.** A real apply worker that constructs the resolver
+(needs the fact bank + AnswerRepo + EmbeddingClient + CompletionClient) and threads
+it into `prepare_application(..., resolver=...)`. That worker also owns the
+`APPLYING → APPLIED/FAILED/...` state transitions, which the drivers still don't
+emit themselves (they just return `ApplyOutcome`). Both fall under the next
+Phase-2 piece: the apply worker.
 
 ## Sources
 

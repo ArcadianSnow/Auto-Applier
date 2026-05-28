@@ -61,6 +61,12 @@ class FakePage:
         el = self.elements.setdefault(selector, FakeElement())
         return el
 
+    async def select_option(self, selector, value):
+        # Mirror Playwright's page.select_option: records the chosen value on the
+        # element so test assertions can verify the resolver wrote it through.
+        el = self.elements.setdefault(selector, FakeElement())
+        el.selected = value
+
 
 def _listing() -> JobListing:
     return JobListing(
@@ -134,6 +140,111 @@ def test_browser_assisted_fills_and_stops_with_status():
     assert page.submit_clicked is False
     assert page.elements["#first_name"].typed == "Pat"
     assert outcome.mode is ApplyMode.BROWSER_ASSISTED
+
+
+# ----------------------------------------------------------- resolver wiring (§8b)
+
+class _FakeResolver:
+    """Returns pre-canned Resolution objects by field_id. Lets the driver test the
+    wiring without dragging in the real AnswerResolver (which has its own tests)."""
+
+    def __init__(self, table: dict):
+        self.table = table
+
+    async def resolve_all(self, questions):
+        return [self.table[q.field_id] for q in questions]
+
+
+def _resolved(question, value):
+    from av3.resume.answer_resolver import Resolution, ResolutionSource
+    return Resolution(question=question, value=value, source=ResolutionSource.BANK)
+
+
+def _review(question):
+    from av3.resume.answer_resolver import Resolution, ResolutionSource
+    return Resolution(question=question, value=None, source=ResolutionSource.REVIEW,
+                      needs_review=True)
+
+
+def test_resolver_fills_questions_and_records_resolutions():
+    html = '<form>...</form>'
+    questions = [
+        {"id": "question_111", "label": "Why us?", "required": True, "kind": "textarea"},
+        {"id": "question_222", "label": "Work authorized?", "required": True, "kind": "select"},
+    ]
+    page = FakePage(html, scripts=[], questions=questions)
+    # Pre-build CustomQuestion objects matching what the driver will discover, then map
+    # them to canned resolutions in the fake resolver.
+    from av3.sources.browser.apply_base import CustomQuestion
+    q1 = CustomQuestion("question_111", "Why us?", True, "textarea")
+    q2 = CustomQuestion("question_222", "Work authorized?", True, "select")
+    resolver = _FakeResolver({
+        "question_111": _resolved(q1, "I love your mission."),
+        "question_222": _resolved(q2, "Yes"),
+    })
+
+    outcome = asyncio.run(
+        prepare_application(
+            page, _listing(), Applicant("Pat", "Doe", "pat@example.com"), "/tmp/r.pdf",
+            dry_run=True, resolver=resolver,
+        )
+    )
+
+    assert len(outcome.resolutions) == 2
+    # Textarea typed via human_type
+    assert page.elements["#question_111"].typed == "I love your mission."
+    # Select hit page.select_option
+    assert page.elements["#question_222"].selected == "Yes"
+    # filled dict records per-question outcomes
+    assert outcome.filled["q:question_111"] is True
+    assert outcome.filled["q:question_222"] is True
+
+
+def test_required_question_unresolved_downgrades_auto_to_assisted():
+    """A required custom question that bails to REVIEW must NEVER auto-submit (§8b).
+    The driver downgrades to ASSISTED_PENDING so the human answers + submits."""
+    html = '<textarea id="g-recaptcha-response"></textarea><form><button type="submit"></button></form>'
+    scripts = ["https://www.gstatic.com/recaptcha/releases/x/recaptcha__en.js"]
+    questions = [
+        {"id": "question_999", "label": "Describe your worst failure", "required": True, "kind": "textarea"},
+    ]
+    page = FakePage(html, scripts, questions)
+    from av3.sources.browser.apply_base import CustomQuestion
+    q = CustomQuestion("question_999", "Describe your worst failure", True, "textarea")
+    resolver = _FakeResolver({"question_999": _review(q)})
+
+    outcome = asyncio.run(
+        prepare_application(
+            page, _listing(), Applicant("A", "B", "a@b.com"), "/tmp/r.pdf",
+            dry_run=False, mode=ApplyMode.BROWSER_AUTO, resolver=resolver,
+        )
+    )
+    assert outcome.status is ApplicationStatus.ASSISTED_PENDING
+    assert outcome.submitted is False
+    assert "unresolved" in outcome.note
+
+
+def test_optional_unresolved_does_not_block_auto_submit():
+    """Optional REVIEWs are benign — driver still attempts auto path (other checks may
+    still bounce it, but resolver state shouldn't)."""
+    html = '<textarea id="g-recaptcha-response"></textarea><form></form>'
+    page = FakePage(html, scripts=["https://www.gstatic.com/recaptcha/releases/x/recaptcha__en.js"],
+                    questions=[{"id": "question_x", "label": "Anything else?", "required": False, "kind": "textarea"}])
+    from av3.sources.browser.apply_base import CustomQuestion
+    q = CustomQuestion("question_x", "Anything else?", False, "textarea")
+    resolver = _FakeResolver({"question_x": _review(q)})
+
+    outcome = asyncio.run(
+        prepare_application(
+            page, _listing(), Applicant("A", "B", "a@b.com"), "/tmp/r.pdf",
+            dry_run=False, mode=ApplyMode.BROWSER_AUTO, resolver=resolver,
+        )
+    )
+    # Submit selector returns None in this FakePage -> FAILED (mid-form break, not
+    # a resolver-driven downgrade). What we're verifying is that we did NOT
+    # short-circuit to ASSISTED_PENDING just because an OPTIONAL Q reviewed.
+    assert outcome.status is ApplicationStatus.FAILED
+    assert "submit button" in outcome.note
 
 
 def test_summarize_survey():

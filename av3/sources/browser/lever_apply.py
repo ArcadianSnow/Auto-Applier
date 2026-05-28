@@ -36,6 +36,8 @@ from av3.sources.browser.apply_base import (
     Applicant,
     ApplyOutcome,
     CustomQuestion,
+    any_required_unresolved,
+    fill_resolutions,
     human_type,
 )
 from av3.sources.browser.detect import (
@@ -154,11 +156,14 @@ async def prepare_application(
     dry_run: bool = True,
     mode: ApplyMode = ApplyMode.BROWSER_AUTO,
     confirm_timeout_s: float = 20.0,
+    resolver=None,
 ) -> ApplyOutcome:
     """Navigate to the Lever ``/apply`` URL, classify the (h)CAPTCHA, fill standard fields,
-    attach the résumé (waiting for the parse to settle), discover custom questions, then
-    dispatch by ``(dry_run, mode)`` exactly like the Greenhouse driver. See module docstring
-    for the dispatch semantics; identical to ``greenhouse_apply.prepare_application``.
+    attach the résumé (waiting for the parse to settle), discover + resolve custom
+    questions (when ``resolver`` is supplied), then dispatch by ``(dry_run, mode)``
+    exactly like the Greenhouse driver. See module docstring for the dispatch semantics;
+    identical to ``greenhouse_apply.prepare_application`` including the §8b downgrade
+    when a required custom question lacks a confident answer.
     """
     await page.goto(listing.apply_url, wait_until="domcontentloaded")
     await asyncio.sleep(random.uniform(1.0, 2.5))  # let scripts (hcaptcha) load
@@ -187,11 +192,29 @@ async def prepare_application(
 
     outcome.custom_questions = await discover_custom_questions(page)
 
+    # Resolve + fill custom questions (spec §8b). Resolver optional so existing tests
+    # and the survey path are unaffected.
+    if resolver is not None and outcome.custom_questions:
+        outcome.resolutions = await resolver.resolve_all(outcome.custom_questions)
+        custom_filled = await fill_resolutions(page, outcome.custom_questions, outcome.resolutions)
+        for fid, ok in custom_filled.items():
+            outcome.filled[f"q:{fid}"] = ok
+
     if dry_run:
         outcome.note = "dry-run: filled, not submitted (CAPTCHA presence surveyed, not pass-rate)"
         return outcome
 
     # --- production: branch by mode ---
+    # Required-Q downgrade has to fire before BROWSER_AUTO so we never submit a
+    # form with unanswered required custom questions (spec §8b).
+    if (
+        mode is ApplyMode.BROWSER_AUTO
+        and any_required_unresolved(outcome.custom_questions, outcome.resolutions)
+    ):
+        outcome.status = ApplicationStatus.ASSISTED_PENDING
+        outcome.note = "required custom question unresolved — downgraded to assisted (spec §8b)"
+        return outcome
+
     if mode is ApplyMode.BROWSER_ASSISTED:
         outcome.status = ApplicationStatus.ASSISTED_PENDING
         outcome.note = "assisted: pre-filled; human reviews and clicks submit"

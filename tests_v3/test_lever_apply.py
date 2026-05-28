@@ -102,6 +102,10 @@ class FakePage:
         el = self.elements.setdefault(selector, FakeElement())
         return el
 
+    async def select_option(self, selector, value):
+        el = self.elements.setdefault(selector, FakeElement())
+        el.selected = value
+
 
 def _listing() -> LeverListing:
     return LeverListing(
@@ -232,6 +236,76 @@ def test_browser_auto_submit_missing_fails_fast():
     )
     assert outcome.status is ApplicationStatus.FAILED
     assert page.submit_clicked is False
+
+
+# ----------------------------------------------------------- resolver wiring (§8b)
+
+class _FakeResolver:
+    def __init__(self, table):
+        self.table = table
+
+    async def resolve_all(self, questions):
+        return [self.table[q.field_id] for q in questions]
+
+
+def _resolved(question, value):
+    from av3.resume.answer_resolver import Resolution, ResolutionSource
+    return Resolution(question=question, value=value, source=ResolutionSource.BANK)
+
+
+def _review(question):
+    from av3.resume.answer_resolver import Resolution, ResolutionSource
+    return Resolution(question=question, value=None, source=ResolutionSource.REVIEW,
+                      needs_review=True)
+
+
+def test_resolver_fills_lever_card_questions():
+    """Resolver fills both a card textarea (typed) and a select (chosen) on Lever."""
+    html = '<input name="h-captcha-response"><form>...</form>'
+    questions = [
+        {"id": "cards[uuid-1][field0]", "label": "Why Lever?", "required": True, "kind": "textarea"},
+        {"id": "eeo[gender]", "label": "Gender", "required": False, "kind": "select"},
+    ]
+    page = FakePage(html, scripts=["https://hcaptcha.com/1/api.js"], questions=questions)
+    from av3.sources.browser.apply_base import CustomQuestion
+    q1 = CustomQuestion("cards[uuid-1][field0]", "Why Lever?", True, "textarea")
+    q2 = CustomQuestion("eeo[gender]", "Gender", False, "select")
+    resolver = _FakeResolver({
+        "cards[uuid-1][field0]": _resolved(q1, "Mission alignment."),
+        "eeo[gender]": _resolved(q2, "Prefer not to answer"),
+    })
+
+    outcome = asyncio.run(
+        prepare_application(
+            page, _listing(), Applicant("Pat", "Doe", "pat@example.com"), "/tmp/r.pdf",
+            dry_run=True, resolver=resolver,
+        )
+    )
+    # cards[<uuid>][field0] is name-keyed -> selector "[name='cards[uuid-1][field0]']"
+    assert page.elements["[name='cards[uuid-1][field0]']"].typed == "Mission alignment."
+    assert page.elements["[name='eeo[gender]']"].selected == "Prefer not to answer"
+    assert outcome.filled["q:cards[uuid-1][field0]"] is True
+
+
+def test_lever_required_unresolved_downgrades_auto_to_assisted():
+    html = '<input name="h-captcha-response"><form><button id="btn-submit"></button></form>'
+    page = FakePage(
+        html, scripts=["https://hcaptcha.com/1/api.js"],
+        questions=[{"id": "cards[xyz][field0]", "label": "What scares you?", "required": True, "kind": "textarea"}],
+    )
+    from av3.sources.browser.apply_base import CustomQuestion
+    q = CustomQuestion("cards[xyz][field0]", "What scares you?", True, "textarea")
+    resolver = _FakeResolver({"cards[xyz][field0]": _review(q)})
+
+    outcome = asyncio.run(
+        prepare_application(
+            page, _listing(), Applicant("A", "B", "a@b.com"), "/tmp/r.pdf",
+            dry_run=False, mode=ApplyMode.BROWSER_AUTO, resolver=resolver,
+        )
+    )
+    assert outcome.status is ApplicationStatus.ASSISTED_PENDING
+    assert page.submit_clicked is False
+    assert "unresolved" in outcome.note
 
 
 def test_browser_auto_unconfirmed_when_no_positive_signal():
