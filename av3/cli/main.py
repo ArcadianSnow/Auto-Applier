@@ -159,5 +159,128 @@ def status() -> None:
         click.echo(f"  {state:14} {n}")
 
 
+@cli.command()
+@click.option("--once", is_flag=True, default=True,
+              help="Run one cycle and exit. The only mode v3.0 ships (staged scheduler is Phase 3).")
+@click.option("--limit", type=int, default=None,
+              help="Maximum QUEUED_APPLY jobs to process this run.")
+@click.option("--source", type=click.Choice(["lever", "greenhouse"]), default=None,
+              help="Process only this source's jobs (subsets the driver registry).")
+@click.option("--dry-run/--no-dry-run", default=True,
+              help="Dev-safe default. --no-dry-run SENDS REAL APPLICATIONS.")
+@click.option("--mode", type=click.Choice(["auto", "assisted"]), default="auto",
+              help="auto = bot fills + submits on clean forms; assisted = pre-fill, human submits.")
+@click.option("--no-llm", is_flag=True, default=False,
+              help="Skip Ollama/Gemini wiring. Resolver uses bank + sensitive policy only.")
+def apply(once: bool, limit: int | None, source: str | None,
+          dry_run: bool, mode: str, no_llm: bool) -> None:
+    """Drain QUEUED_APPLY jobs through the apply worker (spec section 7 #7).
+
+    Constructs the resolver from the fact bank, opens one stealthy Chrome session, and
+    walks each queued job through the per-ATS driver. --dry-run keeps the job in
+    QUEUED_APPLY (no state ping-pong); --no-dry-run is the gated path that actually
+    submits.
+    """
+    import asyncio
+
+    from av3.domain.state import ApplyMode
+    from av3.llm.complete import build_default
+    from av3.llm.embed import OllamaEmbeddings
+    from av3.pipeline import ApplyWorker, default_drivers
+    from av3.resume.factbank import FactBank
+    from av3.sources.browser.session import BrowserSession
+    from av3.telemetry import configure_sink
+
+    settings = load_settings()
+
+    # Pre-flight: fact bank + resume file MUST exist. Clearer to fail here with a
+    # doctor-style fix hint than to crash mid-run.
+    fact_bank_path = settings.data_dir / "profile" / "master.json"
+    if not fact_bank_path.exists():
+        click.echo(f"  x FAIL fact bank: missing at {fact_bank_path}", err=True)
+        click.echo(
+            "        fix -> seed the fact bank during onboarding (Phase 4) "
+            "or drop a master.json there.",
+            err=True,
+        )
+        sys.exit(2)
+
+    resume_path = settings.artifacts_dir / "resume.pdf"
+    if not resume_path.exists():
+        click.echo(f"  x FAIL resume: missing at {resume_path}", err=True)
+        click.echo(
+            "        fix -> drop a resume.pdf into the artifacts dir until "
+            "section 6b resume generation lands.",
+            err=True,
+        )
+        sys.exit(2)
+
+    bank = FactBank.load(fact_bank_path)
+    conn = init_app_db(settings.app_db_path)
+    configure_sink(EventSink(settings.events_db_path))
+
+    drivers = default_drivers()
+    if source:
+        drivers = {source: drivers[source]}
+
+    # Embed + LLM clients are HTTP-lazy: constructor doesn't touch the network, so a
+    # down Ollama just surfaces at resolve time and the resolver falls through to REVIEW.
+    embed = None if no_llm else OllamaEmbeddings(
+        host=settings.llm.ollama_host, model=settings.llm.embed_model
+    )
+    llm = None if no_llm else build_default(settings)
+
+    apply_mode = ApplyMode.BROWSER_AUTO if mode == "auto" else ApplyMode.BROWSER_ASSISTED
+
+    # Loud confirmation before the irreversible path. The handoff calls this out as a
+    # gated user decision and the spec stays "safety floor never tunable by config".
+    if not dry_run:
+        click.echo(
+            f"! --no-dry-run: real submits to source={source or 'lever+greenhouse'} "
+            f"mode={mode} limit={limit if limit is not None else 'unbounded'}"
+        )
+
+    async def _run():
+        session = BrowserSession(settings.browser_profile_dir)
+        await session.start()
+        try:
+            worker = ApplyWorker(
+                settings=settings,
+                conn=conn,
+                fact_bank=bank,
+                resume_path=str(resume_path),
+                new_page=session.new_page,
+                embed_client=embed,
+                llm_client=llm,
+                mode=apply_mode,
+                dry_run=dry_run,
+                drivers=drivers,
+            )
+            return await worker.run_once(limit=limit)
+        finally:
+            await session.stop()
+
+    try:
+        summary = asyncio.run(_run())
+    finally:
+        conn.close()
+
+    # ASCII-only summary line; the cp1252 Windows console reconfigures at module top but
+    # we still avoid unicode glyphs to match doctor/status output style.
+    click.echo(
+        f"run_id={summary.run_id} attempted={summary.attempted} "
+        f"applied={summary.applied} review={summary.review} "
+        f"skipped={summary.skipped} errors={summary.errors} "
+        f"dry_run={summary.dry_run_count} elapsed={summary.elapsed_s:.1f}s"
+    )
+    if summary.notes:
+        click.echo("Notes:")
+        for note in summary.notes:
+            click.echo(f"  - {note}")
+
+    # CI / cron friendliness: any per-job exception is a non-zero exit.
+    sys.exit(1 if summary.errors else 0)
+
+
 if __name__ == "__main__":
     cli()

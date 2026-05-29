@@ -521,9 +521,10 @@ state-machine test asserting the new `APPLYING → REVIEW` edge.
 ### What still needs wiring
 
 - **First live Lever smoketest.** The worker's first real submit is a gated user
-  decision (sends a real application). A `cli apply --once --source lever` would
-  be the entry point; not built yet. Lever was chosen as the field-validated
-  auto-viable target per the n=16 survey above — start there, not Greenhouse.
+  decision (sends a real application). The CLI entry now exists (see "CLI apply
+  wired" below); the smoketest itself is still on the user. Lever was chosen as
+  the field-validated auto-viable target per the n=16 survey above — start there,
+  not Greenhouse.
 - **Ashby SPA driver.** Same dispatch shape as Lever/GH but no `<form>`, XHR
   submit, in-place success panel. `detect_confirmation` already has the design
   notes (§Ashby above). Once that lands the worker only needs the registry entry.
@@ -533,6 +534,90 @@ state-machine test asserting the new `APPLYING → REVIEW` edge.
 - **Crash-sweep on startup.** Spec §5 mandates re-queueing jobs left in `APPLYING`
   from a crashed prior run — owed at worker-service boot, not implemented yet
   (the edge `APPLYING → QUEUED_APPLY` exists for it; just no caller).
+
+## CLI apply wired (2026-05-29, Phase 2 (4/N))
+
+### What landed
+
+`av3 apply` (in `av3/cli/main.py`) is the smallest reachable wrapper around
+`ApplyWorker.run_once()`. It is the entry point for the gated first live Lever
+smoketest that closes Phase 2's auto-apply thesis.
+
+Flags:
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--once` | `True` | Run one cycle and exit. Only mode v3.0 ships; placeholder for the Phase-3 staged scheduler. |
+| `--limit N` | unbounded | Max QUEUED_APPLY jobs per run. Threaded directly into `worker.run_once(limit=...)`. |
+| `--source lever\|greenhouse` | both | Subsets the driver registry (cleaner than per-job filtering — the worker already short-circuits unknown sources). |
+| `--dry-run / --no-dry-run` | `--dry-run` | Dev-safe default. `--no-dry-run` SENDS REAL APPLICATIONS; CLI prints a loud confirmation line first. |
+| `--mode auto\|assisted` | `auto` | `BROWSER_AUTO` vs `BROWSER_ASSISTED`. Only consulted when `dry_run=False`. |
+| `--no-llm` | `False` | Skip Ollama/Gemini construction. Resolver still works for exact-bank + sensitive policy. |
+
+### Pre-flight (doctor-style)
+
+Two fail-fast checks with `fix ->` hints:
+
+- `data_dir / "profile" / "master.json"` MUST exist (fact bank).
+- `data_dir / "artifacts" / "resume.pdf"` MUST exist (resume PDF placeholder
+  until §6b résumé generation lands).
+
+Failure exits 2 with the doctor's `x FAIL` / `fix ->` format, never crashes
+mid-run.
+
+### Wire-up shape
+
+```
+load_settings -> pre-flight (bank + resume)
+              -> FactBank.load(master.json)
+              -> init_app_db(app_db_path)
+              -> configure_sink(EventSink(events_db_path))
+              -> drivers = default_drivers()  [or {source: ...}]
+              -> embed = OllamaEmbeddings(...) | None
+              -> llm   = build_default(settings) | None
+              -> asyncio.run(_run()):
+                   BrowserSession.start() -> ApplyWorker(...) -> worker.run_once(limit) -> BrowserSession.stop()
+              -> ASCII summary line + Notes block
+              -> exit 1 if summary.errors else 0
+```
+
+`BrowserSession`'s `new_page` coroutine is the only callable the worker holds
+on to from the browser layer — the worker stays Playwright-free.
+
+### Summary line + exit code
+
+ASCII-only one-liner (Windows cp1252 safety):
+`run_id=<id> attempted=N applied=N review=N skipped=N errors=N dry_run=N elapsed=N.Ns`,
+optionally followed by a `Notes:` block of any human-readable lines the worker
+recorded (rate-limit skips, unknown sources). Exit code is `1` when any per-job
+exception fired (`summary.errors > 0`) so cron/CI can gate; `0` otherwise; `2`
+on pre-flight failure.
+
+### Validation: 162/162 v3 tests pass (+15)
+
+`tests_v3/test_cli_apply.py` (15 cases) covers: both pre-flight failure modes
+with `fix ->` hint visible; summary-line shape on clean runs; exit code `1` on
+errors; `Notes:` block printing; `--dry-run` default and `--no-dry-run` flip
+(plus its loud confirmation line); `--mode auto|assisted` → `ApplyMode` enum
+mapping; `--source` subsetting the driver registry; default registry exposes
+both sources; `--limit` threading into `run_once`; `--no-llm` zeroing both LLM
+clients; default wiring both LLM clients; session `start`/`stop` lifecycle;
+fact-bank threading. Stubs `BrowserSession` + `ApplyWorker` so no live browser
+runs (worker behavior is owned by `test_apply_worker.py`).
+
+### What still needs the user
+
+The first live Lever smoketest is the gated decision the spec's Phase-1
+"open" item names. CLI is ready:
+
+```
+av3 apply --once --source lever --limit 1 --dry-run    # confirm form fills cleanly
+av3 apply --once --source lever --limit 1 --no-dry-run --mode auto    # REAL SUBMIT
+```
+
+Junk-target Lever posting required. Record the outcome (confirmation detection,
+`resolver_inferred` rows in `events.db`, post-submit `JobState`) in this doc
+as the live-pass data point we've been chasing.
 
 ## Sources
 
