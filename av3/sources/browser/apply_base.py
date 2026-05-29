@@ -25,7 +25,12 @@ import random
 from dataclasses import dataclass, field
 
 from av3.domain.state import ApplicationStatus, ApplyMode
-from av3.sources.browser.detect import CaptchaResult, ConfirmationResult
+from av3.sources.browser.detect import (
+    CaptchaResult,
+    ConfirmationResult,
+    detect_login_wall,
+)
+from av3.sources.health import mark_auth_required
 
 __all__ = [
     "Applicant",
@@ -33,6 +38,7 @@ __all__ = [
     "ApplyOutcome",
     "CustomQuestion",
     "any_required_unresolved",
+    "check_auth_wall",
     "fill_resolutions",
     "human_type",
 ]
@@ -203,3 +209,32 @@ def any_required_unresolved(questions: list[CustomQuestion], resolutions: list) 
         if q.required and getattr(r, "needs_review", False):
             return True
     return False
+
+
+async def check_auth_wall(page, source: str) -> str:
+    """Did navigation land us on a login page? (spec §8b session expiry)
+
+    Returns the auth-wall signal string when detected (non-empty truthy),
+    empty string otherwise. On detect it ALSO marks the source AUTH_REQUIRED
+    in the process-level health registry, which (a) pauses the source in the
+    apply worker's per-job loop until the user re-logs in, and (b) emits a
+    ``session_expiry`` event to the spine for the dashboard's "login needed"
+    badge.
+
+    Drivers call this *after* ``page.goto(apply_url, ...)`` and *before* trying
+    to fill anything: if we're at a login form, filling apply fields would
+    type into the wrong inputs and almost certainly fail the submit anyway.
+
+    Defensive: a Playwright error during ``page.url`` / ``page.content()``
+    propagates to the caller (the apply worker catches it as a per-job
+    exception and routes to FAILED → REVIEW — the existing isolation path).
+    We don't swallow it here because hiding navigation errors masks real
+    driver bugs.
+    """
+    url = page.url or ""
+    html = await page.content()
+    result = detect_login_wall(url, html)
+    if result.present:
+        mark_auth_required(source, reason=f"login wall detected at {url}")
+        return result.signal
+    return ""

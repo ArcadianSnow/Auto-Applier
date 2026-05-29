@@ -36,6 +36,7 @@ from av3.sources.browser.apply_base import (
     ApplyOutcome,
     CustomQuestion,
     any_required_unresolved,
+    check_auth_wall,
     fill_resolutions,
     human_type,
 )
@@ -180,6 +181,21 @@ async def prepare_application(
     # SPA needs render + a moment for invisible reCAPTCHA to attach.
     await _wait_for_form_ready(page)
     await asyncio.sleep(random.uniform(1.0, 2.5))
+
+    # Session-expiry check (spec §8b): pause this source and fail fast if we
+    # landed on a login page. Run AFTER _wait_for_form_ready so the SPA actually
+    # rendered something - otherwise the check sees an empty document and
+    # always concludes "no wall" even when there's one about to render.
+    auth_signal = await check_auth_wall(page, "ashby")
+    if auth_signal:
+        outcome = ApplyOutcome(
+            job_url=listing.apply_url,
+            captcha=classify_captcha("", []),  # synthetic NONE - we never saw the form
+            mode=mode,
+            status=ApplicationStatus.FAILED,
+            note=f"auth required (ashby session expired): {auth_signal}",
+        )
+        return outcome
 
     html = await page.content()
     scripts = await _collect_script_srcs(page)

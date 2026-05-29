@@ -78,6 +78,7 @@ from av3.sources.ashby import AshbyListing
 from av3.sources.browser import ashby_apply, greenhouse_apply, lever_apply
 from av3.sources.browser.apply_base import Applicant, ApplyOutcome
 from av3.sources.greenhouse import JobListing as GreenhouseListing
+from av3.sources.health import is_paused
 from av3.sources.lever import LeverListing
 from av3.telemetry import get_sink
 
@@ -193,7 +194,8 @@ class ApplyRunSummary:
     attempted: int = 0    # process_one calls that ran the driver (incl. dry-runs)
     applied: int = 0      # outcome.status == APPLIED
     review: int = 0       # any non-APPLIED real status (ASSISTED_PENDING/UNCONFIRMED/FAILED)
-    skipped: int = 0      # rate-limit / unknown source
+    skipped: int = 0      # rate-limit / unknown source / paused source (spec §8b)
+    paused: int = 0       # subset of skipped: AUTH_REQUIRED source (spec §8b)
     errors: int = 0       # exception during _process_one
     recovered: int = 0    # crash-sweep: APPLYING leftovers re-queued (spec §5)
     dry_run_count: int = 0
@@ -320,6 +322,19 @@ class ApplyWorker:
             if job.source not in self._drivers:
                 summary.skipped += 1
                 summary.notes.append(f"unknown source {job.source!r} for job {job.id}")
+                prior_was_apply = False
+                continue
+
+            # Source paused (spec §8b session expiry): silently skip, leave the job
+            # in QUEUED_APPLY for next cycle. Other sources keep running; the user
+            # re-logs in when convenient and ``av3.sources.health.mark_healthy()``
+            # clears the pause. No state change, no rate-limit slot burned.
+            if is_paused(job.source):
+                summary.skipped += 1
+                summary.paused += 1
+                summary.notes.append(
+                    f"source-paused skip: {job.source} auth_required (job {job.id})"
+                )
                 prior_was_apply = False
                 continue
 

@@ -154,3 +154,60 @@ def detect_confirmation(
     # 4. Corroboration only: submit gone + no errors. Weak alone → still UNCONFIRMED
     #    unless paired with a positive signal above. We never mark APPLIED off this alone.
     return ConfirmationResult(ConfirmationOutcome.UNCONFIRMED, "no_positive_signal")
+
+
+# ------------------------------------------------------------------ AUTH WALL
+
+#: URL substrings that indicate the page redirected to a login flow rather than the
+#: requested apply form. Lowercased before comparison; substring match (so
+#: ``/account/login?return=…`` matches). These are the patterns we've actually
+#: observed across ATS + board redirects; add new ones here as they're seen.
+_LOGIN_URL_MARKERS: tuple[str, ...] = (
+    "/login", "/signin", "/sign-in", "/sign_in", "/account/login",
+    "/users/sign_in", "/auth/login", "/auth/signin", "auth0.com",
+)
+
+
+_AUTH_WALL_INPUT_RE = re.compile(
+    r'<input[^>]+(?:type=["\']password["\']|name=["\']password["\']|id=["\']password)',
+    re.I,
+)
+_AUTH_WALL_LABEL_RE = re.compile(
+    r'(sign[\s-]?in|log[\s-]?in|please (?:log|sign)\s+in|enter your password)',
+    re.I,
+)
+
+
+@dataclass
+class AuthWallResult:
+    """Pure detector output. ``present`` = navigation landed somewhere the bot can't
+    proceed (login form, account-required redirect). ``signal`` records which rule
+    fired so the event log and dashboard can show *why*."""
+
+    present: bool
+    signal: str = ""
+
+
+def detect_login_wall(url: str, html: str) -> AuthWallResult:
+    """Was the navigation kicked to a login page?
+
+    Pure function over (url, html) so the same detector works against a live
+    Playwright page and against saved HTML fixtures. Conservative — both URL
+    pattern OR (password input + sign-in label) must fire. Either alone is too
+    noisy: ATS forms sometimes embed a "passwordless candidate sign-in" widget
+    that has a password field but isn't blocking the apply form.
+
+    Order: URL match wins outright (most reliable when navigation actually
+    redirected); HTML-only match requires BOTH a password input AND a
+    sign-in/log-in label/heading, which is rare on apply forms.
+    """
+    u = (url or "").lower()
+    for marker in _LOGIN_URL_MARKERS:
+        if marker in u:
+            return AuthWallResult(True, signal=f"url:{marker}")
+
+    h = html or ""
+    if _AUTH_WALL_INPUT_RE.search(h) and _AUTH_WALL_LABEL_RE.search(h):
+        return AuthWallResult(True, signal="html:password+signin_label")
+
+    return AuthWallResult(False, signal="")

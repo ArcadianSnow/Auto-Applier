@@ -28,6 +28,7 @@ from av3.sources.browser.apply_base import (
     ApplyOutcome,
     CustomQuestion,
     any_required_unresolved,
+    check_auth_wall,
     fill_resolutions,
     human_type,
 )
@@ -138,6 +139,20 @@ async def prepare_application(
     """
     await page.goto(listing.url, wait_until="domcontentloaded")
     await asyncio.sleep(random.uniform(1.0, 2.5))  # let scripts (recaptcha) load
+
+    # Session-expiry check (spec §8b): if navigation kicked us to a login page,
+    # pause the source in the health registry + fail fast to FAILED→REVIEW.
+    # Other sources keep running; the user re-logs in when convenient.
+    auth_signal = await check_auth_wall(page, "greenhouse")
+    if auth_signal:
+        outcome = ApplyOutcome(
+            job_url=listing.url,
+            captcha=classify_captcha("", []),  # synthetic NONE — we never saw the form
+            mode=mode,
+            status=ApplicationStatus.FAILED,
+            note=f"auth required (greenhouse session expired): {auth_signal}",
+        )
+        return outcome
 
     html = await page.content()
     scripts = await _collect_script_srcs(page)

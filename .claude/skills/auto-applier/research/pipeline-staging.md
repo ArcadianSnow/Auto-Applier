@@ -421,3 +421,107 @@ than pipeline construction:
      against a labeled set; also calibrates the (1/M) filter threshold.
   8. Mocked-source CI for selector drift.
   9. Live smoke tests on real ATS APIs/forms (NEVER submits).
+
+---
+
+## Phase 3 (4/M) — session-expiry graceful degradation landed
+
+Four-layer wiring across `av3/sources/browser/detect.py`,
+`av3/sources/health.py` (NEW), `av3/sources/browser/apply_base.py`,
+all three apply drivers (lever/greenhouse/ashby), and the apply worker —
+plus 16 new tests (288 v3 tests total, +16 from (3/M)). **Spec §8b
+satisfied:** when manual login dies mid-run, the affected source pauses
+in a process-level health registry, telemetry emits a `session_expiry`
+event for the dashboard's future "login needed" badge, and the apply
+worker skips that source's jobs silently while other sources keep
+running. **One dead session never stalls the whole bot.**
+
+### The four layers
+
+1. **Pure detector** (`detect.py`). `detect_login_wall(url, html) →
+   AuthWallResult` matches a tuple of well-known login URL substrings
+   (winners outright) OR a *both*-condition HTML check (password input
+   AND a sign-in label). The HTML rule requires both signals because
+   a password input alone (e.g. a passwordless-candidate widget
+   embedded on a normal apply form) would false-positive and pause a
+   healthy source. False-positives cost the user a manual re-login;
+   false-negatives cost a wasted apply submit to a login page. The
+   asymmetry favors the both-required HTML rule.
+
+2. **Health registry** (`av3/sources/health.py`, NEW). Process-level
+   in-memory dict keyed by source name, lock-guarded so a future
+   multi-worker scheduler ((5/M)) doesn't race on mutations. API:
+   `mark_auth_required(source, reason)`, `mark_healthy(source)`,
+   `is_paused(source)`, `paused_sources()`, `snapshot()`,
+   `reset_health()` (test-only). Why in-memory and not DB-persisted:
+   the manual-login state lives in the browser profile dir which IS
+   persistent, so a restart should re-probe via the next live request
+   rather than carry a possibly-stale "needs login" flag. Persisting
+   would risk a stale dashboard badge after the user logs back in.
+
+3. **Driver hook** (`apply_base.check_auth_wall(page, source) → str`).
+   The thin wrapper drivers call after `page.goto(apply_url)` — runs
+   the detector, marks the source on detect, returns the signal so
+   the driver can stamp a clear note on the outcome and early-exit
+   with `status=FAILED`. The apply worker's existing FAILED→REVIEW
+   translation handles the rest (no new state-machine edges). All
+   three drivers (lever/greenhouse/ashby) gained the check directly
+   after their existing post-navigation wait.
+
+4. **Apply worker integration**. New `summary.paused` counter; the
+   per-job loop checks `is_paused(job.source)` BEFORE dispatch and
+   silently skips with no state change (the job stays in
+   QUEUED_APPLY for next cycle). Sits between "unknown source"
+   and "per-company rate limit" in the skip chain — paused sources
+   shouldn't burn the rate-limit slot or be miscounted as
+   driver errors. CLI summary surfaces it: `... skipped=N paused=N
+   ... ` so the operator sees "5 skipped of which 5 are paused"
+   vs "5 skipped, 0 paused" distinctly.
+
+### Telemetry — emit on transition, not per check
+
+`mark_auth_required` / `mark_healthy` emit a `session_expiry` event
+ONLY when the state actually changed. Repeated `mark_auth_required`
+on an already-paused source is a no-op on telemetry (so a polling
+check doesn't flood the spine). Same for `mark_healthy` on an
+already-healthy source. This keeps the event log honest about
+"when did the source actually die / come back" rather than spamming
+heartbeats. The reason string updates regardless (the latest cause
+wins) but only the first transition writes an event row.
+
+### What's NOT in this sub-phase
+
+  * **Auto-recovery from a successful login.** The user has to either
+    use the dashboard "I'm back in" button (Phase 4) or wait for an
+    `av3 health clear <source>` CLI command (deferred — easier added
+    alongside Phase 4 when the dashboard polls `snapshot()`). For
+    now, the worker can re-process a paused source after a process
+    restart (the registry is in-memory) — which is the documented
+    Phase-3 workflow.
+  * **Discovery-side hooks.** The spec mentions both discovery + apply
+    paths. Discovery via ATS APIs is auth-free (spec §6a), so no hook
+    is needed there in v3.0. JobSpy browser discovery (Indeed/Zip) is
+    the realistic candidate but its discovery path is HTML-scraping
+    not Playwright; wiring is the (5/M) scheduler's job.
+  * **A CLI to inspect/clear health.** `av3 health` is straightforward
+    but bundling it with the (5/M) scheduler keeps the CLI surface
+    coherent (the dashboard will be the primary surface anyway).
+
+### Edge cases covered (see `tests_v3/test_session_expiry.py`)
+
+| Path | Outcome |
+|---|---|
+| URL contains `/login`, `/signin`, `/sign_in`, `/auth/login`, ... | wall present |
+| HTML has password input + sign-in label | wall present (both required) |
+| HTML has password input only | wall NOT present (passwordless widget) |
+| HTML has sign-in label only | wall NOT present |
+| Normal Lever apply form (name/email/file/submit) | wall NOT present |
+| `mark_auth_required` then `is_paused` | True |
+| `mark_auth_required` then `mark_healthy` | False, telemetry emits twice |
+| `mark_auth_required` × 2 | telemetry emits once (idempotent) |
+| `mark_healthy` on already-healthy | no telemetry emit |
+| Empty source name on either mark | silent no-op |
+| `snapshot()` returns a copy | mutating it does not affect registry |
+| Apply worker, paused source | skip, state unchanged, no driver call |
+| Apply worker, mixed paused + healthy sources | paused skipped, healthy runs |
+| Paused source recovers after `mark_healthy` | next run processes it |
