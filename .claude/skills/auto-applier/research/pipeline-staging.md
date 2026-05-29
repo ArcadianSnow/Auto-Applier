@@ -120,3 +120,124 @@ proves the staged-worker pattern that (5/M) generalizes). Next:
    tests — hardening for ship.
 
 When (1)–(5) are committed, v3.0 has a fully working pipeline end-to-end.
+
+---
+
+## Phase 3 (2/M) — score worker + LLM dimension scoring landed
+
+`av3/pipeline/score_worker.py`, `av3/llm/prompts.py` (new — versioned templates,
+spec §10), `av3 score` CLI command, 27 new tests. **Spec §7 #5 + §10 satisfied:**
+LLM dimension-scores the full JD against the master fact-bank profile across the
+seven weighted axes (`skills 0.35`, `experience 0.20`, `seniority 0.15`,
+`location 0.10`, `culture 0.08`, `growth 0.07`, `compensation 0.05`), Python
+computes the weighted total per `Settings.scoring.weights`, writes a `JobScore`
+row, and walks `DESCRIBED → SCORED → DECIDED`. Below `review_min` (default 4.0)
+keeps walking `DECIDED → SKIPPED` so the optimize worker can trust every
+DECIDED job it picks up is worth optimizing.
+
+### Why the score worker is "fail-CLOSED," not "fail-open"
+
+This is the **inversion** of the filter worker's posture and the inversion has to
+be deliberate, not accidental:
+
+| Failure mode | Filter worker | Score worker |
+|---|---|---|
+| No LLM/embed client | route to DESCRIBED (`failed_open`) | walk to SKIPPED with `total=0` (`failed_closed`) |
+| Per-job exception | route to DESCRIBED, isolate | walk to SKIPPED with `total=0`, isolate |
+| What's at stake | losing user jobs in terminal FILTERED | auto-applying unscored garbage downstream |
+
+The filter worker's failure mode (silently FILTER everything) would lose user
+jobs forever — DESCRIBED is the right fail-open target. The score worker's
+failure mode (silently let everything through to optimize with score 0.0) would
+auto-apply unscored garbage — SKIPPED is the right fail-closed target. **Both
+CLIs exit 1 on `errors > 0`** so a misconfigured Ollama trips monitoring even
+when the per-job behavior is "graceful."
+
+### The fail-closed walk goes through every transition
+
+`_write_fail_closed` walks `DESCRIBED → SCORED → DECIDED → SKIPPED` rather than
+shortcutting. Reasons:
+
+1. The state machine (spec §5) has no `DESCRIBED → SKIPPED` edge — the
+   allowed-transitions table is the single chokepoint and we don't punch new
+   edges for fail paths.
+2. The dashboard renders fail-closed and real-but-below-bar jobs identically:
+   "this job was attempted, scored X, didn't meet the bar." Fail-closed just
+   has `X=0`. Consistent UI from consistent state machine paths.
+3. A `JobScore` row gets written for every attempt, so the audit trail records
+   "we tried this job with `total=0.0` and model tag `score-jd-v1|no-llm`"
+   rather than leaving a silent gap.
+
+### `StageSkip` raise discipline
+
+The fail-closed helper does **durable writes only** — it does NOT raise. Callers
+decide whether to raise `StageSkip`:
+
+- Inside `_process_one` (the `@stage("score")` frame): raise `StageSkip` after
+  the write so the event spine records `status='skip'` with the reason, not
+  `'ok'`.
+- From `run_once`'s exception handler: just write and return. The handler is
+  already past the `@stage` frame; raising would propagate the `StageSkip` out
+  of `run_once` itself and break the run. (This was the first defect during
+  authoring — a generic helper that always raised broke the per-job isolation
+  contract.)
+
+### Prompt versioning
+
+`av3/llm/prompts.py` is new — spec §10 mandates *"prompts live in versioned
+template files (not inline)."* Every `PromptTemplate` carries a `version`
+string; the score worker stamps `{prompt_version}|{llm_model}` into
+`JobScore.model` so a score row is self-describing. This is what the **Phase 3
+(7/M) eval harness** will pin against: a prompt change that drifts scores will
+be detectable from the version stamp alone.
+
+Initial template: `SCORE_JD` (version `score-jd-v1`). Demands JSON-only output
+with the exact 7-key axis shape; defensive parser (`parse_dimensions`) defaults
+missing axes to 5.0 (neutral), clamps to `[0, 10]`, coerces numeric strings,
+and rejects only non-dict payloads. Strict at the wire, lenient at the merge —
+a partial reply doesn't crater the run; a malformed reply isolates one job.
+
+### Defensive parser specifics (see `tests_v3/test_score_worker.py::test_parse_dimensions_*`)
+
+| Input | Output |
+|---|---|
+| missing axis | 5.0 (neutral, mirrors the prompt's "unstated → 5.0" rule) |
+| value > 10 | clamped to 10.0 |
+| value < 0 | clamped to 0.0 |
+| `None` | 5.0 |
+| non-numeric string | 5.0 |
+| numeric string ("7.5") | 7.5 (Python `float()`) |
+| `True` / `False` | 1.0 / 0.0 (Python coercion) |
+| `NaN` / `±inf` | 5.0 |
+| non-dict payload (list, string) | raises `ValueError` → per-job fail-closed |
+
+### What's NOT in this sub-phase
+
+- **Résumé / cover-letter generation** — that's the (3/M) optimize worker.
+  "Score + generate LLM wiring" in the handoff was about wiring the LLM for the
+  *score* path; the *generate* path is the next sub-phase.
+- **A describe worker** — the spec lists describe as step #4 between filter and
+  score. For ATS sources (Greenhouse/Lever/Ashby) the description is already
+  populated at discovery time (the public APIs return JD text), so the score
+  worker reads `job.description` directly. For browser boards (JobSpy/Indeed/
+  Zip) a real describe step will land alongside (5/M)'s scheduler — until then
+  those rows fail-closed with "empty job description" which is the conservative
+  right answer.
+- **Eval harness** — that's (7/M). The version-stamping landed here so when the
+  harness arrives, it has version-tagged rows to pin against.
+- **Auto-tuning thresholds** — `auto_apply_min` and `review_min` stay at their
+  spec defaults (7.0 / 4.0). Outcome-driven tuning is the §8e feedback loop,
+  v3.1.
+
+### Test pattern reused across (1/M) and (2/M)
+
+Both workers' tests follow the same shape:
+- Fake the LLM / embedding client via a small inline stub that records calls.
+- Seed the right state via the canonical state-machine walk (no ad-hoc INSERT).
+- Assert: state transition + summary counter + Application-or-JobScore row +
+  telemetry event row (when relevant).
+- CLI tests stub the *worker* entirely (recording its kwargs) so they cover
+  argument parsing / pre-flight / exit codes without re-testing worker logic.
+
+Carry this shape forward into (3/M) and beyond — `tests_v3/test_*_worker.py` +
+`tests_v3/test_cli_*.py` becomes a stable two-file template per sub-phase.

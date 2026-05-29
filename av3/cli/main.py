@@ -365,5 +365,94 @@ def filter_cmd(once: bool, limit: int | None, threshold: float, no_llm: bool) ->
     sys.exit(1 if summary.errors else 0)
 
 
+@cli.command("score")
+@click.option("--once", is_flag=True, default=True,
+              help="Run one cycle and exit. The only mode v3.0 ships (staged scheduler is Phase 3).")
+@click.option("--limit", type=int, default=None,
+              help="Maximum DESCRIBED jobs to process this run.")
+@click.option("--no-llm", is_flag=True, default=False,
+              help="Skip Ollama/Gemini. Every DESCRIBED job will SKIP (fail-closed) "
+                   "with total=0.0 - the opposite of filter --no-llm because scoring "
+                   "without an LLM cannot honestly produce a merit-based pass.")
+def score_cmd(once: bool, limit: int | None, no_llm: bool) -> None:
+    """Drain DESCRIBED jobs through the score worker (spec section 7 #5).
+
+    LLM dimension-scores the full JD against the master fact-bank profile across the
+    seven weighted axes from settings.scoring, computes the weighted total, and
+    walks the state machine: above review_min stays at DECIDED for the optimize
+    worker to pick up; below review_min walks DECIDED -> SKIPPED here so the
+    optimize worker can trust every DECIDED job it sees is worth optimizing.
+
+    Fail-CLOSED: missing LLM / empty JD / per-job LLM exception all walk that job
+    through SCORED -> DECIDED -> SKIPPED with total=0.0 (the opposite of filter's
+    fail-open posture, because fail-open here would auto-apply unscored jobs).
+    """
+    import asyncio
+
+    from av3.llm.complete import build_default
+    from av3.pipeline import ScoreWorker
+    from av3.resume.factbank import FactBank
+    from av3.telemetry import configure_sink
+
+    settings = load_settings()
+
+    # Pre-flight: fact bank MUST exist - the bank summary becomes the profile side
+    # of every score prompt. No resume.pdf check (scoring doesn't touch the file;
+    # the optimize worker builds the per-job resume from the bank).
+    fact_bank_path = settings.data_dir / "profile" / "master.json"
+    if not fact_bank_path.exists():
+        click.echo(f"  x FAIL fact bank: missing at {fact_bank_path}", err=True)
+        click.echo(
+            "        fix -> seed the fact bank during onboarding (Phase 4) "
+            "or drop a master.json there.",
+            err=True,
+        )
+        sys.exit(2)
+
+    bank = FactBank.load(fact_bank_path)
+    conn = init_app_db(settings.app_db_path)
+    configure_sink(EventSink(settings.events_db_path))
+
+    # LLM client is HTTP-lazy: constructor doesn't touch the network, so a down
+    # Ollama just surfaces at run time and the worker fail-closes per-job.
+    llm = None if no_llm else build_default(settings)
+
+    if no_llm:
+        click.echo(
+            "! --no-llm: every DESCRIBED job will SKIP with total=0.0 "
+            "(scoring requires an LLM)."
+        )
+
+    async def _run():
+        worker = ScoreWorker(
+            settings=settings,
+            conn=conn,
+            fact_bank=bank,
+            llm_client=llm,
+        )
+        return await worker.run_once(limit=limit)
+
+    try:
+        summary = asyncio.run(_run())
+    finally:
+        conn.close()
+
+    # ASCII-only summary line; matches doctor/status/apply/filter output style.
+    click.echo(
+        f"run_id={summary.run_id} attempted={summary.attempted} "
+        f"decided={summary.decided} below_bar={summary.below_bar} "
+        f"failed_closed={summary.failed_closed} errors={summary.errors} "
+        f"elapsed={summary.elapsed_s:.1f}s"
+    )
+    if summary.notes:
+        click.echo("Notes:")
+        for note in summary.notes:
+            click.echo(f"  - {note}")
+
+    # CI / cron friendliness: per-job exceptions are a non-zero exit even when
+    # fail-closed (so a misconfigured Ollama still trips a monitoring alert).
+    sys.exit(1 if summary.errors else 0)
+
+
 if __name__ == "__main__":
     cli()
