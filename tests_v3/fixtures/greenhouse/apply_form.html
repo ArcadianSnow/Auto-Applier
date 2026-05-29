@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Apply to Acme - Senior Engineer | Greenhouse</title>
+  <script src="https://www.google.com/recaptcha/enterprise.js?render=6Le..." async defer></script>
+</head>
+<body>
+<div id="app">
+  <header class="job-header">
+    <h1>Senior Engineer</h1>
+    <p>Acme Corp - Remote</p>
+  </header>
+
+  <form id="application-form" action="/applications/123" method="POST" enctype="multipart/form-data">
+    <fieldset>
+      <legend>Personal Information</legend>
+
+      <label for="first_name">First name<span class="required">*</span></label>
+      <input type="text" id="first_name" name="job_application[first_name]" required>
+
+      <label for="last_name">Last name<span class="required">*</span></label>
+      <input type="text" id="last_name" name="job_application[last_name]" required>
+
+      <label for="email">Email<span class="required">*</span></label>
+      <input type="email" id="email" name="job_application[email]" required>
+
+      <label for="phone">Phone</label>
+      <input type="tel" id="phone" name="job_application[phone]">
+    </fieldset>
+
+    <fieldset>
+      <legend>Resume</legend>
+      <label for="resume">Resume/CV<span class="required">*</span></label>
+      <input type="file" id="resume" name="job_application[resume]"
+             accept=".pdf,.doc,.docx,.rtf,.txt" required>
+    </fieldset>
+
+    <fieldset>
+      <legend>Additional Information</legend>
+
+      <label for="question_18002871002">Why are you interested in this role?<span class="required">*</span></label>
+      <textarea id="question_18002871002" name="job_application_answers_attributes[0][text_value]"
+                aria-required="true" required></textarea>
+
+      <label for="question_18002871003">Are you authorized to work in the US?<span class="required">*</span></label>
+      <select id="question_18002871003" name="job_application_answers_attributes[1][answer_id]" required>
+        <option value="">Please select</option>
+        <option value="1">Yes</option>
+        <option value="2">No</option>
+      </select>
+
+      <label for="question_18002871004">LinkedIn URL</label>
+      <input type="url" id="question_18002871004" name="job_application_answers_attributes[2][text_value]">
+    </fieldset>
+
+    <div class="g-recaptcha" data-sitekey="6Le..." data-size="invisible"></div>
+    <textarea name="g-recaptcha-response" id="g-recaptcha-response" style="display:none"></textarea>
+
+    <button type="submit" id="submit_app">Submit application</button>
+  </form>
+</div>
+</body>
+</html>

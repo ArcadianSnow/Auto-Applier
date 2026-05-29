@@ -917,3 +917,104 @@ thresholds stay at their spec defaults until the user runs
   * **More than 12 pairs**. The spec said "a dozen"; we ship 12.
     Adding pairs is cheap; growth happens organically as users hit
     edge cases worth pinning.
+
+---
+
+## Phase 3 (8/M) — mocked-source CI for selector drift landed
+
+`tests_v3/fixtures/{greenhouse,lever,ashby}/apply_form.html` (3
+hand-authored representative apply-form HTML files covering every
+selector each driver depends on), `tests_v3/test_selector_drift.py`
+(11 parser-based tests asserting standard fields + CAPTCHA carriers
++ custom-question patterns + Ashby UUID exclusion logic resolve in
+each fixture), and `scripts/refresh_fixtures.py` (manual refresh
+helper that opens the real ATS form via the existing `BrowserSession`
+stack and overwrites the fixture). **Spec §10 + §11b satisfied:** the
+fast CI gate for selector drift is in place. Live smoke tests ((9/M))
+catch outright structural drift on real sites; the mocked tests here
+catch the more specific "the selectors our drivers depend on are
+still in the saved fixture" regression. When an ATS visibly changes,
+the user runs `refresh_fixtures.py` to re-pin.
+
+### Why fixture-based rather than driver-replay
+
+Driver replay (a full async Page stand-in that runs the entire
+`prepare_application` flow against saved HTML) would duplicate the
+per-driver flow logic already covered by
+`test_lever_apply.py` / `test_greenhouse_apply.py` /
+`test_ashby_apply.py`. The selector-drift surface is narrower: which
+ids/names/classes our drivers depend on are still present. A
+small stdlib `html.parser` collector + a handful of
+`_has_id` / `_has_name` / `_has_name_starting` helpers covers it
+in 200 lines and runs in 80 ms. No BeautifulSoup dep just for CI.
+
+### What each fixture pins
+
+  * **Greenhouse**: `#first_name`, `#last_name`, `#email`, `#phone`,
+    `#resume` file input, `button[type=submit]`, `g-recaptcha-response`
+    textarea, at least one `#question_*` custom question.
+  * **Lever**: `input[name='name']`, `[name='email']`, `[name='phone']`,
+    `[name='org']`, `#resume-upload-input`, `resumeStorageId` parse-wait
+    signal, `#btn-submit`, `h-captcha-response` carrier, at least one
+    `cards[*]` custom-question name, EEO `eeo[*]` discovery target.
+  * **Ashby**: `#_systemfield_name`, `#_systemfield_email`,
+    `#_systemfield_resume`, `button[type=submit]` (NOT wrapped in
+    `<form>` — SPA), `g-recaptcha-response` carrier, at least one
+    UUID-named custom question, sanity that no `_systemfield_*` id
+    matches the UUID pattern (the discovery exclusion logic depends
+    on this disjoint property).
+
+### What this test does NOT catch
+
+  * The actual API/site changed but the fixture is stale. Only the
+    (9/M) live smoke test catches that. When the fixture goes stale,
+    THIS test still passes; the operator runs
+    `scripts/refresh_fixtures.py` to refresh and the test re-pins.
+  * Behavioral changes (submit no longer redirects to `/thanks` etc).
+    Confirmation detection is tested by its own unit tests in
+    `test_detect.py`.
+
+### Refresh workflow
+
+  1. `python scripts/refresh_fixtures.py <ats> <apply-url>` (opens
+     headed Chrome via `BrowserSession`, navigates, settles 3s for
+     SPAs and CAPTCHA attach, dumps `page.content()` to the fixture).
+  2. `pytest tests_v3/test_selector_drift.py -v` to see which
+     selectors changed.
+  3. If selectors drifted, update the driver code to match; if
+     the fixture just got fluffier (vendor added new classes,
+     reshuffled markup), re-run the test — it should still pass
+     because the selector probes are tolerance-aware.
+  4. Inspect the diff, commit fixture + any driver changes together.
+
+### Edge cases covered
+
+| Path | Outcome |
+|---|---|
+| Each ATS fixture file present + parseable | passes |
+| GH standard fields all resolve | passes |
+| GH `g-recaptcha-response` carrier present | passes |
+| GH at least one `#question_*` custom Q | passes |
+| Lever standard fields all resolve | passes |
+| Lever `h-captcha-response` carrier present | passes |
+| Lever `cards[*]` custom Q pattern present | passes |
+| Lever `eeo[*]` discovery pattern present | passes |
+| Lever `resumeStorageId` parse-wait signal present | passes |
+| Ashby `_systemfield_*` fields all resolve | passes |
+| Ashby UUID-named custom Q pattern present | passes |
+| Ashby UUID/systemfield disjoint sanity | passes |
+
+### What's NOT in this sub-phase
+
+  * **Confirmation page fixtures**. The success-text + URL pattern
+    detector is covered by unit tests; capturing the post-submit
+    confirmation HTML is its own slice if desired later.
+  * **Discovery-side fixtures**. ATS discovery hits API endpoints
+    (JSON), not HTML — the API responses are already covered by
+    integration tests with live network. Mock fixtures for those
+    would be a different sub-phase.
+  * **Refresh-script auto-diff**. The script prints byte-size deltas
+    but doesn't run the selector-drift tests for the operator. They
+    run `pytest tests_v3/test_selector_drift.py -v` after refresh
+    by convention — adding it to the script muddles the script's
+    single responsibility (capture HTML).

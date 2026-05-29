@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Senior Engineer at acmeco | Ashby</title>
+  <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+</head>
+<body>
+<div id="root">
+  <div class="ashby-application-form-container">
+    <div class="job-header">
+      <h1>Senior Engineer</h1>
+      <p>acmeco - Remote</p>
+    </div>
+
+    <div class="ashby-application-form">
+
+      <div class="ashby-application-form-field-entry">
+        <label class="ashby-application-form-question-title" for="_systemfield_name">
+          Full name<span class="required">*</span>
+        </label>
+        <input type="text" id="_systemfield_name" name="_systemfield_name" required>
+      </div>
+
+      <div class="ashby-application-form-field-entry">
+        <label class="ashby-application-form-question-title" for="_systemfield_email">
+          Email<span class="required">*</span>
+        </label>
+        <input type="email" id="_systemfield_email" name="_systemfield_email" required>
+      </div>
+
+      <div class="ashby-application-form-field-entry">
+        <label class="ashby-application-form-question-title" for="_systemfield_resume">
+          Resume<span class="required">*</span>
+        </label>
+        <input type="file" id="_systemfield_resume" name="_systemfield_resume"
+               accept=".pdf,.doc,.docx" required>
+      </div>
+
+      <!-- Custom questions: UUID-named, NOT _systemfield_*. Driver discovers
+           these by excluding _systemfield_ and CAPTCHA carriers. -->
+      <div class="ashby-application-form-field-entry">
+        <label class="ashby-application-form-question-title"
+               for="eeea6952-8ba0-4f5c-a1d2-3b4c5d6e7f8a">
+          Why are you interested in working at acmeco?<span class="required">*</span>
+        </label>
+        <textarea id="eeea6952-8ba0-4f5c-a1d2-3b4c5d6e7f8a"
+                  name="eeea6952-8ba0-4f5c-a1d2-3b4c5d6e7f8a"
+                  aria-required="true" required></textarea>
+      </div>
+
+      <div class="ashby-application-form-field-entry">
+        <label class="ashby-application-form-question-title"
+               for="f1g2h3i4-j5k6-7l8m-9n0p-q1r2s3t4u5v6">
+          Phone number
+        </label>
+        <input type="tel" id="f1g2h3i4-j5k6-7l8m-9n0p-q1r2s3t4u5v6"
+               name="f1g2h3i4-j5k6-7l8m-9n0p-q1r2s3t4u5v6">
+      </div>
+
+      <div class="g-recaptcha" data-sitekey="..." data-size="invisible"></div>
+      <textarea name="g-recaptcha-response" id="g-recaptcha-response" style="display:none"></textarea>
+
+      <!-- Ashby is a React SPA - submit is NOT wrapped in a <form> element.
+           React's onClick handler issues the XHR to applicationForm.submit -->
+      <button type="submit" class="ashby-application-form-submit-button">
+        Submit application
+      </button>
+    </div>
+  </div>
+</div>
+</body>
+</html>
