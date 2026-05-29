@@ -638,6 +638,45 @@ recovery method, idempotency (zero APPLYING → zero work), auto-run inside
 `run_once`, clean-queue stays at recovered=0 with no spurious notes, and the
 no-browser-required guarantee (proven with a bombing driver stub).
 
+## Ashby SPA driver landed (2026-05-29, Phase 2 (6/N))
+
+`av3/sources/browser/ashby_apply.py` mirrors the Lever/GH dispatch shape with
+React-SPA-specific quirks:
+
+- **Form-ready wait.** Until `#_systemfield_name` is in the DOM the SPA hasn't
+  hydrated; reading custom-Q state too early returns nothing. `_wait_for_form_ready`
+  polls via `page.wait_for_selector` (8 s budget); the FakePage stub omits it so
+  unit tests stay cheap.
+- **Three system fields only.** Name (full name → `#_systemfield_name`), email
+  (`#_systemfield_email`), résumé (`#_systemfield_resume`). Phone is **not** a
+  standard field — per-form it's UUID-named — so it flows through custom-Q
+  discovery + the resolver like every other question.
+- **Custom-Q discovery by exclusion.** Walk every input/textarea/select whose
+  id/name does NOT start with `_systemfield_` (and isn't a `g-recaptcha-response` /
+  `-response` carrier). Pair each with its `<label>` or
+  `.ashby-application-form-question-title` heading. UUID-named fields land in
+  `CustomQuestion.field_id` and the shared `_selector_for` picks the id-keyed
+  selector `#<uuid>` for filling.
+- **No URL transition on success.** The XHR submit (`api.ashbyhq.com/applicationForm.submit`)
+  doesn't redirect; the React app swaps the form for an in-place "Application
+  submitted" panel. `detect_confirmation`'s existing `_SUCCESS_TEXT_RE` matches
+  it — no per-ATS branch needed there.
+- **Submit selector** `button[type=submit]` (the button is outside the (non-existent)
+  `<form>` but Ashby still sets `type=submit`). Click → React's onClick handler
+  fires the XHR.
+
+Registered in `ApplyWorker.default_drivers()` as `"ashby"`; CLI `--source` now
+accepts `ashby` alongside lever/greenhouse. Validation: 10 new tests in
+`tests_v3/test_ashby_apply.py` cover dry-run + assisted + auto-submit + visible
+challenge downgrade + UNCONFIRMED + UUID resolver wiring + required-Q downgrade +
+the discover-by-exclusion filter.
+
+**Known limitation deferred to Phase 3:** knockout questions render as Yes/No
+buttons (not radios) — the current discover walk skips them (no native input
+element). Required knockouts will trigger the §8b downgrade to ASSISTED_PENDING
+through the unresolved-required path. Resolver + driver extensions to handle
+button-enums are tracked as Phase-3 work, not Phase-2-blocking.
+
 ## Sources
 
 - [Greenhouse — Invisible reCAPTCHA](https://support.greenhouse.io/hc/en-us/articles/115005448066-Invisible-reCAPTCHA)

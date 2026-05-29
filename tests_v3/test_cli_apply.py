@@ -254,8 +254,19 @@ def test_no_source_passes_full_default_registry(tmp_path, monkeypatch):
     result = _run(monkeypatch, data_dir)
     assert result.exit_code == 0
     drivers = _RecordingWorker.last_init["drivers"]
-    # Production default exposes lever + greenhouse.
-    assert {"lever", "greenhouse"}.issubset(set(drivers.keys()))
+    # Production default exposes lever + greenhouse + ashby (Phase 2 (6/N): Ashby added).
+    assert {"lever", "greenhouse", "ashby"}.issubset(set(drivers.keys()))
+
+
+def test_source_filter_can_target_ashby(tmp_path, monkeypatch):
+    data_dir = tmp_path / "v3data"
+    data_dir.mkdir()
+    _seed_minimal_data(data_dir)
+
+    result = _run(monkeypatch, data_dir, "--source", "ashby")
+    assert result.exit_code == 0
+    drivers = _RecordingWorker.last_init["drivers"]
+    assert set(drivers.keys()) == {"ashby"}
 
 
 def test_limit_threads_into_run_once(tmp_path, monkeypatch):

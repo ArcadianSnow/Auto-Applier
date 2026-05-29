@@ -74,7 +74,8 @@ from av3.resume.answer_resolver import (
     SensitiveClass,
 )
 from av3.resume.factbank import FactBank
-from av3.sources.browser import greenhouse_apply, lever_apply
+from av3.sources.ashby import AshbyListing
+from av3.sources.browser import ashby_apply, greenhouse_apply, lever_apply
 from av3.sources.browser.apply_base import Applicant, ApplyOutcome
 from av3.sources.greenhouse import JobListing as GreenhouseListing
 from av3.sources.lever import LeverListing
@@ -145,6 +146,25 @@ def _job_to_greenhouse_listing(job: Job) -> GreenhouseListing:
     )
 
 
+def _job_to_ashby_listing(job: Job) -> AshbyListing:
+    """Ashby apply URL is ``{jobUrl}/application`` (research §Ashby). When ``Job.url``
+    already points at the apply endpoint (e.g. the discovery row populated ``applyUrl``
+    into ``url`` directly), keep it as-is."""
+    apply_url = job.url
+    if apply_url and not apply_url.rstrip("/").endswith("/application"):
+        apply_url = f"{apply_url}/application"
+    return AshbyListing(
+        source_job_id=job.source_job_id,
+        title=job.title,
+        company=job.company,
+        location=job.location,
+        url=job.url,
+        apply_url=apply_url,
+        description=job.description,
+        posted_at=job.posted_at,
+    )
+
+
 def default_drivers() -> dict[str, DriverEntry]:
     """The production dispatch table. Tests inject their own to fake the drivers."""
     return {
@@ -152,6 +172,7 @@ def default_drivers() -> dict[str, DriverEntry]:
         "greenhouse": DriverEntry(
             _job_to_greenhouse_listing, greenhouse_apply.prepare_application
         ),
+        "ashby": DriverEntry(_job_to_ashby_listing, ashby_apply.prepare_application),
     }
 
 

@@ -622,9 +622,9 @@ def test_job_to_greenhouse_listing_recovers_board_token():
     assert listing.board_token == "acmeco"
 
 
-def test_default_drivers_registers_both_atses():
+def test_default_drivers_registers_all_three_atses():
     drivers = default_drivers()
-    assert set(drivers.keys()) == {"lever", "greenhouse"}
+    assert set(drivers.keys()) == {"lever", "greenhouse", "ashby"}
 
 
 # --------------------------------------------------------------- crash-sweep (spec §5)

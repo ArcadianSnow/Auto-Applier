@@ -164,7 +164,7 @@ def status() -> None:
               help="Run one cycle and exit. The only mode v3.0 ships (staged scheduler is Phase 3).")
 @click.option("--limit", type=int, default=None,
               help="Maximum QUEUED_APPLY jobs to process this run.")
-@click.option("--source", type=click.Choice(["lever", "greenhouse"]), default=None,
+@click.option("--source", type=click.Choice(["lever", "greenhouse", "ashby"]), default=None,
               help="Process only this source's jobs (subsets the driver registry).")
 @click.option("--dry-run/--no-dry-run", default=True,
               help="Dev-safe default. --no-dry-run SENDS REAL APPLICATIONS.")
