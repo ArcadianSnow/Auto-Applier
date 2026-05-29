@@ -147,3 +147,135 @@ duplication is acceptable because both entries have different lifecycle
 shapes (uvicorn vs. plain asyncio.run), but if (5/M) or (6/M) grows a third
 caller, the worker construction needs to factor into one builder. Note this
 in the next sub-phase if it bites.
+
+---
+
+## Phase 4 (2/M) — dashboard UI landed
+
+Three new JSON endpoints + SSE stream + the three-panel dashboard +
+per-job detail page. `tests_v3/test_web_dashboard.py` (+15 tests; full v3
+suite 397 green, 11 deselected by design). **Spec §10 + §11b Phase 4
+bullets 2–3 satisfied:** "live pipeline status, review queue +
+login-needed badges, application history + outcomes (with confirmation
+status)" all surface in the dashboard.
+
+### New surface
+
+| Endpoint | Purpose |
+|---|---|
+| `/api/history?limit=N` | Recent applications joined with jobs + scores |
+| `/api/jobs/<id>` | Per-job detail (job + score + applications) |
+| `/api/events` | SSE stream tailing events.db (live activity) |
+| `/jobs/<id>` | Per-job HTML page (fetches `/api/jobs/<id>` on load) |
+| `/` (rewritten) | The real 3-panel dashboard, replaces the (1/M) splash |
+
+### Dashboard layout (templates/dashboard.html)
+
+```
+┌─────────────────────────────────────────────┐
+│ ● status bar — running/paused + last cycle  │
+├─────────────────────────────────────────────┤
+│ Pipeline                                    │
+│  DISCOVERED  DESCRIBED  SCORED  ...  APPLIED│  ← 11 state cells
+├─────────────────────────────────────────────┤
+│ Sources                                     │
+│  greenhouse  HEALTHY                        │
+│  lever       AUTH_REQUIRED  session expired │  ← (4/M) login-needed badge feed
+├──────────────────────┬──────────────────────┤
+│ Review queue (N)     │ Queued + applying    │
+│   job-1              │   APPLYING  job-7    │
+│   job-2              │   QUEUED    job-8    │
+├──────────────────────┴──────────────────────┤
+│ Recent applications                         │
+│  ts  status  mode  job  score               │  ← /api/history
+├─────────────────────────────────────────────┤
+│ Live activity (SSE feed)                    │
+│  filter   ok    job-1                       │
+│  score    ok    job-1                       │
+│  apply    error  …                          │
+└─────────────────────────────────────────────┘
+```
+
+### Why polling + SSE both
+
+The dashboard runs two refresh paths:
+
+* **Polling** (`/api/status` + `/api/sources` + `/api/queue` +
+  `/api/history` every 5 s). What keeps the panel counts truthful — SSE
+  alone can't tell you the REVIEW count after a burst.
+* **SSE** (`/api/events`). Drives the recent-activity feed and *prods*
+  the next poll cycle to pick up state changes promptly. The poll alone
+  would be ≤5 s late on every transition; the SSE refresh nudge cuts
+  that to one cycle.
+
+Both can fail gracefully — if SSE drops (proxy idle-out), the polling
+keeps the dashboard truthful; if polling fails for a tick, SSE still
+shows live activity.
+
+### Why a keepalive comment
+
+The SSE generator yields `: keepalive\n\n` on every poll cycle even when
+there's no new event. SSE comments (`:` prefix) are silently dropped by
+EventSource clients but they do two jobs:
+
+1. **Prevent proxy idle-out.** Nginx, Cloudflare, and most reverse proxies
+   close long-quiet HTTP streams. A regular comment frame keeps the
+   socket warm — needed once `host=0.0.0.0` lands the dashboard behind
+   any proxy.
+2. **Make the stream testable.** Without a steady chunk cadence, unit
+   tests that read from the stream block indefinitely waiting for the
+   next real event. The keepalive guarantees forward progress so a test
+   can read N frames + cancel cleanly.
+
+### Why test the SSE generator directly (not the HTTP route)
+
+FastAPI's `TestClient` runs the ASGI app in an anyio portal thread, and
+that path *doesn't release SSE chunks promptly* to the consumer — neither
+`iter_raw()` chunks nor even the response headers come back in a bounded
+time. `httpx.AsyncClient + ASGITransport` buffers the body before
+yielding. Both fail to test SSE responsively.
+
+The fix is to call the underlying `_events_stream` async generator
+directly with a fake request object whose `is_disconnected()` returns
+True when the test wants to cut the stream. That gives:
+
+* **Reliable, fast termination** — the disconnect signal flows through
+  the generator's natural check point.
+* **Real coverage of the load-bearing logic** — cursor management, row
+  fetching, keepalive cadence, exception isolation.
+* **The route's HTTP shape** (StreamingResponse + media type) covered by
+  a static `inspect.getsource` assertion — no event loop needed for what
+  doesn't actually fail.
+
+### Pruning + history endpoint contract
+
+The history endpoint joins each `Application` row with its `Job` and
+`JobScore` in Python (one repo read per row). Cheap on SQLite WAL and
+avoids a brittle hand-rolled JOIN. The defensive `job: null` fallback
+for missing jobs **stays in `history_row`** even though
+`FK ON DELETE CASCADE` in `schema.sql` means pruning a job cascades the
+applications away too — orphan rows are schema-impossible. The
+defensive code is ~3 lines and survives a future schema change where
+ON DELETE switches to SET NULL; the test for that branch was removed
+because it can't actually be triggered.
+
+### What's NOT in this sub-phase
+
+* **Pause button** + the `/api/control` POST endpoint that drives it —
+  (3/M) lands those along with F6 + idle-detect.
+* **"Log in" button** for paused sources — (4/M).
+* **Job-state filter on history** (e.g. "show me only FAILED in the last
+  week"). The dashboard's history panel shows the most-recent N rows
+  regardless of status; richer filtering is v3.1 analytics.
+* **Server-rendered JD highlights** on the per-job page (e.g. matched
+  skills bolded). Static JD only; the score breakdown already covers
+  per-axis judgment.
+* **Real-time JD streaming** as the apply worker scrolls a form. Just
+  the spine events.
+
+### Carry-over: per-app pause control state
+
+`SchedulerService.pause()` / `.resume()` work but no endpoint exposes
+them. (3/M) lands `/api/control/pause` + `/api/control/resume` and wires
+the dashboard's status bar to flip via Alpine. The (1/M) pause-predicate
+plumbing already supports it; the missing piece is the HTTP verb.

@@ -236,6 +236,22 @@ class ApplicationRepo:
             )
         ]
 
+    def list_recent(self, limit: int = 50) -> list[Application]:
+        """Most-recent applications first — backs the dashboard's history panel.
+
+        Ordering is by ``submitted_at DESC`` with the row id as a tiebreaker
+        (so two attempts in the same second still come out in insert order).
+        Empty ``submitted_at`` is fine — it sorts before any real timestamp,
+        which means in-flight/assisted-pending rows surface at the top of
+        history when the user hasn't actually submitted them yet.
+        """
+        rows = self.conn.execute(
+            "SELECT * FROM applications "
+            "ORDER BY submitted_at DESC, id DESC LIMIT ?",
+            (limit,),
+        )
+        return [self._row(r) for r in rows]
+
     def set_status(
         self, app_id: str, status: ApplicationStatus, submitted_at: str | None = None
     ) -> None:
