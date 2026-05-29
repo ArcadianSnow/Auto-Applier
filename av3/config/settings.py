@@ -125,6 +125,32 @@ class SchedulerConfig(BaseModel):
         return self
 
 
+class WebConfig(BaseModel):
+    """Local web app + worker service config (spec §3, §10 — Phase 4 (1/M)).
+
+    The dashboard binds to localhost by default so an unattended runner doesn't
+    silently expose pipeline state to the LAN. Set ``host: "0.0.0.0"`` in
+    ``user_config.json`` to enable the "control/monitor from any device's
+    browser, incl. a dedicated runner box" mode from spec §2. The port default
+    (8765) is chosen to avoid the common 8000/8080 collision space; tests pass
+    port=0 to let the OS pick a free port.
+    """
+
+    host: str = "127.0.0.1"
+    port: int = 8765
+
+    @model_validator(mode="after")
+    def _port_in_range(self) -> "WebConfig":
+        # 0 is a sentinel meaning "let the OS pick" — used in tests so they don't
+        # collide on a fixed port when running in parallel. Real defaults stay
+        # in the 1024..65535 user range.
+        if self.port == 0:
+            return self
+        if not (1024 <= self.port <= 65535):
+            raise ValueError(f"port must be 1024..65535 (got {self.port})")
+        return self
+
+
 class RetentionConfig(BaseModel):
     """Data lifecycle (spec §4). Defaults match the spec's "e.g. 30d" guidance
     for app data and the spec's "shorter window" for events. Backups
@@ -158,6 +184,7 @@ class Settings(BaseModel):
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
+    web: WebConfig = Field(default_factory=WebConfig)
 
     # --- derived paths (system of record + observability spine, spec §4) ---
     @property

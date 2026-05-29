@@ -775,6 +775,213 @@ def prune_cmd(ephemeral_days: int | None, events_days: int | None) -> None:
     )
 
 
+@cli.command("serve")
+@click.option("--host", type=str, default=None,
+              help="Bind address. Overrides settings.web.host (default 127.0.0.1). "
+                   "Set to 0.0.0.0 to expose to the LAN — the local-first default "
+                   "stays on localhost so a runner box doesn't silently leak state.")
+@click.option("--port", type=int, default=None,
+              help="Listen port. Overrides settings.web.port (default 8765).")
+@click.option("--no-scheduler", is_flag=True, default=False,
+              help="Start the web UI WITHOUT the background scheduler (read-only "
+                   "diagnostics mode). Read-only API endpoints still answer; no "
+                   "pipeline work happens. Useful when the fact bank / resume "
+                   "aren't ready yet (pre-onboarding) so the dashboard can still "
+                   "load to walk the user through setup.")
+@click.option("--quiet-hours", type=str, default=None,
+              help="Local-time HH:MM-HH:MM window during which the apply worker "
+                   "pauses. Overrides settings.scheduler.quiet_hours.")
+@click.option("--cycle-interval-s", type=float, default=None,
+              help="Seconds between scheduler cycles. Overrides "
+                   "settings.scheduler.cycle_interval_s.")
+@click.option("--dry-run/--no-dry-run", default=True,
+              help="Dev-safe default. --no-dry-run lets the apply worker SEND REAL "
+                   "APPLICATIONS in mode=auto.")
+@click.option("--mode", type=click.Choice(["auto", "assisted"]), default="auto",
+              help="Apply mode: auto = bot submits on clean forms; assisted = pre-fill, human submits.")
+@click.option("--no-llm", is_flag=True, default=False,
+              help="Skip Ollama/Gemini wiring. Filter fail-opens, score+optimize "
+                   "fail-CLOSED, apply resolver uses bank + sensitive policy only.")
+def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
+              quiet_hours: str | None, cycle_interval_s: float | None,
+              dry_run: bool, mode: str, no_llm: bool) -> None:
+    """Run the local web UI + background worker service (spec section 11b Phase 4).
+
+    The Phase 4 (1/M) entry: starts the FastAPI app on http://host:port and
+    (unless --no-scheduler) boots the staged-worker scheduler as a background
+    asyncio task. The dashboard is a Phase 4 (2/M) deliverable; right now the
+    splash page lists the read-only JSON API endpoints.
+
+    Lifecycle: SIGINT / Ctrl-C triggers a clean shutdown — the scheduler task
+    is cancelled and awaited before uvicorn exits.
+    """
+    import asyncio
+    import uvicorn
+
+    from av3.domain.state import ApplyMode
+    from av3.llm.complete import build_default
+    from av3.llm.embed import OllamaEmbeddings
+    from av3.pipeline import (
+        ApplyWorker,
+        FilterWorker,
+        OptimizeWorker,
+        Scheduler,
+        ScoreWorker,
+        default_drivers,
+        parse_quiet_hours,
+    )
+    from av3.resume.factbank import FactBank
+    from av3.sources.browser.session import BrowserSession
+    from av3.telemetry import configure_sink
+    from av3.web import SchedulerService, WebState, create_app
+
+    settings = load_settings()
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    effective_host = host if host is not None else settings.web.host
+    effective_port = port if port is not None else settings.web.port
+
+    conn = init_app_db(settings.app_db_path)
+    configure_sink(EventSink(settings.events_db_path))
+
+    web_state = WebState(
+        settings=settings,
+        app_db_path=settings.app_db_path,
+        events_db_path=settings.events_db_path,
+    )
+
+    # Decide whether to spin up the scheduler. Pre-onboarding the fact bank
+    # and resume don't exist yet; rather than failing the whole command, drop
+    # into read-only diagnostics mode so the user can still reach the (future
+    # 5/M) onboarding wizard from the dashboard.
+    fact_bank_path = settings.data_dir / "profile" / "master.json"
+    resume_path = settings.artifacts_dir / "resume.pdf"
+    scheduler_ready = fact_bank_path.exists() and resume_path.exists()
+
+    service: SchedulerService | None = None
+
+    if no_scheduler:
+        click.echo("! --no-scheduler: read-only diagnostics mode "
+                   "(read-only API answers; no pipeline work).")
+    elif not scheduler_ready:
+        # ASCII-only echo to match doctor/status output style.
+        click.echo(
+            "! scheduler not started: missing prerequisites — run onboarding "
+            "first.",
+            err=True,
+        )
+        if not fact_bank_path.exists():
+            click.echo(f"        fact bank: missing at {fact_bank_path}", err=True)
+        if not resume_path.exists():
+            click.echo(f"        resume:    missing at {resume_path}", err=True)
+        click.echo(
+            "        web UI still available at "
+            f"http://{effective_host}:{effective_port} (read-only).",
+            err=True,
+        )
+    else:
+        # Build the factory the SchedulerService will call with our pause
+        # predicate. Same construction as ``av3 run`` (see run_cmd) — keep in
+        # sync if knobs change.
+        bank = FactBank.load(fact_bank_path)
+
+        embed = None if no_llm else OllamaEmbeddings(
+            host=settings.llm.ollama_host, model=settings.llm.embed_model
+        )
+        llm = None if no_llm else build_default(settings)
+        apply_mode = ApplyMode.BROWSER_AUTO if mode == "auto" else ApplyMode.BROWSER_ASSISTED
+
+        effective_cycle_interval = (
+            cycle_interval_s if cycle_interval_s is not None
+            else settings.scheduler.cycle_interval_s
+        )
+        effective_quiet_hours_raw = (
+            quiet_hours if quiet_hours is not None
+            else settings.scheduler.quiet_hours
+        )
+        quiet_hours_window = parse_quiet_hours(effective_quiet_hours_raw)
+
+        if not dry_run:
+            click.echo(
+                f"! --no-dry-run: scheduler will SEND REAL APPLICATIONS in mode={mode} "
+                f"(quiet_hours={effective_quiet_hours_raw or 'none'})"
+            )
+
+        from av3.pipeline.retention import (
+            prune_ephemeral as _prune_ephemeral,
+            prune_events as _prune_events,
+            run_backup_cycle as _run_backup_cycle,
+        )
+
+        async def _maintenance():
+            _prune_ephemeral(conn, settings.retention.ephemeral_days)
+            _prune_events(settings.events_db_path, settings.retention.events_days)
+            _run_backup_cycle(settings)
+
+        # The BrowserSession is started lazily inside the factory so the
+        # uvicorn event loop owns its lifecycle. The factory runs inside
+        # SchedulerService.start() (already async); the teardown closure
+        # mirror-runs inside SchedulerService.stop().
+        _session_holder: dict[str, BrowserSession | None] = {"session": None}
+
+        async def _factory(pause_predicate):
+            session = BrowserSession(settings.browser_profile_dir)
+            await session.start()
+            _session_holder["session"] = session
+            return Scheduler(
+                filter_worker=FilterWorker(
+                    settings=settings, conn=conn, fact_bank=bank,
+                    embed_client=embed,
+                ),
+                score_worker=ScoreWorker(
+                    settings=settings, conn=conn, fact_bank=bank,
+                    llm_client=llm,
+                ),
+                optimize_worker=OptimizeWorker(
+                    settings=settings, conn=conn, fact_bank=bank,
+                    llm_client=llm,
+                ),
+                apply_worker=ApplyWorker(
+                    settings=settings, conn=conn, fact_bank=bank,
+                    resume_path=str(resume_path), new_page=session.new_page,
+                    embed_client=embed, llm_client=llm, mode=apply_mode,
+                    dry_run=dry_run, drivers=default_drivers(),
+                ),
+                cycle_interval_s=effective_cycle_interval,
+                quiet_hours=quiet_hours_window,
+                pause_predicate=pause_predicate,
+                maintenance=_maintenance,
+                maintenance_interval_s=settings.retention.maintenance_interval_s,
+            )
+
+        async def _teardown():
+            sess = _session_holder.get("session")
+            if sess is not None:
+                await sess.stop()
+                _session_holder["session"] = None
+
+        service = SchedulerService(_factory, teardown=_teardown)
+
+    app = create_app(state=web_state, service=service)
+
+    click.echo(
+        f"Starting av3 web UI on http://{effective_host}:{effective_port} "
+        f"(scheduler={'on' if service is not None else 'off'})"
+    )
+
+    try:
+        uvicorn.run(
+            app,
+            host=effective_host,
+            port=effective_port,
+            log_level="info",
+            access_log=False,  # quiet — events.db is the audit trail
+        )
+    finally:
+        conn.close()
+
+
 @cli.command("backup")
 def backup_cmd() -> None:
     """Snapshot app.db + events.db; rotate older snapshots (spec section 4).

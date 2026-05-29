@@ -29,6 +29,7 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
 | How to seed ATS company lists (board tokens) | `research/ats-discovery-seeding.md` |
 | How ATS apply forms behave / CAPTCHA / submit confirmation (+ live survey results) | `research/ats-form-automation.md` |
 | Phase 3 pipeline staging (embedding pre-filter, score/optimize workers, scheduler) | `research/pipeline-staging.md` |
+| Phase 4 web UI + worker service (FastAPI, SchedulerService, dashboard, onboarding) | `research/web-ui-and-service.md` |
 | Prior art — other auto-apply tools/repos, methodologies, what we adopt + smoketests (reCAPTCHA v3 score, JobSpy) | `research/prior-art-and-methodology.md` |
 | ATS market share by segment + what tier v3 can reach + source prioritization | `research/ats-market-landscape.md` |
 | How to stop résumé fabrication (the guard) | `research/fabrication-guard.md` |
@@ -65,6 +66,7 @@ When a session learns something durable, record it before calling the task done:
 1. ATS seeding source/technique → `research/ats-discovery-seeding.md`
 2. ATS form quirk / CAPTCHA / confirmation pattern → `research/ats-form-automation.md`
 3. Fabrication-guard technique/result → `research/fabrication-guard.md`
+4. Phase 4 sub-phase / web UI design decision → `research/web-ui-and-service.md`
 4. A changed design decision → `docs/v3-architecture.md` **and** [[project_v3_rewrite]]
 5. A completed phase / new known-unknown → note in `docs/v3-architecture.md` §11b and memory
 

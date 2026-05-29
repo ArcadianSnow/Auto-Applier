@@ -54,6 +54,13 @@ v3 = [
     "httpx>=0.27",
     "rapidfuzz>=3.0",        # fabrication-guard L1 fuzzy entity match (spec §6b)
     "python-dateutil>=2.8",  # fabrication-guard L1 date-range checks
+    # Phase 4 (1/M): web UI + worker service (spec §3, §10). FastAPI runs the
+    # local dashboard + JSON API; uvicorn hosts it; jinja2 renders templates.
+    # All three are pure-Python wheels; no native build deps. Pinned loosely so
+    # security patches land via `pip install -U`.
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "jinja2>=3.1",
 ]
 # Optional JobSpy discovery for browser boards (Indeed/ZipRecruiter, Phase 2). Smoketest
 # in research/prior-art-and-methodology.md S3 confirmed Indeed = no rate limit, works out
@@ -74,7 +81,7 @@ auto-applier-gui = "auto_applier.gui.wizard:launch_wizard"
 include = ["auto_applier*", "av3*"]
 
 [tool.setuptools.package-data]
-av3 = ["db/*.sql"]
+av3 = ["db/*.sql", "web/templates/*.html", "web/static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "tests_v3"]
