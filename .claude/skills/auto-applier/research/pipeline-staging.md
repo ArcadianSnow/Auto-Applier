@@ -525,3 +525,158 @@ wins) but only the first transition writes an event row.
 | Apply worker, paused source | skip, state unchanged, no driver call |
 | Apply worker, mixed paused + healthy sources | paused skipped, healthy runs |
 | Paused source recovers after `mark_healthy` | next run processes it |
+
+---
+
+## Phase 3 (5/M) — staged-worker scheduler landed
+
+`av3/pipeline/scheduler.py` (new — `Scheduler` + `CycleSummary` +
+`SchedulerRunSummary`), `av3/pipeline/quiet_hours.py` (new — `QuietHours`
++ `parse_quiet_hours`, ported from v2's `active_hours.py` with inverted
+semantics), `av3/config/settings.py` (new `SchedulerConfig`), and
+`av3 run` CLI command — plus 43 new tests (331 v3 tests total, +43 from
+(4/M)). **Spec §7a satisfied:** the staged loop is the production entry
+that drives filter → score → optimize → apply each cycle in pipeline
+order, with quiet-hours gating the apply stage only, cooperative
+pause, and per-worker isolation. **When this committed, v3.0 has a
+fully working pipeline end-to-end — the apply path that ships v3.0.**
+
+### Scope decisions (kept v3.0 tight)
+
+  * **One cycle drains every stage.** Per-stage cadences ("filter
+    every 10s, score every minute") are a v3.1 strategy-profile
+    concern (spec §8a Pareto). v3.0 ships one `cycle_interval_s` knob
+    and stops.
+  * **No discovery stage in the scheduler yet.** Discovery still
+    lives in the source adapters and runs separately (CLI / cron /
+    Phase 4 dashboard button). Wiring it as a scheduler stage is its
+    own slice — it has per-source rate limits, ATS rotation policy,
+    etc. that the gather-only workers don't need.
+  * **No describe worker.** Per the handoff §4 (5/M) note: for ATS
+    sources the JD is populated at discovery, and the score worker
+    already fail-closes on empty JD which routes browser-board rows
+    (Indeed/Zip) to terminal SKIPPED. A real describe stage arrives
+    alongside browser-board apply wiring (post-Phase 3).
+
+### Order is the cycle: filter → score → optimize → apply
+
+Stages run in pipeline order each cycle so a freshly DISCOVERED job
+can flow all the way through to QUEUED_APPLY (and, with acceptable
+timing, APPLIED) within ONE cycle when the queues are mostly idle.
+Order matches the spec §7 pipeline; running stages in any other
+order would just delay throughput by a cycle per misordering.
+
+### Quiet hours mask the apply stage ONLY
+
+Apply is the only stage gated by quiet hours. Gather stages
+(filter / score / optimize) keep running because:
+
+  * Being wrong in gather is cheap and doesn't compound (Rule 2.6).
+  * The user might want results ready when they wake up — a JD scored
+    + optimized overnight is in QUEUED_APPLY by the time the window
+    closes, so the first cycle after wakeup applies immediately.
+  * The user-visible posture during quiet hours is "do not drive my
+    browser while I sleep," not "do absolutely nothing."
+
+`QuietHours` ported from v2's `active_hours.py` with inverted
+semantics: v2's parser describes when the bot *runs*; v3's describes
+when apply does NOT run. The naming flip matches the spec ("quiet
+hours") and the v3.0 "always-on by default" stance — windows are
+exceptions, not permission. Both overnight ("22:00-08:00") and
+same-day ("12:00-14:00") windows work; bad config falls back to
+no-op rather than silent-deadlock.
+
+### Per-worker isolation is the reliability move
+
+A crash in the filter worker MUST NOT stop the score / optimize /
+apply workers from doing their job. Each `await worker.run_once()`
+runs inside a per-stage try/except. The `total_errors` counter
+aggregates across all cycles so the CLI exit code still trips when
+something's wrong (monitoring catches it), but the loop survives —
+a transient outage in one stage doesn't kill the always-on operating
+model.
+
+### Cooperative pause — injectable predicate
+
+The handoff §4 called for a "paused flag between iterations" for
+F6 / idle-detect hookup in Phase 4. v3.0 (5/M) exposes the predicate
+shape: `pause_predicate: Callable[[], bool] | None`. Default is
+no-op (always False). Tests drive it directly; Phase 4 will wire it
+to the F6 system hook + idle detector. Sidesteps the singleton/
+globals issue while keeping the API stable for Phase 4.
+
+The pause check fires ONCE per cycle (not between stages) because
+one cycle of gather work is cheap and a mid-cycle pause complicates
+the event log without adding meaningful responsiveness — the cycle
+interval is the bound on responsiveness, and any reasonable cycle
+interval (60s default) is fine for an F6 press.
+
+### Sleep is honored on every cycle including paused/quiet ones
+
+Sleep fires once per cycle regardless of whether anything actually
+ran — backpressure invariant. A paused scheduler with no sleep would
+spin the CPU; a quiet-hours scheduler with no sleep would burn
+events.db with empty 'skip' rows. The injected sleep recorder in
+tests confirms one sleep per cycle.
+
+### Telemetry — cycle boundaries
+
+Each cycle emits a `scheduler` start + ok/error/skip event so the
+spine records cycle boundaries (useful for "what happened between
+03:00 and 03:01?" queries against `events.db`). Per-stage @stage
+events still fire inside each worker — the scheduler event is just
+the outer boundary, not a replacement.
+
+### CLI shape: `av3 run [--max-cycles N] [--quiet-hours HH:MM-HH:MM]`
+
+The new `av3 run` command is the production entry. The `--once`
+flags on per-worker CLIs (`av3 filter --once`, etc.) stay available
+for testing and doctor checks. Pre-flight: fact bank + resume.pdf
+must exist (the apply worker still reads a single global resume.pdf
+as a fallback until per-job derived paths from the optimize worker
+are wired into apply — that wiring is the next natural sub-phase
+but not blocking for v3.0). CLI flag precedence: explicit flag wins
+over `settings.scheduler.*`, both fall back to spec defaults.
+Loud confirmation before `--no-dry-run` because this is the only
+way to send real applications under the always-on loop.
+
+### What's NOT in this sub-phase
+
+  * **Apply worker reading per-job optimize-generated PDFs.** Still
+    uses the single global `resume.pdf` for backward compatibility.
+    Wiring `generated_resume_path(settings, job.id)` from (3/M) into
+    the apply worker's per-job dispatch is a small slice that lands
+    alongside the live-Lever smoketest follow-up.
+  * **F6 hook + idle detector.** Phase 4 (web UI + worker service)
+    wires these to the cooperative pause predicate exposed here.
+  * **Per-stage cadences.** v3.1 strategy profiles.
+
+### Edge cases covered
+
+| Path | Outcome |
+|---|---|
+| One cycle, healthy workers | filter → score → optimize → apply in order |
+| `max_cycles=N` | exits after N cycles |
+| `cycle_interval_s=X` | sleep called with X each cycle |
+| Inside quiet hours | apply skipped, gather stages run |
+| Outside quiet hours | apply runs normally |
+| No window configured | apply runs every cycle |
+| Pause predicate True | whole cycle skipped (no workers run) |
+| Pause predicate False | normal cycle |
+| Filter worker raises | other stages still run, error recorded |
+| Apply worker raises | next cycle still tries it |
+| Multiple stage errors in one cycle | all recorded in cycle.stage_errors |
+| Each cycle | scheduler event start + ok emitted |
+| Quiet skip | scheduler event status=skip, reason=quiet_hours |
+| Paused cycle | scheduler event status=skip, reason=paused |
+
+### Where Phase 3 stands after (5/M)
+
+**v3.0 has a fully working end-to-end pipeline.** The remaining
+sub-phases are operational hardening, not pipeline construction:
+
+  6. Retention + backups (spec §4).
+  7. Scoring eval harness (spec §10) — pins (2/M)'s prompt versioning
+     against a labeled set; also calibrates the (1/M) filter threshold.
+  8. Mocked-source CI for selector drift.
+  9. Live smoke tests on real ATS APIs/forms (NEVER submits).

@@ -549,5 +549,174 @@ def optimize_cmd(once: bool, limit: int | None, no_llm: bool) -> None:
     sys.exit(1 if summary.errors else 0)
 
 
+@cli.command("run")
+@click.option("--max-cycles", type=int, default=None,
+              help="Stop after N cycles. Default: run forever (Ctrl-C to stop).")
+@click.option("--quiet-hours", type=str, default=None,
+              help="Local-time window HH:MM-HH:MM during which the apply worker pauses "
+                   "(gather stages keep running). Overrides settings.scheduler.quiet_hours.")
+@click.option("--cycle-interval-s", type=float, default=None,
+              help="Seconds between cycles. Overrides settings.scheduler.cycle_interval_s.")
+@click.option("--dry-run/--no-dry-run", default=True,
+              help="Dev-safe default. --no-dry-run lets the apply worker SEND REAL APPLICATIONS.")
+@click.option("--mode", type=click.Choice(["auto", "assisted"]), default="auto",
+              help="Apply mode: auto = bot submits on clean forms; assisted = pre-fill, human submits.")
+@click.option("--no-llm", is_flag=True, default=False,
+              help="Skip Ollama/Gemini wiring. Filter fail-opens, score+optimize fail-CLOSED, "
+                   "apply resolver uses bank + sensitive policy only.")
+def run_cmd(max_cycles: int | None, quiet_hours: str | None,
+            cycle_interval_s: float | None, dry_run: bool, mode: str,
+            no_llm: bool) -> None:
+    """Always-on staged-worker loop (spec section 7a) — THE production entry.
+
+    Drives filter -> score -> optimize -> apply each cycle in pipeline order
+    (so a freshly DISCOVERED job can flow all the way through in one cycle when
+    queues are mostly idle). Apply stage is the only one gated by quiet hours;
+    gather stages (filter/score/optimize) run 24/7.
+
+    The --once mode on per-worker commands (av3 filter / score / optimize /
+    apply --once) stays available for testing and doctor checks; this is what
+    you run when the bot should just keep working.
+    """
+    import asyncio
+
+    from av3.domain.state import ApplyMode
+    from av3.llm.complete import build_default
+    from av3.llm.embed import OllamaEmbeddings
+    from av3.pipeline import (
+        ApplyWorker,
+        FilterWorker,
+        OptimizeWorker,
+        Scheduler,
+        ScoreWorker,
+        default_drivers,
+        parse_quiet_hours,
+    )
+    from av3.resume.factbank import FactBank
+    from av3.sources.browser.session import BrowserSession
+    from av3.telemetry import configure_sink
+
+    settings = load_settings()
+
+    # Pre-flight: fact bank + resume file. The apply worker still reads a
+    # single global resume.pdf as a fallback (per-job derived paths from the
+    # optimize worker land alongside the apply-worker rewire in a future
+    # sub-phase).
+    fact_bank_path = settings.data_dir / "profile" / "master.json"
+    if not fact_bank_path.exists():
+        click.echo(f"  x FAIL fact bank: missing at {fact_bank_path}", err=True)
+        click.echo(
+            "        fix -> seed the fact bank during onboarding (Phase 4) "
+            "or drop a master.json there.",
+            err=True,
+        )
+        sys.exit(2)
+
+    resume_path = settings.artifacts_dir / "resume.pdf"
+    if not resume_path.exists():
+        click.echo(f"  x FAIL resume: missing at {resume_path}", err=True)
+        click.echo(
+            "        fix -> drop a resume.pdf into the artifacts dir until the "
+            "apply worker reads per-job optimize-generated paths.",
+            err=True,
+        )
+        sys.exit(2)
+
+    bank = FactBank.load(fact_bank_path)
+    conn = init_app_db(settings.app_db_path)
+    configure_sink(EventSink(settings.events_db_path))
+
+    settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build LLM clients ONCE and share across workers — Ollama HTTP is lazy so
+    # construction is free even when --no-llm is set (we just pass None instead).
+    embed = None if no_llm else OllamaEmbeddings(
+        host=settings.llm.ollama_host, model=settings.llm.embed_model
+    )
+    llm = None if no_llm else build_default(settings)
+
+    apply_mode = ApplyMode.BROWSER_AUTO if mode == "auto" else ApplyMode.BROWSER_ASSISTED
+
+    # CLI overrides win over settings defaults; both fall back to the spec defaults.
+    effective_cycle_interval = (
+        cycle_interval_s if cycle_interval_s is not None
+        else settings.scheduler.cycle_interval_s
+    )
+    effective_quiet_hours_raw = (
+        quiet_hours if quiet_hours is not None
+        else settings.scheduler.quiet_hours
+    )
+    quiet_hours_window = parse_quiet_hours(effective_quiet_hours_raw)
+
+    # Loud confirmation before the irreversible path.
+    if not dry_run:
+        click.echo(
+            f"! --no-dry-run: scheduler will SEND REAL APPLICATIONS in mode={mode} "
+            f"(quiet_hours={effective_quiet_hours_raw or 'none'}, "
+            f"max_cycles={max_cycles if max_cycles is not None else 'unbounded'})"
+        )
+
+    async def _run():
+        session = BrowserSession(settings.browser_profile_dir)
+        await session.start()
+        try:
+            filter_worker = FilterWorker(
+                settings=settings, conn=conn, fact_bank=bank,
+                embed_client=embed,
+            )
+            score_worker = ScoreWorker(
+                settings=settings, conn=conn, fact_bank=bank,
+                llm_client=llm,
+            )
+            optimize_worker = OptimizeWorker(
+                settings=settings, conn=conn, fact_bank=bank,
+                llm_client=llm,
+            )
+            apply_worker = ApplyWorker(
+                settings=settings, conn=conn, fact_bank=bank,
+                resume_path=str(resume_path),
+                new_page=session.new_page,
+                embed_client=embed,
+                llm_client=llm,
+                mode=apply_mode,
+                dry_run=dry_run,
+                drivers=default_drivers(),
+            )
+            scheduler = Scheduler(
+                filter_worker=filter_worker,
+                score_worker=score_worker,
+                optimize_worker=optimize_worker,
+                apply_worker=apply_worker,
+                cycle_interval_s=effective_cycle_interval,
+                quiet_hours=quiet_hours_window,
+            )
+            return await scheduler.run(max_cycles=max_cycles)
+        finally:
+            await session.stop()
+
+    try:
+        summary = asyncio.run(_run())
+    finally:
+        conn.close()
+
+    # ASCII-only summary line; matches doctor/status/apply/filter/score output style.
+    click.echo(
+        f"cycles={len(summary.cycles)} total_errors={summary.total_errors} "
+        f"elapsed={summary.elapsed_s:.1f}s"
+    )
+    # Per-cycle short lines (last 5 only — full detail is in events.db).
+    if summary.cycles:
+        click.echo("Cycles (last 5):")
+        for cs in summary.cycles[-5:]:
+            qh = " [quiet-hours]" if cs.apply_skipped_quiet_hours else ""
+            paused = " [paused]" if cs.paused else ""
+            errs = f" errors={list(cs.stage_errors.keys())}" if cs.stage_errors else ""
+            click.echo(f"  - cycle={cs.cycle} elapsed={cs.elapsed_s:.1f}s{qh}{paused}{errs}")
+
+    # CI / cron friendliness: any cycle-level error is a non-zero exit (a stage
+    # crash is bad even when we kept the loop alive).
+    sys.exit(1 if summary.total_errors else 0)
+
+
 if __name__ == "__main__":
     cli()

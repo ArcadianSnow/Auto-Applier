@@ -106,6 +106,25 @@ class TelemetryConfig(BaseModel):
     relay_url: str | None = None
 
 
+class SchedulerConfig(BaseModel):
+    """Always-on staged-worker loop tuning (spec §7a — fixed pacing for v3.0).
+
+    Drives the :class:`av3.pipeline.Scheduler` cycle. Pareto strategy profiles
+    (Cautious/Balanced/Aggressive) are v3.1; v3.0 ships these fixed knobs and
+    stops. Quiet hours pause ONLY the apply worker (gather stages keep running
+    because being-wrong in gather doesn't compound — Rule 2.6).
+    """
+
+    cycle_interval_s: float = 60.0  # seconds between staged-loop cycles
+    quiet_hours: str | None = None  # "HH:MM-HH:MM" local time, or None for 24/7
+
+    @model_validator(mode="after")
+    def _cycle_interval_positive(self) -> "SchedulerConfig":
+        if self.cycle_interval_s <= 0:
+            raise ValueError("cycle_interval_s must be > 0")
+        return self
+
+
 class Settings(BaseModel):
     """Root settings object. Construct via ``load_settings()``."""
 
@@ -114,6 +133,7 @@ class Settings(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     pacing: PacingConfig = Field(default_factory=PacingConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+    scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
 
     # --- derived paths (system of record + observability spine, spec §4) ---
     @property
