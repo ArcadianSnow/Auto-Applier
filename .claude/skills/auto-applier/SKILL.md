@@ -28,6 +28,7 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
 | **Phase -1 verdict / go-no-go / what Phase 1 must measure** | `research/_phase-minus-1-conclusions.md` |
 | How to seed ATS company lists (board tokens) | `research/ats-discovery-seeding.md` |
 | How ATS apply forms behave / CAPTCHA / submit confirmation (+ live survey results) | `research/ats-form-automation.md` |
+| Phase 3 pipeline staging (embedding pre-filter, score/optimize workers, scheduler) | `research/pipeline-staging.md` |
 | Prior art — other auto-apply tools/repos, methodologies, what we adopt + smoketests (reCAPTCHA v3 score, JobSpy) | `research/prior-art-and-methodology.md` |
 | ATS market share by segment + what tier v3 can reach + source prioritization | `research/ats-market-landscape.md` |
 | How to stop résumé fabrication (the guard) | `research/fabrication-guard.md` |

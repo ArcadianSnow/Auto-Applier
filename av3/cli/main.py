@@ -283,5 +283,87 @@ def apply(once: bool, limit: int | None, source: str | None,
     sys.exit(1 if summary.errors else 0)
 
 
+@cli.command("filter")
+@click.option("--once", is_flag=True, default=True,
+              help="Run one cycle and exit. The only mode v3.0 ships (staged scheduler is Phase 3).")
+@click.option("--limit", type=int, default=None,
+              help="Maximum DISCOVERED jobs to process this run.")
+@click.option("--threshold", type=float, default=0.6, show_default=True,
+              help="Cosine similarity threshold; >= passes to DESCRIBED, < routes to FILTERED.")
+@click.option("--no-llm", is_flag=True, default=False,
+              help="Skip Ollama. Every DISCOVERED job fail-opens to DESCRIBED (no filtering).")
+def filter_cmd(once: bool, limit: int | None, threshold: float, no_llm: bool) -> None:
+    """Drain DISCOVERED jobs through the embedding pre-filter (spec section 7 #3).
+
+    Cosine-rank (title + company + snippet) against the master fact-bank summary;
+    above threshold passes to DESCRIBED for the next stage to scrape the full JD,
+    below threshold routes to FILTERED (terminal). Fail-open if Ollama is unreachable
+    or the bank is empty - the alternative would be silently dropping every job into a
+    terminal state, which the dashboard couldn't reverse.
+    """
+    import asyncio
+
+    from av3.llm.embed import OllamaEmbeddings
+    from av3.pipeline import FilterWorker
+    from av3.resume.factbank import FactBank
+    from av3.telemetry import configure_sink
+
+    settings = load_settings()
+
+    # Pre-flight: fact bank MUST exist. No resume.pdf check here - the filter only
+    # reads the bank (skills/titles/bullets) to form its anchor; the per-job resume
+    # is built downstream in the optimize stage.
+    fact_bank_path = settings.data_dir / "profile" / "master.json"
+    if not fact_bank_path.exists():
+        click.echo(f"  x FAIL fact bank: missing at {fact_bank_path}", err=True)
+        click.echo(
+            "        fix -> seed the fact bank during onboarding (Phase 4) "
+            "or drop a master.json there.",
+            err=True,
+        )
+        sys.exit(2)
+
+    bank = FactBank.load(fact_bank_path)
+    conn = init_app_db(settings.app_db_path)
+    configure_sink(EventSink(settings.events_db_path))
+
+    # Embed client is HTTP-lazy: constructor doesn't touch the network, so a down
+    # Ollama just surfaces at run time and the worker fail-opens per-job.
+    embed = None if no_llm else OllamaEmbeddings(
+        host=settings.llm.ollama_host, model=settings.llm.embed_model
+    )
+
+    async def _run():
+        worker = FilterWorker(
+            settings=settings,
+            conn=conn,
+            fact_bank=bank,
+            embed_client=embed,
+            threshold=threshold,
+        )
+        return await worker.run_once(limit=limit)
+
+    try:
+        summary = asyncio.run(_run())
+    finally:
+        conn.close()
+
+    # ASCII-only summary line; matches doctor/status/apply output style.
+    click.echo(
+        f"run_id={summary.run_id} attempted={summary.attempted} "
+        f"passed={summary.passed} filtered={summary.filtered} "
+        f"failed_open={summary.failed_open} errors={summary.errors} "
+        f"elapsed={summary.elapsed_s:.1f}s"
+    )
+    if summary.notes:
+        click.echo("Notes:")
+        for note in summary.notes:
+            click.echo(f"  - {note}")
+
+    # CI / cron friendliness: per-job exceptions are a non-zero exit even when
+    # they're fail-opened (so a misconfigured Ollama still trips a monitoring alert).
+    sys.exit(1 if summary.errors else 0)
+
+
 if __name__ == "__main__":
     cli()
