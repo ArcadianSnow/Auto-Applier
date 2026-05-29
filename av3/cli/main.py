@@ -454,5 +454,100 @@ def score_cmd(once: bool, limit: int | None, no_llm: bool) -> None:
     sys.exit(1 if summary.errors else 0)
 
 
+@cli.command("optimize")
+@click.option("--once", is_flag=True, default=True,
+              help="Run one cycle and exit. The only mode v3.0 ships (staged scheduler is Phase 3).")
+@click.option("--limit", type=int, default=None,
+              help="Maximum DECIDED jobs to process this run.")
+@click.option("--no-llm", is_flag=True, default=False,
+              help="Skip Ollama/Gemini. Every DECIDED job will route to REVIEW "
+                   "(fail-closed) - the Strict gate cannot generate a tailored "
+                   "resume without an LLM.")
+def optimize_cmd(once: bool, limit: int | None, no_llm: bool) -> None:
+    """Drain DECIDED jobs through the optimize+Strict gate (spec section 7 #6).
+
+    For each above-bar DECIDED job: generate a per-job tailored resume from the
+    fact bank, generate a cover letter, run the fabrication guard. ALL THREE must
+    pass or the job routes to REVIEW. Pass -> QUEUED_APPLY (apply worker reads it
+    blindly, so the Strict gate IS the safety mechanism that justifies
+    BROWSER_AUTO - never auto-submit un-optimized).
+
+    Fail-CLOSED: missing LLM / per-job LLM exception / guard rejection / PDF
+    render failure all route that one job to REVIEW. Other jobs in the run
+    continue (per-job isolation). The CLI exits 1 on errors > 0 so a misconfigured
+    Ollama trips monitoring even when the per-job behavior is graceful.
+    """
+    import asyncio
+
+    from av3.llm.complete import build_default
+    from av3.pipeline import OptimizeWorker
+    from av3.resume.factbank import FactBank
+    from av3.telemetry import configure_sink
+
+    settings = load_settings()
+
+    # Pre-flight: fact bank MUST exist - both generation prompts read from it,
+    # and the guard uses it as the truth side of the allow-list. No resume.pdf
+    # check here: this command writes the per-job PDFs.
+    fact_bank_path = settings.data_dir / "profile" / "master.json"
+    if not fact_bank_path.exists():
+        click.echo(f"  x FAIL fact bank: missing at {fact_bank_path}", err=True)
+        click.echo(
+            "        fix -> seed the fact bank during onboarding (Phase 4) "
+            "or drop a master.json there.",
+            err=True,
+        )
+        sys.exit(2)
+
+    bank = FactBank.load(fact_bank_path)
+    conn = init_app_db(settings.app_db_path)
+    configure_sink(EventSink(settings.events_db_path))
+
+    # Ensure the artifacts dir exists - the worker's renderer mkdirs the
+    # generated/ subdir, but the parent must exist for that to chain.
+    settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    llm = None if no_llm else build_default(settings)
+
+    if no_llm:
+        click.echo(
+            "! --no-llm: every DECIDED job will route to REVIEW "
+            "(the Strict gate requires an LLM to generate the per-job resume)."
+        )
+
+    async def _run():
+        worker = OptimizeWorker(
+            settings=settings,
+            conn=conn,
+            fact_bank=bank,
+            llm_client=llm,
+        )
+        return await worker.run_once(limit=limit)
+
+    try:
+        summary = asyncio.run(_run())
+    finally:
+        conn.close()
+
+    # ASCII-only summary line; matches doctor/status/apply/filter/score output style.
+    click.echo(
+        f"run_id={summary.run_id} attempted={summary.attempted} "
+        f"queued={summary.queued} routed_to_review={summary.routed_to_review} "
+        f"guard_rejected={summary.guard_rejected} render_failed={summary.render_failed} "
+        f"failed_closed={summary.failed_closed} errors={summary.errors} "
+        f"elapsed={summary.elapsed_s:.1f}s"
+    )
+    if summary.notes:
+        click.echo("Notes:")
+        for note in summary.notes:
+            click.echo(f"  - {note}")
+
+    # CI / cron friendliness: per-job exceptions are a non-zero exit even when
+    # fail-closed (so a misconfigured Ollama still trips a monitoring alert).
+    # Guard rejections and render failures do NOT trip the exit code - those are
+    # intended-pathway outcomes (the gate is supposed to reject bad output).
+    sys.exit(1 if summary.errors else 0)
+
+
 if __name__ == "__main__":
     cli()

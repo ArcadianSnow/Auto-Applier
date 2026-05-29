@@ -241,3 +241,183 @@ Both workers' tests follow the same shape:
 
 Carry this shape forward into (3/M) and beyond — `tests_v3/test_*_worker.py` +
 `tests_v3/test_cli_*.py` becomes a stable two-file template per sub-phase.
+
+---
+
+## Phase 3 (3/M) — optimize+Strict gate landed
+
+`av3/pipeline/optimize_worker.py`, `av3/llm/prompts.py` additions
+(`GENERATE_RESUME` v `gen-resume-v1` + `GENERATE_COVER_LETTER` v `gen-cover-v1`),
+`av3/resume/generate.py` (orchestration + canonical paths),
+`av3/resume/render.py` (Playwright HTML → PDF + injectable seam), `av3 optimize`
+CLI command, **29 new tests** (272 v3 tests total, +29 from (2/M)).
+**Spec §7 #6 + §6b satisfied:** drains DECIDED, generates a per-job tailored
+résumé + cover letter from the fact bank, runs the L1 fabrication guard,
+renders the résumé to ATS-safe single-column PDF. ALL FOUR gates (LLM available
++ résumé generation + cover-letter generation + guard PASS + PDF render) must
+clear or the job walks `DECIDED → REVIEW`. Pass → `DECIDED → QUEUED_APPLY`,
+where the apply worker reads it blindly. **The Strict gate is THE safety
+mechanism that justifies `BROWSER_AUTO`** — without it the apply worker would
+auto-submit fabricated résumés on real applications.
+
+### Schema decision — derived paths, no new columns
+
+The handoff called out the "where do `generated_resume_path` /
+`cover_letter_path` live?" open decision. **Resolution: derived paths,
+no schema change.**
+
+  * Résumé PDF      → `settings.artifacts_dir / "generated" / "{job.id}.pdf"`
+  * Cover letter txt → `settings.artifacts_dir / "generated" / "{job.id}_cover.txt"`
+
+Both workers (optimize writes, apply reads) derive the same paths from
+`job.id` via `av3.resume.generate.generated_resume_path` /
+`generated_cover_letter_path`. **File existence is the durable "this job has
+been optimized" contract.** The apply worker writes those paths into the
+`Application` row it creates at submit time (where the schema already has
+`cover_letter_path` + `generated_resume_path` columns per spec §4) — no
+`Job` column added, no `db/migrations.py` shim needed. The handoff's
+recommended "add columns to `Job`" approach would have been fine too;
+derived paths just dodge the migration entirely.
+
+### Why the worker is "fail-CLOSED," not "fail-open"
+
+Same posture as the score worker, and same reason: the next stage downstream
+is the **apply worker**, which reads `QUEUED_APPLY` blind. A fail-open here
+would route un-vetted jobs straight to auto-submit — exactly the catastrophic
+outcome the Strict gate exists to prevent.
+
+| Failure mode | Optimize-worker handling | Counter |
+|---|---|---|
+| No LLM client at construction | walk DECIDED → REVIEW for every job | `failed_closed` (+ `routed_to_review`) |
+| Per-job résumé/cover LLM exception | walk that one job to REVIEW | `failed_closed` + `errors` |
+| Malformed LLM payload (non-dict) | parse raises → caught upstream → REVIEW | `failed_closed` + `errors` |
+| Empty cover-letter body | parse raises → REVIEW | `failed_closed` + `errors` |
+| Empty JD on a DECIDED row | walk to REVIEW (defensive; score worker normally catches this earlier) | `failed_closed` |
+| Fabrication guard verdict != PASS | walk to REVIEW (the gate doing its job) | `guard_rejected` (+ `routed_to_review`) |
+| PDF renderer returns False | walk to REVIEW (after guard passed) | `render_failed` (+ `routed_to_review`) |
+
+**Asymmetric cost rationale:** the cost of a false REVIEW is a manual user
+click; the cost of a false QUEUED_APPLY is a fabricated submission on a real
+application. Both `failed_closed` and `guard_rejected`/`render_failed` get
+the same REVIEW destination but **stay in separate counters** so the
+dashboard can distinguish "fix your Ollama" (operational failure) from
+"review this fabrication" (content-driven rejection).
+
+### Exit-code policy (matches score worker)
+
+The CLI exits 1 when `errors > 0` so a misconfigured Ollama still trips a
+monitoring alert even though per-job behavior was graceful. **Guard rejections
+and render failures do NOT trip the exit code** — those are intended-pathway
+outcomes (the gate is supposed to reject bad output sometimes, and a missing
+Playwright is a setup gap the user fixes at install).
+
+### Ordering inside `_process_one` is load-bearing
+
+The five steps run in a deliberate order; reordering any pair changes the
+failure semantics:
+
+  1. **Generate résumé** (LLM call #1) — fail-CLOSED on exception/malformed.
+  2. **Generate cover letter** (LLM call #2) — fail-CLOSED on exception/empty.
+  3. **Run fabrication guard** — fail-CLOSED on non-PASS verdict.
+  4. **Render PDF** — fail-CLOSED on render-returns-False.
+  5. **Write cover letter `.txt`** — exception caught as per-job error.
+
+Why guard runs BEFORE render: guard works on the structured `GeneratedResume`
+shape, not the PDF. Running render first would burn ~1s of Playwright per
+job that's about to be rejected anyway. And critically: a guard rejection
+must leave no PDF on disk (otherwise the apply worker, which keys off file
+existence, could pick up a fabricated résumé from a stale rejection).
+
+Why cover-letter `.txt` write runs AFTER PDF render: if the render fails,
+we want to leave no `_cover.txt` orphan on disk. The apply worker's
+contract is "both files exist or this job hasn't been optimized" — a
+lone cover letter from a render-failed run would lie about completeness.
+
+### `StageSkip` raise discipline (carried forward from score worker)
+
+`_route_to_review` does **durable writes only — does NOT raise.** Callers
+decide whether to raise `StageSkip`:
+
+  * Inside `_process_one` (the `@stage("optimize")` frame): raise `StageSkip`
+    after the write so the event spine records `status='skip'` with the
+    reason, not `'ok'`.
+  * From `run_once`'s exception handler: just write and return. The handler
+    is already past the `@stage` frame, so raising would propagate
+    `StageSkip` out of `run_once` itself and break the run — the same
+    defect the (2/M) authoring caught (see "StageSkip raise discipline"
+    section above for the score worker's version).
+
+### Prompt versioning + tagging
+
+Two new templates with version strings stamp the run's notes alongside the
+LLM model name:
+
+  * `GENERATE_RESUME` → version `gen-resume-v1`
+  * `GENERATE_COVER_LETTER` → version `gen-cover-v1`
+
+Notes include lines like `"queued job <id>: resume=gen-resume-v1|gemma4:e4b
+cover=gen-cover-v1|gemma4:e4b"` so a future audit can trace any generated
+résumé back to a specific prompt revision. Future work (a sidecar
+`<job_id>_meta.json` mirroring the row's stamp) is out of scope for v3.0 —
+the file existence already says "this job was optimized"; the version
+stamp lives in the notes for now.
+
+### What's NOT in this sub-phase
+
+  * **Layers 2–4 of the fabrication guard** (embedding retrieval, NLI,
+    LLM self-check) — Phase 1 ships L1 only per `fabrication-guard.md`;
+    later layers are deferred. The Strict gate is fail-CLOSED on L1
+    alone, so a more aggressive guard would just narrow what passes
+    (no safety hole opened by the deferral).
+  * **An apply worker that reads the per-job paths** — the apply worker's
+    Phase 2 (3/N) version still uses a single `self._resume_path` global.
+    Wiring it to read the per-job derived paths is a Phase 3 (5/M)
+    scheduler concern (the scheduler's wiring is the natural place to
+    swap the resume_path from "single global" to "per-job derived").
+    The optimize gate's contract (the files exist at the derived paths)
+    is already satisfied.
+  * **Cover-letter outcome learning** — spec §8e's data-revisable length
+    knob is v3.1. The fixed 200-word default ships now.
+  * **Sidecar guard findings JSON** — the worker captures the verdict in
+    its notes; persisting the full `Finding` list as a per-job JSON for
+    the dashboard's "why was this rejected?" view can land alongside the
+    Phase 4 web UI without changing the optimize contract.
+
+### Edge cases covered (see `tests_v3/test_optimize_worker.py`)
+
+| Path | Transition | Counter |
+|---|---|---|
+| all gates clean | `DECIDED → QUEUED_APPLY` | `queued` |
+| no LLM client (`--no-llm`) | `DECIDED → REVIEW` × all jobs | `failed_closed` (+ `routed_to_review`) |
+| per-job LLM exception (résumé side) | `DECIDED → REVIEW` (one job) | `failed_closed` + `errors` |
+| per-job LLM exception (cover side) | `DECIDED → REVIEW` (one job, no PDF written) | `failed_closed` + `errors` |
+| malformed résumé payload (non-dict) | `DECIDED → REVIEW` | `failed_closed` + `errors` |
+| empty cover-letter body | `DECIDED → REVIEW` | `failed_closed` + `errors` |
+| empty JD on a DECIDED row | `DECIDED → REVIEW` (LLM never called) | `failed_closed` |
+| guard verdict = HARD_FAIL | `DECIDED → REVIEW` (no PDF written) | `guard_rejected` |
+| guard verdict = REVIEW (no PASS) | `DECIDED → REVIEW` | `guard_rejected` |
+| PDF render returns False | `DECIDED → REVIEW` (no orphan cover) | `render_failed` |
+| limit honored, oldest-first | first N processed, rest stay DECIDED | n/a |
+| empty queue | no-op summary, no LLM call | all zero |
+
+The routed-to-REVIEW path raises `StageSkip` *after* writing REVIEW, so
+the event spine records `status='skip'` with the reason — useful for ad-hoc
+"why was this routed?" queries against `events.db`. Successful queue path
+records `status='ok'`.
+
+### Where it slots into Phase 3
+
+This is sub-phase **(3/M)** of the Phase 3 chain. With (3/M) committed,
+**v3.0 has a near-complete end-to-end pipeline**: discover → filter →
+describe (implicit for ATS sources at discovery) → score → optimize+Strict
+gate → apply. The remaining sub-phases are operational hardening rather
+than pipeline construction:
+
+  4. **Session-expiry graceful degradation** (spec §8b).
+  5. **Staged-worker scheduler** (`av3 run`): production entry that
+     drives all the `--once` workers on independent cadences.
+  6. Retention + backups (spec §4).
+  7. Scoring eval harness (spec §10) — pins (2/M)'s prompt versioning
+     against a labeled set; also calibrates the (1/M) filter threshold.
+  8. Mocked-source CI for selector drift.
+  9. Live smoke tests on real ATS APIs/forms (NEVER submits).
