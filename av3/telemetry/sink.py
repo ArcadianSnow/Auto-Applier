@@ -85,6 +85,43 @@ class EventSink:
             (limit,),
         ).fetchall()
 
+    def query_errors(
+        self,
+        *,
+        since_iso: str | None = None,
+        stage: str | None = None,
+        platform: str | None = None,
+        run_id: str | None = None,
+        limit: int = 25,
+    ) -> list[sqlite3.Row]:
+        """Filtered errors view for ``cli errors`` (Phase 5 1/M).
+
+        Everything is optional and composable; every filter goes through a
+        parameterized clause so the resulting query is injection-safe.
+        ``since_iso`` is an ISO-8601 UTC timestamp produced by the CLI (it
+        owns the ``30m|24h|7d`` parsing) — keeps the sink pure-DB.
+        """
+        clauses = ["status = 'error'"]
+        params: list = []
+        if since_iso is not None:
+            clauses.append("ts >= ?")
+            params.append(since_iso)
+        if stage is not None:
+            clauses.append("stage = ?")
+            params.append(stage)
+        if platform is not None:
+            clauses.append("platform = ?")
+            params.append(platform)
+        if run_id is not None:
+            clauses.append("run_id = ?")
+            params.append(run_id)
+        params.append(int(limit))
+        sql = (
+            f"SELECT * FROM events WHERE {' AND '.join(clauses)} "
+            "ORDER BY id DESC LIMIT ?"
+        )
+        return self.conn.execute(sql, params).fetchall()
+
     def stage_stats(self) -> list[sqlite3.Row]:
         """Per-stage counts + median-ish timing for ``cli stats``."""
         return self.conn.execute(
@@ -95,6 +132,41 @@ class EventSink:
                       AVG(duration_ms)    AS avg_ms
                FROM events GROUP BY stage ORDER BY stage"""
         ).fetchall()
+
+    def query_stats(
+        self,
+        *,
+        since_iso: str | None = None,
+        platform: str | None = None,
+        run_id: str | None = None,
+    ) -> list[sqlite3.Row]:
+        """Filtered per-stage aggregate for ``cli stats`` (Phase 5 1/M).
+
+        Same composable-filter shape as :meth:`query_errors`. Unlike that
+        method, ``stage`` is NOT a filter here — the whole point of the
+        command is the by-stage breakdown.
+        """
+        clauses: list[str] = []
+        params: list = []
+        if since_iso is not None:
+            clauses.append("ts >= ?")
+            params.append(since_iso)
+        if platform is not None:
+            clauses.append("platform = ?")
+            params.append(platform)
+        if run_id is not None:
+            clauses.append("run_id = ?")
+            params.append(run_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = (
+            "SELECT stage, "
+            "       SUM(status='ok')    AS ok, "
+            "       SUM(status='error') AS error, "
+            "       SUM(status='skip')  AS skip, "
+            "       AVG(duration_ms)    AS avg_ms "
+            f"FROM events {where} GROUP BY stage ORDER BY stage"
+        )
+        return self.conn.execute(sql, params).fetchall()
 
     def prune(self, keep_days: int) -> int:
         """Delete events older than ``keep_days`` (spec §4: events prune on a short

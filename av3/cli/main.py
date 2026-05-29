@@ -1186,6 +1186,195 @@ def _wait_for_port(host: str, port: int, *, timeout_s: float) -> bool:
     return False
 
 
+# --------------------------------------------------------------- observability
+#
+# ``av3 errors`` / ``av3 stats`` (Phase 5 1/M, spec section 11b).
+#
+# Both read events.db directly through the EventSink helper queries. They are
+# the "Claude debug session straight from SQL — no log files" surface from
+# spec section 9. Local-only — they DO NOT depend on Phase 5 (2/M)'s opt-in
+# remote mirror, so they work the moment events exist.
+
+# Accept short relative windows (e.g. ``5m``, ``2h``, ``7d``). The CLI owns
+# parsing so the sink stays pure-DB; the cutoff reaches the sink as an
+# ISO-8601 timestamp.
+_SINCE_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def _parse_since(value: str | None) -> str | None:
+    """Return an ISO-8601 UTC cutoff for ``--since 30m|24h|7d`` style input.
+
+    Returns ``None`` when no window was requested. Raises ``click.BadParameter``
+    on unparseable input so the user sees the failure at the CLI, not as a
+    silently-empty result.
+    """
+    if value is None:
+        return None
+    raw = value.strip().lower()
+    # Reject anything with embedded whitespace or non-ASCII digits — ``int()``
+    # accepts strings like ``"30 "`` and Unicode digit chars, which would
+    # otherwise sneak through a sloppy parse.
+    if not raw or len(raw) < 2 or any(c.isspace() for c in raw):
+        raise click.BadParameter(f"unrecognized --since value {value!r} (try 30m, 2h, 7d)")
+    unit = raw[-1]
+    if unit not in _SINCE_UNITS:
+        raise click.BadParameter(f"unrecognized --since value {value!r} (try 30m, 2h, 7d)")
+    digits = raw[:-1]
+    if not digits.isascii() or not digits.lstrip("-").isdigit():
+        raise click.BadParameter(f"unrecognized --since value {value!r} (try 30m, 2h, 7d)")
+    try:
+        n = int(digits)
+    except ValueError as exc:
+        raise click.BadParameter(f"unrecognized --since value {value!r} (try 30m, 2h, 7d)") from exc
+    if n <= 0:
+        raise click.BadParameter(f"--since must be positive (got {value!r})")
+
+    from datetime import datetime, timedelta, timezone
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=n * _SINCE_UNITS[unit])
+    # Match the ``utcnow_iso`` shape that ``EventSink.emit`` writes — strict
+    # lexicographic compare in SQL only works when both sides share the format.
+    return cutoff.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _truncate(text: str | None, width: int) -> str:
+    """ASCII-safe column truncator. Empty string for ``None``."""
+    if not text:
+        return ""
+    if len(text) <= width:
+        return text
+    return text[: max(1, width - 1)] + "~"
+
+
+@cli.command("errors")
+@click.option("--limit", type=int, default=25, show_default=True,
+              help="Maximum rows to return. Default sized for one terminal screen.")
+@click.option("--stage", type=str, default=None,
+              help="Filter by stage label (e.g. 'apply', 'score', 'optimize').")
+@click.option("--platform", type=str, default=None,
+              help="Filter by source/platform (e.g. 'greenhouse', 'lever', 'ashby').")
+@click.option("--since", "since", type=str, default=None,
+              help="Only show errors newer than this relative window. "
+                   "Form: <int><s|m|h|d> (e.g. 30m, 24h, 7d).")
+@click.option("--run-id", "run_id", type=str, default=None,
+              help="Filter by run_id — focused triage of one apply cycle.")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Emit a JSON array of error rows instead of the ASCII table. "
+                   "Pipe through `jq -c '.[]'` for NDJSON.")
+def errors_cmd(limit: int, stage: str | None, platform: str | None,
+               since: str | None, run_id: str | None, as_json: bool) -> None:
+    """Show recent error events from events.db (spec section 9).
+
+    The local-only triage surface: every @stage wrapper writes a row on
+    failure; this command surfaces them with optional filters. Always exits 0
+    (asking for errors is not itself an error condition — that would break
+    `av3 errors --json | jq` pipelines).
+    """
+    import json as _json
+
+    settings = load_settings()
+    since_iso = _parse_since(since)
+    sink = EventSink(settings.events_db_path)
+    try:
+        rows = sink.query_errors(
+            since_iso=since_iso, stage=stage, platform=platform,
+            run_id=run_id, limit=limit,
+        )
+    finally:
+        sink.close()
+
+    if as_json:
+        click.echo(_json.dumps([dict(r) for r in rows], indent=2, default=str))
+        return
+
+    if not rows:
+        click.echo("No matching error events.")
+        return
+
+    # Fixed-width ASCII table (cp1252 console safe). Widths picked to fit a
+    # typical 120-col terminal; longer values get truncated with a trailing '~'.
+    header = (
+        f"{'ts':19}  {'stage':12}  {'platform':10}  "
+        f"{'job_id':14}  {'error_type':22}  {'run_id':10}  msg"
+    )
+    click.echo(header)
+    click.echo("-" * len(header))
+    for r in rows:
+        # ts column: strip fractional seconds for compactness.
+        ts = (r["ts"] or "")[:19]
+        click.echo(
+            f"{_truncate(ts, 19):19}  "
+            f"{_truncate(r['stage'], 12):12}  "
+            f"{_truncate(r['platform'], 10):10}  "
+            f"{_truncate(r['job_id'], 14):14}  "
+            f"{_truncate(r['error_type'], 22):22}  "
+            f"{_truncate(r['run_id'], 10):10}  "
+            f"{_truncate(r['error_msg'], 60)}"
+        )
+    click.echo(f"\n{len(rows)} row(s).")
+
+
+@cli.command("stats")
+@click.option("--since", "since", type=str, default=None,
+              help="Only count events newer than this relative window. "
+                   "Form: <int><s|m|h|d> (e.g. 30m, 24h, 7d).")
+@click.option("--platform", type=str, default=None,
+              help="Filter by source/platform.")
+@click.option("--run-id", "run_id", type=str, default=None,
+              help="Filter by run_id — per-cycle health view.")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Emit a JSON array of {stage, ok, error, skip, avg_ms} "
+                   "rows instead of the ASCII table.")
+def stats_cmd(since: str | None, platform: str | None,
+              run_id: str | None, as_json: bool) -> None:
+    """Per-stage event aggregates from events.db (spec section 9).
+
+    Quick health check after a run: ok / error / skip counts plus mean
+    duration per stage. The high-level "is the pipeline broken?" view that
+    sits opposite `av3 errors`' per-row triage. Always exits 0.
+    """
+    import json as _json
+
+    settings = load_settings()
+    since_iso = _parse_since(since)
+    sink = EventSink(settings.events_db_path)
+    try:
+        rows = sink.query_stats(
+            since_iso=since_iso, platform=platform, run_id=run_id,
+        )
+    finally:
+        sink.close()
+
+    if as_json:
+        # Normalize Row → dict and round avg_ms so consumers don't get a
+        # floating-point tail that won't round-trip through diff tools.
+        out = []
+        for r in rows:
+            d = dict(r)
+            if d.get("avg_ms") is not None:
+                d["avg_ms"] = round(d["avg_ms"], 1)
+            out.append(d)
+        click.echo(_json.dumps(out, indent=2, default=str))
+        return
+
+    if not rows:
+        click.echo("No events in window.")
+        return
+
+    header = f"{'stage':16}  {'ok':>6}  {'error':>6}  {'skip':>6}  {'avg_ms':>8}"
+    click.echo(header)
+    click.echo("-" * len(header))
+    for r in rows:
+        avg = r["avg_ms"]
+        avg_s = f"{avg:.0f}" if avg is not None else "-"
+        click.echo(
+            f"{_truncate(r['stage'], 16):16}  "
+            f"{(r['ok'] or 0):>6}  "
+            f"{(r['error'] or 0):>6}  "
+            f"{(r['skip'] or 0):>6}  "
+            f"{avg_s:>8}"
+        )
+
+
 @cli.command("backup")
 def backup_cmd() -> None:
     """Snapshot app.db + events.db; rotate older snapshots (spec section 4).
