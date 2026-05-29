@@ -838,3 +838,203 @@ their own discovery"). Phase 2's discovery producer will read
 titles/locations are captured but inert — visible in the status
 snapshot, ready for Phase 2 to consume. Noted so the next phase
 doesn't re-invent the schema.
+
+---
+
+## Phase 4 (6/M) — one-click launcher landed
+
+`av3 launch` CLI command + `scripts/av3-launcher.{cmd,sh}` wrappers
+close out Phase 4's distribution UX. `tests_v3/test_cli_launch.py`
+(+6 tests; full v3 suite 495 green, 11 deselected by design). **Spec
+§11a "one-click launcher starts the worker+server and opens the
+dashboard tab" satisfied; the bundled-installer + auto-update feed
+(Phase 5) consumes this entry point.**
+
+### New surface
+
+| Module / endpoint | Purpose |
+|---|---|
+| `av3.cli.main.launch_cmd` | `av3 launch` — spawns `av3 serve` in a child process, port-probes for readiness, opens the default browser to the dashboard |
+| `av3.cli.main._wait_for_port` | TCP-connect poll until the port accepts or timeout — never raises |
+| `scripts/av3-launcher.cmd` | Windows double-click target — finds `.venv`, calls `av3 launch`, keeps window open for logs |
+| `scripts/av3-launcher.sh` | POSIX counterpart of the .cmd wrapper |
+
+### Why a child process + probe + browser-open (vs. opening the browser before starting uvicorn)
+
+Three time-sensitive concerns combine on launch:
+
+1. **Browser-open is a one-shot.** `webbrowser.open` fires whenever
+   it's called; we have to call it AFTER the server can answer or
+   the user sees "couldn't connect to localhost".
+2. **uvicorn is blocking.** Once `uvicorn.run()` starts, the calling
+   thread loops the event loop forever. Anything that needs to run
+   AFTER uvicorn starts but BEFORE the user sees the page (i.e.
+   the port-probe + browser-open) has to happen in a separate
+   thread or process.
+3. **Ctrl-C semantics matter.** A user hitting Ctrl-C in the
+   launcher window should cleanly stop the server, not orphan it.
+
+A child process gives us all three for free:
+
+* The parent (launch_cmd) port-probes + opens the browser between
+  spawn and the child's first request.
+* uvicorn's Ctrl-C handler in the child runs unchanged, tearing
+  down the lifespan (scheduler + watchers per (3/M)) cleanly.
+* The parent's `child.wait()` blocks on the child's lifetime; a
+  SIGINT to the parent triggers `child.terminate()` so the child
+  gets the signal it expects.
+
+An in-process threading approach would have required teaching
+uvicorn about the "wait then open browser" flow, which the
+upstream API doesn't expose cleanly.
+
+### Why the launcher uses `python -m av3.cli.main`, not the installed `av3` script
+
+Two reasons:
+
+1. **Repo-checkout robustness.** A fresh `git clone` doesn't have
+   the console script available until `pip install -e .`. The
+   module path works as soon as the source is on PYTHONPATH (which
+   running `python -m` from the repo root guarantees).
+2. **Interpreter fidelity.** `sys.executable -m av3.cli.main`
+   guarantees the child runs in the SAME interpreter (and same
+   venv) as the parent. The installed `av3` script could be a
+   stale binstub from a previous venv if multiple are active.
+
+The `.cmd` / `.sh` wrappers do find the venv's Python explicitly
+before calling `python -m`; this gives non-technical users the
+"double-click and go" UX while keeping power users on the
+straight `av3 launch` invocation.
+
+### Why `--host 0.0.0.0` rewrites the probe + browser URL to 127.0.0.1
+
+When the user binds the server to `0.0.0.0` (spec §3 LAN-access
+mode), the launcher must still open the browser at `127.0.0.1`:
+
+* `http://0.0.0.0:port` either fails outright (browsers reject
+  bind-any as a target) or routes through the LAN gateway, which
+  fails on most home networks.
+* The user IS on the same machine; their browser sees the same
+  server fine via localhost.
+* Other LAN clients still reach the server at the runner box's
+  real IP — they just don't get the auto-open. Same UX as today's
+  v2 dashboard.
+
+The probe target is rewritten in lockstep so the port-readiness
+check actually verifies what the browser will hit, not what
+uvicorn binds to.
+
+### Why the probe times out + opens the browser anyway
+
+If the server fails to start (e.g. port already in use), the probe
+runs out of time. We open the browser anyway because:
+
+* The user sees a clean "couldn't connect" error in the tab — they
+  understand what failed and can read the launcher window for the
+  uvicorn error.
+* The alternative — refusing to open the browser — leaves the user
+  staring at the launcher window with no signal that something
+  went wrong vs. "the launcher is just slow."
+
+The probe is best-effort UX, not a correctness check.
+
+### Edge cases covered (see `tests_v3/test_cli_launch.py`)
+
+| Concern | Test |
+|---|---|
+| Port probe returns False on closed port | `test_returns_false_when_nothing_listening` |
+| Spawns `python -m av3.cli.main serve` with host+port | `test_spawns_serve_with_default_host_port` |
+| `--no-browser` skips `webbrowser.open` | `test_no_browser_skips_open` |
+| `--host 0.0.0.0` rewrites probe + URL to 127.0.0.1 | `test_host_0_0_0_0_rewrites_probe_to_localhost` |
+| Probe timeout still opens browser (best-effort) | `test_probe_timeout_still_opens_browser` |
+| Child non-zero exit propagates from launch_cmd | `test_child_nonzero_exit_propagates` |
+
+### What's NOT in this sub-phase
+
+* **Bundled installer (PyInstaller / py2app / msix).** Spec §11a
+  lists this as a Phase 5 deliverable. The launcher exists so the
+  installer's shortcut has a clean entry point — `av3 launch` is
+  what the installed `.exe` calls.
+* **Auto-update feed.** Also Phase 5 (release-feed polling +
+  prompt-to-update). The launcher doesn't check for updates; a
+  Phase-5 hook will add that to launch_cmd's startup path.
+* **Headless runner mode.** `--no-browser` exists for autostarting
+  on a runner box, but the systemd/Windows-service integration is
+  Phase 5 distribution work — the launcher just provides the
+  primitive that wraps cleanly into either.
+* **Crash recovery / auto-restart.** If `av3 serve` crashes, the
+  launcher exits with the child's return code. A supervisor (NSSM
+  on Windows, systemd elsewhere) handles re-launch; baking that
+  into the launcher would re-implement what the OS does better.
+
+### Carry-over: Phase 5 distribution hooks
+
+The launcher's seams are intentionally narrow so Phase 5 can wrap
+it without touching `serve_cmd`:
+
+* `av3 launch --check-updates` (future flag) will gate the spawn
+  on the auto-update feed result.
+* A `--quiet` flag will hide the launcher window after the browser
+  opens (Windows-specific via `pythonw.exe`).
+* The bundled installer's shortcut just runs `av3-launcher.cmd`;
+  changing the entry point breaks nothing.
+
+---
+
+## Phase 4 retrospective (six sub-phases, 2026-05-29)
+
+The vertical slice strategy worked: each sub-phase added one
+demonstrable user-facing change with its own decision rationale.
+Carrying load-bearing decisions through as KB doc sections meant the
+next sub-phase didn't have to re-derive context.
+
+**Sub-phase landings:**
+
+| # | Title | Tests added | Commit |
+|---|---|---|---|
+| (1/M) | Web skeleton + worker service | 16 | `13da1ab` |
+| (2/M) | Dashboard UI + SSE event stream | 15 | `976d414` |
+| (3/M) | F6 hotkey + idle-detect + ControlState | 36 | `b331315` |
+| (4/M) | Login-on-demand + assisted submit | 28 | `6f3fd38` |
+| (5/M) | Onboarding wizard | 28 | `2602172` |
+| (6/M) | One-click launcher | 6 | this commit |
+
+**98 new tests across Phase 4** (`397 → 495` v3 suite total). The
+6-test (6/M) is smallest because the launcher is a thin orchestrator
+over already-tested code; the underlying scheduler + watchers were
+covered in (1/M)–(3/M).
+
+**Major architectural decisions worth re-reading before Phase 5:**
+
+1. **`SchedulerService` factory** (1/M) — async factory + teardown
+   closes lifecycle around BrowserSession cleanly. Phase 5
+   observability adds a relay client; the factory pattern absorbs
+   it without re-shaping.
+2. **`ControlState` OR-union** (3/M) — three pause sources behind
+   one lock. Phase 5's auto-update check might add a fourth
+   ("updating") source; the union absorbs it.
+3. **HeadedBrowserLauncher with bot/fallback modes** (4/M) — bound
+   to BrowserSession's persistent profile when available. Phase 5's
+   distribution tweaks DON'T need to change this — installed
+   wheels reach the same `new_page` callable.
+4. **Onboarding state = file derivation** (5/M) — no separate
+   `wizard_state` table. Phase 5 doesn't need a migration because
+   there's nothing to migrate.
+5. **Launcher = child process + port probe + browser open** (6/M)
+   — leaves uvicorn's lifespan unchanged, supports Ctrl-C cleanly.
+
+**Carry-overs into Phase 5:**
+
+* TargetingConfig is captured but inert (Phase 2 consumes it).
+* LLM résumé-extract → v3.1 (needs its own eval gate first).
+* NL-intent targeting → v3.1 (UI nicety over existing config).
+* Live config reload → not planned (restart UX is good enough;
+  hot-reload would re-spawn the Win32 watcher thread, not worth it).
+* Auto-update feed integration → wraps `launch_cmd` (seam exists).
+* Headless / runner-box service integration → wraps `av3 launch
+  --no-browser` (no code change needed).
+* `assisted/cancel → SKIPPED` shortcut from the dashboard — leave
+  the job in REVIEW; add a separate "Skip job" action in Phase 5
+  analytics if needed.
+* macOS / Linux idle-detect backends → v3.1 (Win32 covers the
+  primary user base; soft-fail is the spec posture for the rest).

@@ -1059,6 +1059,133 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
         conn.close()
 
 
+@cli.command("launch")
+@click.option("--host", type=str, default=None,
+              help="Bind address (default settings.web.host, typically 127.0.0.1).")
+@click.option("--port", type=int, default=None,
+              help="Listen port (default settings.web.port, typically 8765).")
+@click.option("--browser/--no-browser", default=True,
+              help="Open the default browser to the dashboard once the server "
+                   "is reachable. --no-browser is useful when launching on a "
+                   "headless runner box.")
+@click.option("--probe-timeout-s", type=float, default=15.0,
+              help="How long to wait for the server to start accepting "
+                   "connections before opening the browser. The probe gives "
+                   "up after this and opens the URL anyway -- the user sees "
+                   "an error in the tab if the server failed to boot.")
+def launch_cmd(host: str | None, port: int | None,
+               browser: bool, probe_timeout_s: float) -> None:
+    """One-click launcher: starts av3 serve in a child process, waits for the
+    HTTP port to accept connections, then opens the default browser to the
+    dashboard (spec section 11a "one-click launcher starts the worker+server
+    and opens the dashboard tab").
+
+    This is the spec's non-technical-user entry point — what the bundled
+    installer's shortcut runs. Power users keep running ``av3 serve``
+    directly; this command exists so the runner box's autostart and the
+    Windows ``av3-launcher.cmd`` shortcut both reduce to a single
+    ``av3 launch`` call.
+
+    The server process inherits this terminal's stdio so its logs stream
+    here; Ctrl-C terminates both processes cleanly via the child's signal
+    handler. On Windows the .cmd wrapper hides this window for the
+    non-technical UX; on macOS/Linux the user sees the same logs as they
+    would from ``av3 serve``.
+    """
+    import socket
+    import subprocess
+    import sys
+    import time
+    import webbrowser
+
+    settings = load_settings()
+    effective_host = host if host is not None else settings.web.host
+    effective_port = port if port is not None else settings.web.port
+
+    # The dashboard URL: localhost is the only safe target even when bound
+    # to 0.0.0.0 — opening the LAN-facing host would force the user's
+    # browser through their gateway, which fails on the local network for
+    # most home setups.
+    probe_host = "127.0.0.1" if effective_host in ("0.0.0.0", "::") else effective_host
+    dashboard_url = f"http://{probe_host}:{effective_port}/"
+
+    # Spawn ``av3 serve`` as a child process so this launcher can do the
+    # port-probe + browser-open work while the server is still starting.
+    # Pass through the host/port flags so the child agrees with the URL we
+    # eventually open. We invoke through ``sys.executable -m av3.cli.main``
+    # rather than the installed ``av3`` script so the launcher works even
+    # in a fresh checkout where ``pip install -e .`` hasn't run yet — the
+    # console script may be missing, but the module path is always
+    # importable from the repo root.
+    child_args = [
+        sys.executable, "-m", "av3.cli.main", "serve",
+        "--host", str(effective_host),
+        "--port", str(effective_port),
+    ]
+    click.echo(f"Launching av3 server at {dashboard_url} ...")
+
+    # On Windows we don't want a separate console window for the child —
+    # the launcher's window already holds stdio. On POSIX inherit normally.
+    creationflags = 0
+    if sys.platform == "win32":
+        # 0x00000008 = DETACHED_PROCESS would orphan stdio; we'd rather
+        # the child stay attached so logs stream and Ctrl-C propagates.
+        # Just inherit the parent's console.
+        creationflags = 0
+
+    try:
+        child = subprocess.Popen(child_args, creationflags=creationflags)
+    except FileNotFoundError:
+        click.echo(
+            "! could not find a Python interpreter to launch av3 serve",
+            err=True,
+        )
+        sys.exit(1)
+
+    if browser:
+        _wait_for_port(probe_host, effective_port, timeout_s=probe_timeout_s)
+        try:
+            webbrowser.open(dashboard_url)
+        except Exception as exc:  # noqa: BLE001 — never fail launch on browser issues
+            click.echo(f"! could not open browser: {exc} (visit {dashboard_url} manually)",
+                       err=True)
+    else:
+        click.echo(f"--no-browser: leaving the dashboard at {dashboard_url}")
+
+    # Wait on the child so Ctrl-C in this terminal cleanly stops the server.
+    try:
+        rc = child.wait()
+    except KeyboardInterrupt:
+        # Forward the signal — the child's uvicorn handler will tear down
+        # the lifespan (scheduler + watchers) cleanly.
+        try:
+            child.terminate()
+        except Exception:
+            pass
+        rc = child.wait()
+    sys.exit(rc)
+
+
+def _wait_for_port(host: str, port: int, *, timeout_s: float) -> bool:
+    """Poll-connect until the server accepts connections or we hit timeout.
+
+    Returns True iff the port opened. We never raise — a failed probe
+    just means we open the browser early and the user sees an error in
+    the tab (better than the launcher hanging silently on a stuck child).
+    """
+    import socket
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                return True
+        except (OSError, ConnectionRefusedError):
+            time.sleep(0.25)
+    return False
+
+
 @cli.command("backup")
 def backup_cmd() -> None:
     """Snapshot app.db + events.db; rotate older snapshots (spec section 4).

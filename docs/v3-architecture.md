@@ -620,9 +620,16 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
 - **Phase 3 — Pipeline hardening.** Embedding pre-filter; full staged-worker queue; two-tier answer resolver;
   session-expiry graceful degradation; fail-fast→REVIEW; scoring eval harness; mocked-source CI + live smoke
   tests; retention + backups.
-- **Phase 4 — Web UI + worker service.** Async worker service; clean/functional dashboard (live pipeline,
-  review queue + login-needed badges, application history + outcomes); F6 control-handoff + idle-detection;
-  guided-but-skippable onboarding (incl. fact-bank review); one-click launcher. *(Branded polish → v3.1.)*
+- **Phase 4 — Web UI + worker service. ✅ DONE (2026-05-29, six sub-phases).**
+  Async :class:`SchedulerService` wrapping the staged-worker scheduler in a FastAPI lifespan + Alpine.js
+  dashboard (live pipeline, review queue + login-needed badges, application history + outcomes) + SSE
+  event feed + thread-safe :class:`ControlState` union (manual / F6 hotkey / idle-detect sources) +
+  headed-browser launcher for login-on-demand + assisted-submit flow + seven-step
+  guided-but-skippable onboarding wizard + one-click launcher (`av3 launch` +
+  `scripts/av3-launcher.{cmd,sh}` wrappers). 98 new tests across the six sub-phases
+  (full v3 suite 495 green, 11 deselected by design). Live-config reload + LLM résumé-extract +
+  NL-intent targeting + branded polish → v3.1. See `research/web-ui-and-service.md` for the
+  per-sub-phase decision rationale.
 - **Phase 5 — Observability & distribution (KEPT pain points).** Scrubber; owner-hosted relay + shared Turso
   opt-in mirror; `cli errors|stats|telemetry|export-diagnostics`; doctor suite; bundled installer +
   **auto-update** feed; fresh CLAUDE.md for v3.
