@@ -870,6 +870,12 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
     scheduler_ready = fact_bank_path.exists() and resume_path.exists()
 
     service: SchedulerService | None = None
+    # Holder for the BrowserSession the scheduler factory starts. Defined at
+    # function scope so the (4/M) headed launcher's ``new_page`` closure can
+    # reach it from outside the scheduler-ready branch. Stays ``None`` when
+    # no scheduler is constructed (``--no-scheduler`` or missing
+    # prerequisites) — the launcher then falls back to the OS default browser.
+    _session_holder: dict[str, BrowserSession | None] = {"session": None}
 
     if no_scheduler:
         click.echo("! --no-scheduler: read-only diagnostics mode "
@@ -932,8 +938,9 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
         # The BrowserSession is started lazily inside the factory so the
         # uvicorn event loop owns its lifecycle. The factory runs inside
         # SchedulerService.start() (already async); the teardown closure
-        # mirror-runs inside SchedulerService.stop().
-        _session_holder: dict[str, BrowserSession | None] = {"session": None}
+        # mirror-runs inside SchedulerService.stop(). ``_session_holder`` is
+        # defined at function scope above so the (4/M) headed launcher can
+        # reach the session from outside this branch.
 
         async def _factory(pause_predicate):
             session = BrowserSession(settings.browser_profile_dir)
@@ -1000,10 +1007,28 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
                 poll_interval_s=settings.web.idle_poll_s,
             ))
 
+    # (4/M) — headed launcher used by login-on-demand + assisted submit
+    # endpoints. Bind it to the BrowserSession's ``new_page`` so URLs open
+    # in the bot's persistent Chrome profile (cookies land in the right
+    # jar for the next apply cycle). The session lives inside the factory's
+    # holder so we close over the holder, not the not-yet-built session.
+    from av3.web.headed import HeadedBrowserLauncher
+
+    async def _launcher_new_page():
+        sess = _session_holder.get("session") if service is not None else None
+        if sess is None:
+            raise RuntimeError("BrowserSession not started")
+        return await sess.new_page()
+
+    launcher = HeadedBrowserLauncher(
+        new_page=_launcher_new_page if service is not None else None,
+    )
+
     app = create_app(
         state=web_state,
         service=service,
         watchers=watchers or None,
+        launcher=launcher,
     )
 
     hotkey_label = (

@@ -1,22 +1,33 @@
 """FastAPI routers — JSON API + dashboard HTML pages.
 
-Surface as of Phase 4 (3/M):
+Surface as of Phase 4 (4/M):
 
-  * ``/api/health``           — liveness probe (no DB hit; cheap)
-  * ``/api/status``           — scheduler state + job counts + last cycle
-                                summary + active pause reasons
-  * ``/api/sources``          — per-source health (the (4/M) login-needed badge feed)
-  * ``/api/queue``            — review + queued_apply + applying lists
-  * ``/api/history``          — recent applications + outcomes joined with jobs
-  * ``/api/jobs/<id>``        — per-job detail (job + score + applications)
-  * ``/api/events``           — SSE stream of new events.db rows (live activity)
-  * ``/api/control/pause``    — POST: pause via ``manual`` source (3/M)
-  * ``/api/control/resume``   — POST: clear ``manual`` pause (3/M)
-  * ``/``                     — dashboard (3 panels + recent activity)
-  * ``/jobs/<id>``            — per-job detail page
+  * ``/api/health``                       — liveness probe (no DB hit; cheap)
+  * ``/api/status``                       — scheduler state + job counts + last
+                                            cycle summary + active pause reasons
+  * ``/api/sources``                      — per-source health (the login-needed
+                                            badge feed; now carries ``login_url``)
+  * ``/api/sources/<source>/login``       — POST: open the source's login URL
+                                            in the bot's headed browser (4/M)
+  * ``/api/sources/<source>/healthy``     — POST: clear AUTH_REQUIRED (4/M)
+  * ``/api/queue``                        — review + queued_apply + applying lists
+  * ``/api/history``                      — recent applications + outcomes
+                                            joined with jobs
+  * ``/api/jobs/<id>``                    — per-job detail (job + score + apps)
+  * ``/api/jobs/<id>/assisted/open``      — POST: open the apply URL for
+                                            an ASSISTED_PENDING attempt (4/M)
+  * ``/api/jobs/<id>/assisted/confirm``   — POST: human-confirmed submit
+                                            walks REVIEW→APPLIED (4/M)
+  * ``/api/jobs/<id>/assisted/cancel``    — POST: human-cancelled submit
+                                            marks attempt FAILED (4/M)
+  * ``/api/events``                       — SSE stream of new events.db rows
+  * ``/api/control/pause``                — POST: pause via ``manual`` (3/M)
+  * ``/api/control/resume``               — POST: clear ``manual`` pause (3/M)
+  * ``/``                                 — dashboard (3 panels + activity)
+  * ``/jobs/<id>``                        — per-job detail page
 
-(4/M) adds login-on-demand; (5/M) adds the onboarding flow. Each lands
-in its own router section to keep diffs reviewable.
+(5/M) adds the onboarding flow. Each lands in its own router section to keep
+diffs reviewable.
 """
 
 from __future__ import annotations
@@ -29,8 +40,13 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 from av3 import __version__
 from av3.db.repositories import ApplicationRepo, JobRepo, ScoreRepo
-from av3.domain.state import JobState
-from av3.sources.health import snapshot as health_snapshot
+from av3.domain.models import utcnow_iso
+from av3.domain.state import ApplicationStatus, JobState
+from av3.sources.health import (
+    is_paused as source_is_paused,
+    mark_healthy,
+    snapshot as health_snapshot,
+)
 from av3.web.control import SOURCE_MANUAL
 from av3.web.views import (
     PIPELINE_STATES,
@@ -59,6 +75,14 @@ def _get_service(request: Request):
     """Returns the SchedulerService or ``None`` (the app supports both modes —
     headless diagnostics OR full live service)."""
     return getattr(request.app.state, "scheduler_service", None)
+
+
+def _get_launcher(request: Request):
+    """Returns the :class:`HeadedBrowserLauncher`. The app factory always sets
+    one — a no-bot-browser fallback in tests / ``--no-scheduler``, a
+    BrowserSession-bound launcher in production — so this never returns
+    ``None``."""
+    return request.app.state.headed_launcher
 
 
 # ---------------------------------------------------------------- /api/health
@@ -380,6 +404,259 @@ async def control_resume(request: Request) -> dict:
         )
     snap = service.resume(SOURCE_MANUAL)
     return snap.to_dict()
+
+
+# ---------------------------------------------------------------- /api/sources/.../login (4/M)
+
+# Phase 4 (4/M) — login-on-demand + assisted submit (spec §6a, §8b).
+#
+# Two surfaces, one launcher:
+#   * /api/sources/{source}/login  — opens the captured login_url in the bot's
+#     persistent Chrome profile so the user's session cookies land in the
+#     same jar the apply worker uses. Does NOT auto-clear the AUTH_REQUIRED
+#     flag — the user clicks "Mark logged in" after their sign-in completes.
+#   * /api/sources/{source}/healthy — clears AUTH_REQUIRED for a source.
+#     Separate from /login because the user might log in via a side channel
+#     (their own browser, a password manager popup) and just want to
+#     un-pause the source without re-launching the URL.
+#
+#   * /api/jobs/{id}/assisted/open — opens the apply URL in the bot's
+#     profile so the user can review the pre-fill and click submit.
+#   * /api/jobs/{id}/assisted/confirm — marks the latest ASSISTED_PENDING
+#     attempt as APPLIED + walks the Job state machine REVIEW → QUEUED_APPLY
+#     → APPLYING → APPLIED. The chained transition keeps the state-machine
+#     audit trail intact (spec §5 "APPLIED requires positive confirmation").
+#   * /api/jobs/{id}/assisted/cancel — marks the latest ASSISTED_PENDING
+#     attempt as FAILED. The Job stays in REVIEW; the user can re-try or
+#     skip from there.
+
+
+@api_router.post("/sources/{source}/login")
+async def source_login(request: Request, source: str) -> dict:
+    """Open the captured login URL for ``source`` in the bot's headed
+    browser. Does NOT clear the AUTH_REQUIRED flag — the user clicks
+    'Mark logged in' once their sign-in is done so we can't race a 'cookies
+    landed' assumption with the real auth completion.
+
+    Errors:
+      * 404 — source not in the health registry (UI hides the button in
+        this state but a stale request might still arrive).
+      * 409 — source isn't in AUTH_REQUIRED state (HEALTHY → there's
+        nothing to log into; refusing the launch keeps the UI honest).
+      * 422 — source is paused but no ``login_url`` was captured (e.g. the
+        wall was flagged by a non-URL signal); the UI shows the manual
+        'Mark logged in' button without an auto-launch in this state.
+    """
+    snap = health_snapshot()
+    record = snap.get(source)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"source {source!r} not in the health registry",
+        )
+    if not source_is_paused(source):
+        raise HTTPException(
+            status_code=409,
+            detail=f"source {source!r} is not in AUTH_REQUIRED state",
+        )
+    if not record.login_url:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"no login URL captured for {source!r}; sign in via your own "
+                "browser then POST /api/sources/" + source + "/healthy"
+            ),
+        )
+    launcher = _get_launcher(request)
+    result = await launcher.open(record.login_url)
+    return {
+        "source": source,
+        "launch": result.to_dict(),
+    }
+
+
+@api_router.post("/sources/{source}/healthy")
+async def source_mark_healthy(request: Request, source: str) -> dict:
+    """Mark ``source`` HEALTHY — clears the AUTH_REQUIRED flag so the apply
+    worker resumes processing jobs from this source on its next cycle.
+
+    Idempotent: re-marking an already-healthy source is a no-op (no event
+    fired) so the dashboard's button stays harmless under double-click."""
+    if not source:
+        raise HTTPException(status_code=400, detail="source is required")
+    mark_healthy(source)
+    return {
+        "source": source,
+        "state": "HEALTHY",
+        "ok": True,
+    }
+
+
+# ---------------------------------------------------------------- /api/jobs/.../assisted (4/M)
+
+
+@api_router.post("/jobs/{job_id}/assisted/open")
+async def assisted_open(request: Request, job_id: str) -> dict:
+    """Open the apply URL for an ASSISTED_PENDING job in the bot's headed
+    browser so the user can review the pre-fill and click submit.
+
+    Errors:
+      * 404 — job doesn't exist.
+      * 409 — the job has no ASSISTED_PENDING application waiting (e.g.
+        already submitted, already cancelled, or never reached the apply
+        step). The UI hides the button in those states.
+      * 422 — the job has an ASSISTED_PENDING application but no URL on
+        the Job row to open (defensive — the apply worker fills this in
+        before flipping to ASSISTED_PENDING, so this is a "shouldn't
+        happen" path that still avoids a None.goto()).
+    """
+    web_state = _get_state(request)
+    with web_state.app_conn() as conn:
+        job = JobRepo(conn).get(job_id)
+        if job is None:
+            raise HTTPException(
+                status_code=404, detail=f"job {job_id} not found"
+            )
+        apps = ApplicationRepo(conn).list_by_job(job_id)
+    pending = _latest_assisted_pending(apps)
+    if pending is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"job {job_id} has no ASSISTED_PENDING application waiting"
+            ),
+        )
+    if not job.url:
+        raise HTTPException(
+            status_code=422,
+            detail=f"job {job_id} has no URL to open",
+        )
+    launcher = _get_launcher(request)
+    result = await launcher.open(job.url)
+    return {
+        "job_id": job_id,
+        "application_id": pending.id,
+        "launch": result.to_dict(),
+    }
+
+
+@api_router.post("/jobs/{job_id}/assisted/confirm")
+async def assisted_confirm(request: Request, job_id: str) -> dict:
+    """Mark the latest ASSISTED_PENDING attempt as APPLIED — used after the
+    user has reviewed the pre-fill and clicked submit themselves.
+
+    Walks the Job state machine REVIEW → QUEUED_APPLY → APPLYING → APPLIED
+    in a single DB transaction so the audit trail looks like a normal apply
+    flow (spec §5 requires APPLIED to come after APPLYING). The Application
+    row gets its ``status`` flipped to ``APPLIED`` and ``submitted_at``
+    stamped with the confirmation moment.
+
+    Errors:
+      * 404 — job doesn't exist.
+      * 409 — no ASSISTED_PENDING application waiting OR the job isn't in
+        REVIEW (defensive — the apply worker only puts ASSISTED_PENDING
+        attempts into REVIEW, so this catches a stale UI click).
+    """
+    web_state = _get_state(request)
+    with web_state.app_conn() as conn:
+        job_repo = JobRepo(conn)
+        app_repo = ApplicationRepo(conn)
+        job = job_repo.get(job_id)
+        if job is None:
+            raise HTTPException(
+                status_code=404, detail=f"job {job_id} not found"
+            )
+        if job.state is not JobState.REVIEW:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"job {job_id} is in state {job.state.value}; assisted "
+                    "confirm only valid from REVIEW"
+                ),
+            )
+        apps = app_repo.list_by_job(job_id)
+        pending = _latest_assisted_pending(apps)
+        if pending is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"job {job_id} has no ASSISTED_PENDING application waiting"
+                ),
+            )
+        # Walk the state machine the same way an auto-apply would: REVIEW →
+        # QUEUED_APPLY → APPLYING → APPLIED. Each edge is validated by the
+        # transitions table, so an unexpected state mid-walk raises
+        # InvalidTransition (caught by FastAPI as a 500 — visible in the
+        # event spine via @stage).
+        submitted_at = utcnow_iso()
+        job_repo.set_state(job_id, JobState.QUEUED_APPLY)
+        job_repo.set_state(job_id, JobState.APPLYING)
+        job_repo.set_state(job_id, JobState.APPLIED)
+        app_repo.set_status(
+            pending.id, ApplicationStatus.APPLIED, submitted_at=submitted_at
+        )
+    return {
+        "job_id": job_id,
+        "application_id": pending.id,
+        "job_state": JobState.APPLIED.value,
+        "application_status": ApplicationStatus.APPLIED.value,
+        "submitted_at": submitted_at,
+    }
+
+
+@api_router.post("/jobs/{job_id}/assisted/cancel")
+async def assisted_cancel(request: Request, job_id: str) -> dict:
+    """Mark the latest ASSISTED_PENDING attempt as FAILED — used when the
+    user reviewed the pre-fill and decided not to submit (wrong job, bad
+    pre-fill, form changed, etc.).
+
+    The Job stays in REVIEW so the user can re-try or move it to SKIPPED
+    via a separate action. We DON'T transition the job — the Application
+    row carries the cancelled state and the dashboard renders that
+    distinctly from a fresh REVIEW.
+
+    Errors:
+      * 404 — job doesn't exist.
+      * 409 — no ASSISTED_PENDING application waiting.
+    """
+    web_state = _get_state(request)
+    with web_state.app_conn() as conn:
+        if JobRepo(conn).get(job_id) is None:
+            raise HTTPException(
+                status_code=404, detail=f"job {job_id} not found"
+            )
+        app_repo = ApplicationRepo(conn)
+        apps = app_repo.list_by_job(job_id)
+        pending = _latest_assisted_pending(apps)
+        if pending is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"job {job_id} has no ASSISTED_PENDING application waiting"
+                ),
+            )
+        app_repo.set_status(pending.id, ApplicationStatus.FAILED)
+    return {
+        "job_id": job_id,
+        "application_id": pending.id,
+        "application_status": ApplicationStatus.FAILED.value,
+    }
+
+
+def _latest_assisted_pending(apps):
+    """Return the most-recent ASSISTED_PENDING application from a job's
+    application history, or ``None`` if there isn't one.
+
+    ``ApplicationRepo.list_by_job`` orders by ``submitted_at`` ASC, which
+    sorts empty timestamps before real ones — an ASSISTED_PENDING attempt
+    (no submitted_at yet) sits at the FRONT of the list, but a later
+    confirmed/cancelled attempt would be at the BACK with a real
+    timestamp. We want the latest ASSISTED_PENDING; walk from the end.
+    """
+    for app in reversed(apps):
+        if app.status is ApplicationStatus.ASSISTED_PENDING:
+            return app
+    return None
 
 
 async def _read_optional_reason(request: Request) -> str:

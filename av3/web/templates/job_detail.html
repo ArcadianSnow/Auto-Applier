@@ -64,6 +64,36 @@
           </p>
         </section>
 
+        <section class="card assisted-panel" x-show="latestAssistedPending()">
+          <h2>Assisted submit pending</h2>
+          <p>
+            The bot pre-filled this application but stopped short of
+            submitting. Open the form in the bot's browser, review the
+            answers, and click submit yourself — then come back here to
+            confirm.
+          </p>
+          <p class="action-row">
+            <button class="primary-btn"
+                    :disabled="assistedBusy"
+                    @click="assistedOpen()">
+              Open the application
+            </button>
+            <button class="primary-btn"
+                    :disabled="assistedBusy"
+                    @click="assistedConfirm()"
+                    title="Mark APPLIED after you clicked submit on the form">
+              I submitted it
+            </button>
+            <button class="secondary-btn"
+                    :disabled="assistedBusy"
+                    @click="assistedCancel()"
+                    title="Mark the attempt cancelled — the job stays in REVIEW">
+              Skip / didn't submit
+            </button>
+          </p>
+          <p class="muted small" x-show="assistedNote" x-text="assistedNote"></p>
+        </section>
+
         <section class="card">
           <h2>Applications
             <span class="muted small">(<span x-text="data.applications.length"></span>)</span>

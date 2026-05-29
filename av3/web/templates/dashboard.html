@@ -61,6 +61,21 @@
             <span class="source-name" x-text="s.source"></span>
             <span class="source-state" x-text="s.state"></span>
             <span class="source-reason muted" x-show="s.reason" x-text="s.reason"></span>
+            <span class="source-actions" x-show="s.paused">
+              <button class="link-btn"
+                      x-show="s.login_url"
+                      :disabled="sourceBusy[s.source]"
+                      @click="sourceLogin(s.source)"
+                      title="Open the login page in the bot's persistent Chrome profile">
+                Log in
+              </button>
+              <button class="link-btn"
+                      :disabled="sourceBusy[s.source]"
+                      @click="sourceMarkHealthy(s.source)"
+                      title="Mark this source healthy after you've signed back in">
+                Mark logged in
+              </button>
+            </span>
           </li>
         </template>
       </ul>

@@ -40,15 +40,24 @@ class WebState:
     def app_conn(self) -> Iterator[sqlite3.Connection]:
         """Open a short-lived read-write connection to app.db.
 
-        Read-write because the (4/M) "resume source" endpoint will mark
-        sources healthy via the same path; the (1/M) handlers only read.
-        WAL means readers never block writers, so this is safe regardless of
-        the scheduler workers' own connections.
+        Read-write because the (4/M) assisted-submit endpoints walk the Job
+        state machine + flip Application status; (1/M)–(3/M) handlers only
+        read. WAL means readers never block writers, so this is safe
+        regardless of the scheduler workers' own connections.
+
+        ``isolation_level=None`` matches :func:`av3.db.engine.connect`'s
+        autocommit posture — each repo call is its own statement-level
+        transaction. That's the right granularity for the dashboard:
+        per-request batches are tiny (≤4 statements for confirm-assisted)
+        and a half-written batch is recoverable by the next click. The
+        per-request connection close happens regardless of exception path.
 
         Always close — caller uses ``with state.app_conn() as conn:`` so the
         connection is released back to the OS on every request.
         """
-        conn = sqlite3.connect(str(self.app_db_path), timeout=5.0)
+        conn = sqlite3.connect(
+            str(self.app_db_path), timeout=5.0, isolation_level=None,
+        )
         conn.row_factory = sqlite3.Row
         # WAL is per-file (set by the scheduler's init); we don't re-pragma
         # it here because that touches the file. busy_timeout matters because

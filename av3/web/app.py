@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from av3 import __version__
+from av3.web.headed import HeadedBrowserLauncher
 from av3.web.routes import api_router, pages_router
 from av3.web.service import SchedulerService
 from av3.web.state import WebState
@@ -54,6 +55,7 @@ def create_app(
     state: WebState,
     service: SchedulerService | None = None,
     watchers: Iterable[ControlWatcher] | None = None,
+    launcher: HeadedBrowserLauncher | None = None,
 ) -> FastAPI:
     """Build the FastAPI app.
 
@@ -73,6 +75,12 @@ def create_app(
         service in lifespan-shutdown so a watcher can't fire a pause/resume
         on a half-torn-down service. Each watcher's ``start()`` returns a
         bool that's logged but never raises — soft-fail per spec §7a.
+    launcher
+        Headed-browser launcher used by the (4/M) login-on-demand + assisted
+        submit endpoints. ``None`` means the endpoints fall back to the OS
+        default browser via ``webbrowser.open`` — fine for ``--no-scheduler``
+        diagnostics; the production CLI wires the BrowserSession's
+        ``new_page`` callable so URLs open in the bot's persistent profile.
     """
 
     # StaticFiles raises if the directory is missing — create lazily so
@@ -129,6 +137,11 @@ def create_app(
     app.state.web_state = state
     app.state.scheduler_service = service
     app.state.templates = templates
+    # (4/M) — login-on-demand + assisted submit endpoints reach for this.
+    # Default to a launcher with no bot-browser binding; the production CLI
+    # rebuilds the launcher with ``new_page=session.new_page`` once the
+    # BrowserSession is up.
+    app.state.headed_launcher = launcher or HeadedBrowserLauncher()
 
     app.include_router(api_router, prefix="/api")
     app.include_router(pages_router)

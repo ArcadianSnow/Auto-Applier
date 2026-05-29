@@ -58,11 +58,23 @@ class SourceHealthState(str, Enum):
 class SourceHealthRecord:
     """One source's current state + the reason it's in that state. The reason
     is what the dashboard shows next to the "login needed" badge so the user
-    knows what to do."""
+    knows what to do.
+
+    ``login_url`` is the URL the user should navigate to in order to clear the
+    AUTH_REQUIRED state — populated by :func:`mark_auth_required` from
+    whichever signal first noticed the wall (typically the page URL where the
+    apply driver landed). The (Phase 4 (4/M)) dashboard's "Log in" button
+    opens this URL in the bot's persistent Chrome profile so the user's
+    session cookies land in the same profile the apply worker uses on its
+    next cycle. Empty when no URL was captured (e.g. a synthetic
+    ``mark_auth_required`` from a test); the UI falls back to a manual
+    "Mark logged in" button without auto-launching anything.
+    """
 
     source: str
     state: SourceHealthState
     reason: str = ""
+    login_url: str = ""
 
 
 # Process-local state. Guarded by a lock so the (Phase 3 (5/M)) scheduler's
@@ -72,12 +84,24 @@ _lock = threading.Lock()
 _records: dict[str, SourceHealthRecord] = {}
 
 
-def mark_auth_required(source: str, *, reason: str = "session expired") -> None:
+def mark_auth_required(
+    source: str,
+    *,
+    reason: str = "session expired",
+    login_url: str = "",
+) -> None:
     """Pause this source until manually marked healthy again.
 
     Emits a ``session_expiry`` event on transition into AUTH_REQUIRED. Repeated
     calls with the same source are no-ops on telemetry (so a polling check doesn't
     flood the spine), but DO refresh the ``reason`` (the latest cause wins).
+
+    ``login_url`` is the URL the (Phase 4 (4/M)) dashboard's "Log in" button
+    opens for the user. The apply driver passes the URL where the wall fired
+    so the dashboard can drop the user back at exactly the page they need to
+    sign into. Empty means the UI shows a manual "Mark logged in" button
+    without an auto-launch (e.g. when the wall was detected via a non-URL
+    signal).
     """
     if not source:
         return
@@ -88,6 +112,7 @@ def mark_auth_required(source: str, *, reason: str = "session expired") -> None:
             source=source,
             state=SourceHealthState.AUTH_REQUIRED,
             reason=reason,
+            login_url=login_url,
         )
     if was_healthy:
         _emit("auth_required", source=source, reason=reason)
@@ -140,8 +165,10 @@ def snapshot() -> dict[str, SourceHealthRecord]:
     with _lock:
         # Shallow copy of the dict — records are frozen-ish dataclasses we own,
         # so callers can't mutate registry state by tweaking returned objects.
-        return {s: SourceHealthRecord(r.source, r.state, r.reason)
-                for s, r in _records.items()}
+        return {
+            s: SourceHealthRecord(r.source, r.state, r.reason, r.login_url)
+            for s, r in _records.items()
+        }
 
 
 def reset_health() -> None:

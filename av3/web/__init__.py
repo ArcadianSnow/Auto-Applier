@@ -22,6 +22,7 @@ def create_app(
     state: WebState,
     service: SchedulerService | None = None,
     watchers=None,
+    launcher=None,
 ):
     """Thin re-export so callers don't import the module path directly. The
     real factory lives in :mod:`av3.web.app` to keep this ``__init__`` light
@@ -30,7 +31,16 @@ def create_app(
     ``watchers`` (3/M) are control-handoff daemons (F6 + idle-detect) the
     lifespan manages alongside the scheduler service. ``None`` is the test
     default — the dashboard pause button still works without them.
+
+    ``launcher`` (4/M) is the :class:`HeadedBrowserLauncher` used by
+    login-on-demand + assisted submit endpoints. ``None`` builds a launcher
+    with no bot-browser binding (URLs open in the OS default browser).
     """
     from av3.web.app import create_app as _build
 
-    return _build(state=state, service=service, watchers=watchers)
+    return _build(
+        state=state,
+        service=service,
+        watchers=watchers,
+        launcher=launcher,
+    )

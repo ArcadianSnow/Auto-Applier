@@ -235,6 +235,14 @@ async def check_auth_wall(page, source: str) -> str:
     html = await page.content()
     result = detect_login_wall(url, html)
     if result.present:
-        mark_auth_required(source, reason=f"login wall detected at {url}")
+        # Phase 4 (4/M): carry the URL through so the dashboard's "Log in"
+        # button can drop the user back at exactly the page they need to
+        # sign into. Empty when the navigation lost the URL — UI degrades
+        # to a manual "Mark logged in" button.
+        mark_auth_required(
+            source,
+            reason=f"login wall detected at {url}",
+            login_url=url,
+        )
         return result.signal
     return ""

@@ -48,6 +48,7 @@ function dashboard() {
     events: [],
     connState: 'connecting',
     controlBusy: false,
+    sourceBusy: {},        // {sourceName: bool} — per-row spinner gate for (4/M)
     _pollTimer: null,
     _eventSource: null,
     _pollInFlight: false,
@@ -203,6 +204,68 @@ function dashboard() {
       }
     },
 
+    /**
+     * Phase 4 (4/M) — open the captured login URL for a source. POSTs
+     * to /api/sources/{source}/login; on success the URL fires in the
+     * bot's persistent Chrome profile (cookies land where the apply
+     * worker needs them).
+     */
+    async sourceLogin(name) {
+      if (this.sourceBusy[name]) return;
+      this.sourceBusy = { ...this.sourceBusy, [name]: true };
+      try {
+        const r = await fetch(`/api/sources/${encodeURIComponent(name)}/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          console.error('source login failed', r.status, err);
+          alert(`Login launch failed: ${err.detail || r.statusText}`);
+          return;
+        }
+        // Successful launch — the browser already opened the page; nothing
+        // more to do client-side until the user clicks 'Mark logged in'.
+      } catch (e) {
+        console.error('sourceLogin error', e);
+      } finally {
+        const next = { ...this.sourceBusy };
+        delete next[name];
+        this.sourceBusy = next;
+      }
+    },
+
+    /**
+     * Phase 4 (4/M) — clear a source's AUTH_REQUIRED flag. Used after the
+     * user has signed back in (either via /login above or their own
+     * browser). The next refreshAll() drops the source's badge.
+     */
+    async sourceMarkHealthy(name) {
+      if (this.sourceBusy[name]) return;
+      this.sourceBusy = { ...this.sourceBusy, [name]: true };
+      try {
+        const r = await fetch(`/api/sources/${encodeURIComponent(name)}/healthy`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        if (!r.ok) {
+          console.error('source mark-healthy failed', r.status);
+          return;
+        }
+        // Optimistic refresh so the badge clears immediately rather than
+        // waiting POLL_INTERVAL_MS for the next tick.
+        this.refreshAll();
+      } catch (e) {
+        console.error('sourceMarkHealthy error', e);
+      } finally {
+        const next = { ...this.sourceBusy };
+        delete next[name];
+        this.sourceBusy = next;
+      }
+    },
+
     ago,
   };
 }
@@ -213,6 +276,8 @@ function jobDetail(jobId) {
     loading: true,
     error: null,
     data: null,
+    assistedBusy: false,
+    assistedNote: '',
 
     async load() {
       this.loading = true;
@@ -228,6 +293,97 @@ function jobDetail(jobId) {
         this.error = String(e);
       } finally {
         this.loading = false;
+      }
+    },
+
+    /**
+     * Phase 4 (4/M) — the latest ASSISTED_PENDING application or null.
+     * Drives whether the assisted-submit card renders + which row the
+     * confirm/cancel buttons target.
+     */
+    latestAssistedPending() {
+      const apps = this.data?.applications || [];
+      for (let i = apps.length - 1; i >= 0; i--) {
+        if (apps[i].status === 'ASSISTED_PENDING') return apps[i];
+      }
+      return null;
+    },
+
+    async assistedOpen() {
+      if (this.assistedBusy) return;
+      this.assistedBusy = true;
+      this.assistedNote = '';
+      try {
+        const r = await fetch(`/api/jobs/${this.jobId}/assisted/open`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this.assistedNote = `Could not open: ${body.detail || r.statusText}`;
+          return;
+        }
+        const note = body?.launch?.note || '';
+        this.assistedNote = note
+          ? `Opened — ${note}`
+          : 'Opened in the bot browser.';
+      } catch (e) {
+        this.assistedNote = `Error: ${e}`;
+      } finally {
+        this.assistedBusy = false;
+      }
+    },
+
+    async assistedConfirm() {
+      if (this.assistedBusy) return;
+      if (!confirm('Mark this application as APPLIED? Only do this after '
+                 + 'you clicked submit on the form yourself.')) return;
+      this.assistedBusy = true;
+      this.assistedNote = '';
+      try {
+        const r = await fetch(`/api/jobs/${this.jobId}/assisted/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this.assistedNote = `Confirm failed: ${body.detail || r.statusText}`;
+          return;
+        }
+        this.assistedNote = 'Marked APPLIED. Reloading the job...';
+        await this.load();
+      } catch (e) {
+        this.assistedNote = `Error: ${e}`;
+      } finally {
+        this.assistedBusy = false;
+      }
+    },
+
+    async assistedCancel() {
+      if (this.assistedBusy) return;
+      if (!confirm('Mark this assisted attempt as cancelled? The job stays '
+                 + 'in REVIEW.')) return;
+      this.assistedBusy = true;
+      this.assistedNote = '';
+      try {
+        const r = await fetch(`/api/jobs/${this.jobId}/assisted/cancel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this.assistedNote = `Cancel failed: ${body.detail || r.statusText}`;
+          return;
+        }
+        this.assistedNote = 'Marked cancelled. Reloading the job...';
+        await this.load();
+      } catch (e) {
+        this.assistedNote = `Error: ${e}`;
+      } finally {
+        this.assistedBusy = false;
       }
     },
   };

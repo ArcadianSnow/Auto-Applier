@@ -37,11 +37,18 @@ def job_brief(job: Job) -> dict:
 
 def health_record(rec: SourceHealthRecord) -> dict:
     """Dashboard 'login needed' badge payload (spec §8b). The reason field is
-    what the UI shows next to the source name."""
+    what the UI shows next to the source name.
+
+    Phase 4 (4/M) adds ``login_url`` — populated by the apply driver when a
+    login wall fires (see :func:`av3.sources.browser.apply_base.check_auth_wall`).
+    Empty means the UI shows a manual "Mark logged in" button without an
+    auto-launch — useful for synthetic sources or test fixtures that flip
+    AUTH_REQUIRED without a real navigation."""
     return {
         "source": rec.source,
         "state": rec.state.value,
         "reason": rec.reason,
+        "login_url": rec.login_url,
         "paused": rec.state.value == "AUTH_REQUIRED",
     }
 

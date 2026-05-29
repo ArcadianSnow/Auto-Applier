@@ -203,6 +203,24 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .source-paused .source-state { background: var(--warn); color: white; }
 .source-healthy .source-state { background: var(--ok); color: white; }
 .source-reason { flex: 1; }
+.source-actions {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+.link-btn {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--fg);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.link-btn:hover { background: var(--bg, var(--bg-soft)); border-color: var(--accent); }
+.link-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.link-btn:disabled { opacity: 0.5; cursor: progress; }
 
 /* ---------------- two-column layout ---------------- */
 .two-col {
@@ -309,6 +327,41 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .events .event-error   .event-status { color: var(--err); }
 .events .event-skip    .event-status { color: var(--muted); }
 .events .event-start   .event-status { color: var(--accent); }
+
+/* ---------------- assisted submit (4/M) ---------------- */
+.assisted-panel { border-left: 4px solid var(--accent); }
+.assisted-panel p { color: var(--fg); }
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0.7rem 0 0.3rem;
+}
+.primary-btn, .secondary-btn {
+  font: inherit;
+  padding: 0.4rem 0.9rem;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+}
+.primary-btn {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.primary-btn:hover { filter: brightness(1.08); }
+.secondary-btn {
+  background: var(--bg-soft);
+  color: var(--fg);
+}
+.secondary-btn:hover { background: var(--bg); }
+.primary-btn:focus-visible,
+.secondary-btn:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.primary-btn:disabled, .secondary-btn:disabled {
+  opacity: 0.5; cursor: progress;
+}
 
 /* ---------------- job detail page ---------------- */
 .job-detail .score-total {

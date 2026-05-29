@@ -444,3 +444,198 @@ The watchers respect `settings.web.hotkey` / `idle_detect_enabled` /
 `idle_threshold_s` already; (5/M) wires the onboarding wizard to
 populate those into `user_config.json`. No code change needed in (3/M)
 — the seam exists, it's UI-only follow-through.
+
+---
+
+## Phase 4 (4/M) — login-on-demand + assisted submit landed
+
+A `HeadedBrowserLauncher` primitive + five new endpoints turn the
+`AUTH_REQUIRED` source badges and `ASSISTED_PENDING` application rows
+into actionable UX. The dashboard's source list grew per-row "Log in" +
+"Mark logged in" buttons; the per-job page grew an assisted-submit card
+that opens the apply form, confirms a human-submitted apply, or cancels
+the attempt. `tests_v3/test_web_login_assist.py` (+28 tests; full v3
+suite 461 green, 11 deselected by design). **Spec §6a + §8b + §11b
+Phase 4 bullet 2 ("review queue + login-needed badges, application
+history + outcomes") satisfied.**
+
+### New surface
+
+| Module / endpoint | Purpose |
+|---|---|
+| `av3/web/headed.py` | `HeadedBrowserLauncher.open(url)` — opens in the bot's persistent Chrome profile via injected `new_page`, falls back to `webbrowser.open` |
+| `POST /api/sources/<source>/login` | Launches the captured `login_url` for an `AUTH_REQUIRED` source |
+| `POST /api/sources/<source>/healthy` | Clears the AUTH_REQUIRED flag after the user signs back in |
+| `POST /api/jobs/<id>/assisted/open` | Opens the apply URL for an `ASSISTED_PENDING` attempt |
+| `POST /api/jobs/<id>/assisted/confirm` | Walks REVIEW → QUEUED_APPLY → APPLYING → APPLIED + marks the Application APPLIED |
+| `POST /api/jobs/<id>/assisted/cancel` | Marks the Application FAILED; Job stays in REVIEW |
+| `av3.sources.health.SourceHealthRecord.login_url` | New field — captured by `check_auth_wall()` from `page.url` when the wall fires |
+
+### Why open URLs through the bot's persistent profile (not the OS default)
+
+Login-on-demand exists because **the apply worker needs the user's
+cookies in the bot's persistent Chrome profile** — that's the whole
+point of `BrowserSession`'s `user_data_dir`. If we open the login URL
+in the OS default browser:
+
+* The user signs in fine — but to *their* browser's cookie jar.
+* The next apply cycle still hits AUTH_REQUIRED because the bot's
+  profile never saw the cookies.
+* The user re-paused source loops back into "log in" forever.
+
+By calling `BrowserSession.new_page()` from the launcher, the login
+page opens as a fresh tab in the SAME persistent context the apply
+worker uses — cookies land in the right jar on first sign-in.
+
+The fallback to `webbrowser.open` exists for `--no-scheduler`
+diagnostics + tests; the LaunchResult's `mode` field tells the UI
+which path fired so the user understands whether cookies will reach
+the bot.
+
+### Why `resume(manual)` doesn't auto-trigger login (and login doesn't auto-mark-healthy)
+
+The two flows are deliberately decoupled:
+
+* **`/sources/<s>/login` opens the URL but does NOT clear the
+  AUTH_REQUIRED flag.** The user might fail to sign in (wrong
+  password, MFA timeout, account locked); flipping HEALTHY on launch
+  would lie about the state until the next apply cycle re-detected
+  the wall.
+* **`/sources/<s>/healthy` is a separate confirm.** The user clicks
+  "Mark logged in" once their sign-in is actually complete. This is
+  the same pattern as assisted-submit-confirm: the human is the
+  positive-signal source per spec §5.
+
+The dashboard sequences these naturally — both buttons sit side-by-side
+on each paused source row; the user clicks Log in → signs in → clicks
+Mark logged in.
+
+### Why /assisted/confirm walks the full state machine
+
+The spec says **APPLIED requires positive confirmation set by the apply
+worker**. An assisted submit doesn't have an apply-worker confirmation —
+the human is the signal. We honor the spec's *audit shape* by walking
+the same state edges the auto path would: REVIEW → QUEUED_APPLY →
+APPLYING → APPLIED, in a single chained set_state inside one
+`with web_state.app_conn()` block.
+
+Two reasons not to add a `REVIEW → APPLIED` shortcut edge to the
+transitions table:
+
+1. **The transitions table is the contract.** Adding a shortcut for
+   one endpoint normalizes "shortcuts" — every state would eventually
+   gain one.
+2. **The event spine reads the edges.** `@stage` writes one event per
+   transition; the chained walk leaves a four-edge audit that mirrors
+   an auto-apply. Diff tools, retention queries, and the dashboard's
+   per-job history all stay uniform.
+
+### Why a separate `assisted/cancel` (not "skip" via REVIEW UI)
+
+When the user reviews a pre-fill and decides not to submit, the bot's
+Application row needs to come out of `ASSISTED_PENDING` — otherwise
+the dashboard keeps prompting "open the application" forever. The
+cancel endpoint marks the Application FAILED (so the per-job history
+shows the attempt + its cancellation) but **leaves the Job in
+REVIEW** — the user can re-try (the apply worker will pick it up on
+the next QUEUED_APPLY drain) or move it to SKIPPED via a separate
+action. Job-state and Application-status are independent: the cancel
+applies only to *this attempt*.
+
+### WebState.app_conn now autocommits
+
+The (1/M)–(3/M) handlers were read-only, so the per-request connection
+ran in Python's default isolation (implicit BEGIN, no explicit COMMIT)
+and writes would have been lost on close. (4/M) is the first sub-phase
+where the web layer writes to app.db (the chained set_state +
+set_status in assisted/confirm), so `WebState.app_conn` now uses
+`isolation_level=None` — same posture as
+`av3.db.engine.connect`. Statement-level autocommit is the right
+granularity here: per-request batches are tiny (≤4 statements), and a
+half-written batch is recoverable by the next click.
+
+### `login_url` on the health record + `check_auth_wall` plumbing
+
+`SourceHealthRecord.login_url` is the URL `apply_base.check_auth_wall`
+captured at the moment the wall fired (typically `page.url`). The
+dashboard's "Log in" button only renders when this is non-empty;
+otherwise the UI shows just "Mark logged in" (and the user signs in
+through whatever side channel they prefer). The field round-trips
+through `health_snapshot()` and is reset to empty when
+`mark_healthy()` re-creates the record — so a re-paused source picks
+up its NEW login URL on the next wall detection, not a stale one
+from a prior cycle.
+
+### Edge cases covered (see `tests_v3/test_web_login_assist.py`)
+
+| Concern | Test |
+|---|---|
+| Launcher with no URL returns unavailable | `test_no_url_returns_unavailable` |
+| Bot-browser path when new_page provided | `test_opens_in_bot_browser_when_new_page_provided` |
+| Fallback to default browser without session | `test_falls_back_to_default_browser_when_no_session` |
+| `new_page()` raise → fallback fires | `test_falls_back_when_new_page_raises` |
+| `page.goto()` raise → fallback fires | `test_falls_back_when_goto_raises` |
+| Fallback returning False reports unavailable | `test_fallback_returning_false_reports_unavailable` |
+| Login opens captured URL | `test_login_opens_captured_url` |
+| Login 404 for unknown source | `test_login_404_when_source_unknown` |
+| Login 409 when source HEALTHY | `test_login_409_when_source_healthy` |
+| Login 422 when no URL captured | `test_login_422_when_no_login_url_captured` |
+| Mark-healthy clears AUTH_REQUIRED | `test_mark_healthy_clears_paused` |
+| Mark-healthy idempotent under double-click | `test_mark_healthy_is_idempotent` |
+| /api/sources carries `login_url` | `test_sources_endpoint_carries_login_url` |
+| Assisted/open launches apply URL | `test_open_launches_apply_url` |
+| Assisted/open 404 on missing job | `test_open_404_when_job_missing` |
+| Assisted/open 409 with no PENDING attempt | `test_open_409_when_no_assisted_pending` |
+| Assisted/open 422 when job URL empty | `test_open_422_when_job_has_no_url` |
+| Assisted/confirm walks REVIEW→APPLIED | `test_confirm_walks_state_machine_to_applied` |
+| Confirm 404 on missing job | `test_confirm_404_when_job_missing` |
+| Confirm 409 when job not in REVIEW | `test_confirm_409_when_job_not_in_review` |
+| Confirm 409 with no PENDING attempt | `test_confirm_409_when_no_assisted_pending` |
+| Cancel flips Application, keeps Job in REVIEW | `test_cancel_flips_application_keeps_job_in_review` |
+| Cancel 404 on missing job | `test_cancel_404_when_job_missing` |
+| Cancel 409 with no PENDING attempt | `test_cancel_409_when_no_pending` |
+| Latest-pending picks most recent of multiple | `test_picks_most_recent_pending` |
+| login_url round-trips through snapshot | `test_login_url_round_trips` |
+| login_url clears on mark_healthy | `test_login_url_clears_on_mark_healthy` |
+| login_url defaults to empty | `test_login_url_empty_when_not_provided` |
+
+### What's NOT in this sub-phase
+
+* **Per-source login URL configuration.** The dashboard only shows
+  "Log in" when the apply driver captured a `login_url`. A static
+  config registry (e.g. `"greenhouse": "https://login.greenhouse.io/"`)
+  would let the user log in *before* the bot ever hits a wall — but
+  most ATS apply pages don't have a stable login page (candidate
+  forms are public), and v3 doesn't have a non-ATS source that needs
+  pre-emptive login yet. Add when Phase 2 ships Indeed/Dice/ZipRecruiter.
+* **Pausing the scheduler while the user is mid-login.** Today the
+  AUTH_REQUIRED flag on the source already pauses just that source
+  (the apply worker skips paused sources per spec §8b), so the user
+  isn't racing the bot for the login tab. If `--no-scheduler` mode
+  were the rule we'd add a launch-time pause; for now the source
+  flag is the right granularity.
+* **Bulk "mark all healthy".** Each source clears individually. If a
+  hard pause cascades across multiple sources (e.g. captcha
+  detection during a discovery sweep), the user clicks each. Worth
+  revisiting if (Phase 2) source breadth makes this tedious.
+* **`SKIPPED` transition from cancelled assisted attempt.** Cancel
+  leaves the job in REVIEW. If the user wants to drop the job
+  entirely, they need another action — REVIEW → SKIPPED isn't wired
+  from the dashboard yet. (5/M) onboarding wizard will likely add
+  the bulk-skip controls for this.
+* **Reload semantics if the user clicks Log in while a prior
+  apply tab is open.** `BrowserSession.new_page()` opens a fresh tab;
+  the old tab stays. Fine for ATS sites, but boards with single-tab
+  semantics (Dice's modal apply flow) might surprise the user. Note
+  for Phase 2 when boards land.
+
+### Carry-over: onboarding-time hotkey + login URL prefs
+
+The onboarding wizard (5/M) is the natural place to set:
+
+* `web.hotkey` / `web.idle_detect_enabled` (already collected at the
+  scheduler-config step).
+* A future "do you want the bot to auto-launch login URLs in its
+  profile?" toggle — for users who'd rather sign in via a password
+  manager popup in their own browser. The launcher already supports
+  the fallback; the wizard just adds the user-config knob.
