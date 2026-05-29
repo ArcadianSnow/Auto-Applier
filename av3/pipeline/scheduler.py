@@ -74,7 +74,17 @@ from av3.pipeline.quiet_hours import QuietHours, parse_quiet_hours
 from av3.pipeline.score_worker import ScoreRunSummary, ScoreWorker
 from av3.telemetry import get_sink
 
-__all__ = ["CycleSummary", "Scheduler", "SchedulerRunSummary"]
+__all__ = ["CycleSummary", "MaintenanceHook", "Scheduler", "SchedulerRunSummary"]
+
+
+class MaintenanceHook(Protocol):
+    """Optional scheduler-driven maintenance callback (spec §4 retention +
+    backups). Called at most every ``maintenance_interval_s`` seconds at the
+    end of a cycle. The implementation is whatever the caller wants — prune,
+    backup, or both. Tests inject a recording stub; production wires it to
+    :mod:`av3.pipeline.retention`."""
+
+    async def __call__(self) -> None: ...
 
 
 # --------------------------------------------------------------- protocols
@@ -109,6 +119,7 @@ class CycleSummary:
     apply_summary: ApplyRunSummary | None = None
     apply_skipped_quiet_hours: bool = False
     paused: bool = False
+    maintenance_ran: bool = False
     stage_errors: dict[str, str] = field(default_factory=dict)  # stage -> error str
     elapsed_s: float = 0.0
 
@@ -149,6 +160,8 @@ class Scheduler:
         cycle_interval_s: float = 60.0,
         quiet_hours: QuietHours | None = None,
         pause_predicate: Callable[[], bool] | None = None,
+        maintenance: MaintenanceHook | None = None,
+        maintenance_interval_s: float = 3600.0,
         sleep: _Sleep | None = None,
         now: _Now | None = None,
     ):
@@ -159,6 +172,11 @@ class Scheduler:
         self._cycle_interval_s = cycle_interval_s
         self._quiet_hours = quiet_hours or parse_quiet_hours(None)
         self._pause_predicate = pause_predicate or (lambda: False)
+        self._maintenance = maintenance
+        self._maintenance_interval_s = maintenance_interval_s
+        # Monotonic time stamp of last maintenance run. None means "never";
+        # the first eligible cycle after startup triggers maintenance.
+        self._last_maintenance_at: float | None = None
         self._sleep: _Sleep = sleep or asyncio.sleep
         self._now: _Now = now or datetime.now
 
@@ -230,6 +248,24 @@ class Scheduler:
         else:
             await self._run_stage(cs, "apply", self._apply)
 
+        # Maintenance hook (spec §4 retention + backups). Runs at most every
+        # maintenance_interval_s seconds — checked at the END of each cycle so
+        # apply / score have already drained, minimizing contention with the
+        # backup snapshot (which uses the SQLite online backup API and is safe
+        # but still pays a write-lock briefly).
+        if self._maintenance is not None and self._is_maintenance_due():
+            try:
+                await self._maintenance()
+                cs.maintenance_ran = True
+                self._last_maintenance_at = time_mod.monotonic()
+                self._emit_cycle("ok", cycle_idx, context={"event": "maintenance"})
+            except Exception as exc:  # noqa: BLE001
+                cs.stage_errors["maintenance"] = f"{type(exc).__name__}: {exc}"
+                self._emit_cycle(
+                    "error", cycle_idx,
+                    context={"event": "maintenance", "error": str(exc)},
+                )
+
         cs.elapsed_s = time_mod.perf_counter() - t0
         status = "error" if cs.stage_errors else "ok"
         self._emit_cycle(
@@ -238,6 +274,16 @@ class Scheduler:
             context={"errors": list(cs.stage_errors.keys())} if cs.stage_errors else None,
         )
         return cs
+
+    def _is_maintenance_due(self) -> bool:
+        """True iff the maintenance hook hasn't run for
+        ``maintenance_interval_s`` seconds. First call after startup is
+        always due so cold starts don't silently skip prune+backup if the
+        process restarts inside the interval."""
+        if self._last_maintenance_at is None:
+            return True
+        elapsed = time_mod.monotonic() - self._last_maintenance_at
+        return elapsed >= self._maintenance_interval_s
 
     async def _run_stage(
         self,

@@ -125,6 +125,29 @@ class SchedulerConfig(BaseModel):
         return self
 
 
+class RetentionConfig(BaseModel):
+    """Data lifecycle (spec §4). Defaults match the spec's "e.g. 30d" guidance
+    for app data and the spec's "shorter window" for events. Backups
+    rotate so cron'd snapshots don't fill the disk over months."""
+
+    ephemeral_days: int = 30          # SKIPPED/FILTERED job rows older than this go away
+    events_days: int = 14             # events.db rows older than this go away (shorter — higher write rate)
+    backup_keep: int = 10             # rotate snapshots: keep newest N per DB
+    maintenance_interval_s: float = 3600.0  # how often the scheduler runs prune+backup (default 1 hour)
+
+    @model_validator(mode="after")
+    def _positive_windows(self) -> "RetentionConfig":
+        if self.ephemeral_days <= 0:
+            raise ValueError("ephemeral_days must be > 0")
+        if self.events_days <= 0:
+            raise ValueError("events_days must be > 0")
+        if self.backup_keep <= 0:
+            raise ValueError("backup_keep must be > 0")
+        if self.maintenance_interval_s <= 0:
+            raise ValueError("maintenance_interval_s must be > 0")
+        return self
+
+
 class Settings(BaseModel):
     """Root settings object. Construct via ``load_settings()``."""
 
@@ -134,6 +157,7 @@ class Settings(BaseModel):
     pacing: PacingConfig = Field(default_factory=PacingConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
+    retention: RetentionConfig = Field(default_factory=RetentionConfig)
 
     # --- derived paths (system of record + observability spine, spec §4) ---
     @property

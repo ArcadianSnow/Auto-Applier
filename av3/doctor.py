@@ -116,6 +116,51 @@ def check_llm(settings: Settings) -> CheckResult:
     return CheckResult("llm", Status.PASS, f"Ollama up, model '{want}' available")
 
 
+def check_backups(settings: Settings) -> CheckResult:
+    """Last backup recency check (spec §4 backups).
+
+    PASS when the newest ``app.db.*`` snapshot is younger than 2 *
+    ``retention.maintenance_interval_s`` (so a one-cycle blip doesn't trip
+    monitoring). WARN when older or missing - the always-on operating model
+    assumes the scheduler's maintenance hook is firing.
+
+    WARN (not FAIL): backups are recoverable from the live DB until something
+    catastrophic happens, and a fresh install legitimately has no backup yet.
+    """
+    from datetime import datetime, timezone
+
+    backups_dir = settings.backups_dir
+    if not backups_dir.exists():
+        return CheckResult(
+            "backups", Status.WARN,
+            f"backups dir missing: {backups_dir}",
+            fix="run `av3 backup` once to seed it (auto-created by the scheduler too)",
+        )
+
+    snaps = list(backups_dir.glob(f"{settings.app_db_path.stem}.*"))
+    if not snaps:
+        return CheckResult(
+            "backups", Status.WARN,
+            f"no app.db snapshots in {backups_dir}",
+            fix="run `av3 backup` once, or start `av3 run` (the scheduler backs up automatically)",
+        )
+
+    newest = max(snaps, key=lambda p: p.stat().st_mtime)
+    age_s = datetime.now(timezone.utc).timestamp() - newest.stat().st_mtime
+    threshold_s = 2 * settings.retention.maintenance_interval_s
+    if age_s > threshold_s:
+        return CheckResult(
+            "backups", Status.WARN,
+            f"newest app.db snapshot is {int(age_s // 3600)}h old "
+            f"(threshold {int(threshold_s // 3600)}h)",
+            fix="run `av3 backup` or check that `av3 run`'s maintenance hook is firing",
+        )
+    return CheckResult(
+        "backups", Status.PASS,
+        f"newest snapshot {newest.name} ({int(age_s // 60)}m ago)",
+    )
+
+
 def run_doctor() -> list[CheckResult]:
     """Run all checks; return results in display order."""
     results: list[CheckResult] = []
@@ -126,6 +171,7 @@ def run_doctor() -> list[CheckResult]:
     results.append(check_app_db(settings))
     results.append(check_events_db(settings))
     results.append(check_llm(settings))
+    results.append(check_backups(settings))
     return results
 
 

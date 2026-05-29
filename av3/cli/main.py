@@ -23,7 +23,7 @@ from av3.config import load_settings
 from av3.db import init_app_db
 from av3.doctor import Status, fail_count, run_doctor
 from av3.db.repositories import JobRepo
-from av3.telemetry import EventSink
+from av3.telemetry import EventSink, configure_sink
 
 # ASCII-only markers — the Windows console (cp1252) can't encode unicode glyphs and
 # raises UnicodeEncodeError. This is dev tooling; reliability beats prettiness.
@@ -656,6 +656,21 @@ def run_cmd(max_cycles: int | None, quiet_hours: str | None,
             f"max_cycles={max_cycles if max_cycles is not None else 'unbounded'})"
         )
 
+    # Maintenance hook: prune ephemeral + events + back up both DBs every
+    # ``retention.maintenance_interval_s`` seconds. Defined as an async
+    # closure so the scheduler can call it without knowing about retention
+    # internals. Constructed once and threaded into the scheduler.
+    from av3.pipeline.retention import (
+        prune_ephemeral as _prune_ephemeral,
+        prune_events as _prune_events,
+        run_backup_cycle as _run_backup_cycle,
+    )
+
+    async def _maintenance():
+        _prune_ephemeral(conn, settings.retention.ephemeral_days)
+        _prune_events(settings.events_db_path, settings.retention.events_days)
+        _run_backup_cycle(settings)
+
     async def _run():
         session = BrowserSession(settings.browser_profile_dir)
         await session.start()
@@ -689,6 +704,8 @@ def run_cmd(max_cycles: int | None, quiet_hours: str | None,
                 apply_worker=apply_worker,
                 cycle_interval_s=effective_cycle_interval,
                 quiet_hours=quiet_hours_window,
+                maintenance=_maintenance,
+                maintenance_interval_s=settings.retention.maintenance_interval_s,
             )
             return await scheduler.run(max_cycles=max_cycles)
         finally:
@@ -716,6 +733,72 @@ def run_cmd(max_cycles: int | None, quiet_hours: str | None,
     # CI / cron friendliness: any cycle-level error is a non-zero exit (a stage
     # crash is bad even when we kept the loop alive).
     sys.exit(1 if summary.total_errors else 0)
+
+
+@cli.command("prune")
+@click.option("--ephemeral-days", type=int, default=None,
+              help="Override settings.retention.ephemeral_days for this run.")
+@click.option("--events-days", type=int, default=None,
+              help="Override settings.retention.events_days for this run.")
+def prune_cmd(ephemeral_days: int | None, events_days: int | None) -> None:
+    """Delete ephemeral data older than the retention windows (spec section 4).
+
+    Two scopes:
+      * jobs in EPHEMERAL_STATES (SKIPPED/FILTERED) older than
+        --ephemeral-days. APPLIED is kept indefinitely (dedup source of truth).
+      * events.db rows older than --events-days (higher write volume, shorter window).
+
+    Both run inside their own transactions; a crash mid-delete rolls back.
+    """
+    from av3.pipeline.retention import prune_ephemeral, prune_events
+
+    settings = load_settings()
+    conn = init_app_db(settings.app_db_path)
+    configure_sink(EventSink(settings.events_db_path))
+
+    eff_eph = ephemeral_days if ephemeral_days is not None else settings.retention.ephemeral_days
+    eff_evt = events_days if events_days is not None else settings.retention.events_days
+
+    try:
+        job_result = prune_ephemeral(conn, eff_eph)
+    finally:
+        conn.close()
+    evt_result = prune_events(settings.events_db_path, eff_evt)
+
+    click.echo(
+        f"pruned jobs={job_result.deleted} cutoff={job_result.cutoff_iso} "
+        f"(ephemeral_days={eff_eph})"
+    )
+    click.echo(
+        f"pruned events={evt_result.deleted} cutoff={evt_result.cutoff_iso} "
+        f"(events_days={eff_evt})"
+    )
+
+
+@cli.command("backup")
+def backup_cmd() -> None:
+    """Snapshot app.db + events.db; rotate older snapshots (spec section 4).
+
+    Uses SQLite's online backup API so it's safe while the DB is in use. Both
+    backups are attempted even if one fails; failure is reported in the
+    summary line with a non-zero exit code so cron / monitoring catches it.
+    """
+    from av3.pipeline.retention import run_backup_cycle
+
+    settings = load_settings()
+    configure_sink(EventSink(settings.events_db_path))
+    settings.backups_dir.mkdir(parents=True, exist_ok=True)
+
+    summary = run_backup_cycle(settings)
+
+    for b in summary.backups:
+        click.echo(
+            f"{b.db_label}: snapshot={b.snapshot_path.name} rotated={b.rotated}"
+        )
+    for db_label, err in summary.errors.items():
+        click.echo(f"  x FAIL {db_label}: {err}", err=True)
+
+    sys.exit(0 if summary.ok else 1)
 
 
 if __name__ == "__main__":

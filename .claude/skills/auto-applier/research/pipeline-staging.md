@@ -680,3 +680,133 @@ sub-phases are operational hardening, not pipeline construction:
      against a labeled set; also calibrates the (1/M) filter threshold.
   8. Mocked-source CI for selector drift.
   9. Live smoke tests on real ATS APIs/forms (NEVER submits).
+
+---
+
+## Phase 3 (6/M) — retention + backups landed
+
+`av3/pipeline/retention.py` (new — `prune_ephemeral`, `prune_events`,
+`backup_app_db`, `backup_events_db`, `run_backup_cycle`),
+`av3/config/settings.py` (new `RetentionConfig`),
+`av3/pipeline/scheduler.py` (maintenance hook integration — cadence-gated
+async callable injected into the scheduler), `av3/doctor.py` (new
+`check_backups` recency check), and `av3 prune` + `av3 backup` CLI
+commands — plus 23 new tests (354 v3 tests total, +23 from (5/M)).
+**Spec §4 satisfied:** ephemeral data prunes on a configurable window,
+APPLIED is kept indefinitely (dedup source of truth), both DBs back up
+on a separate cadence with rotation. The always-on operating model is
+now sustainable for months without manual disk pruning.
+
+### Scope: APPLIED kept forever; everything else has a window
+
+  * **`prune_ephemeral`**: deletes jobs in `EPHEMERAL_STATES` (SKIPPED
+    + FILTERED) older than `retention.ephemeral_days` (default 30d).
+    APPLIED is *never* pruned — it's the dedup source of truth per
+    spec §4. Active-pipeline states (DESCRIBED, QUEUED_APPLY, REVIEW,
+    etc.) are also not pruned; in-flight is not ephemera.
+  * **`prune_events`**: deletes events older than
+    `retention.events_days` (default 14d). Shorter window because
+    events.db is the highest-write table.
+  * **`backup_app_db` / `backup_events_db`**: SQLite online-backup-API
+    snapshots (safe while DBs are in use, WAL included). Rotation to
+    keep `retention.backup_keep` newest (default 10) per DB.
+  * **`run_backup_cycle`**: convenience wrapper — both DBs attempted
+    even if one fails. Asymmetric resilience: a transient events.db
+    issue doesn't skip app.db (the load-bearing one).
+
+### Atomicity matters here
+
+Each prune runs inside an explicit transaction via
+`av3.db.engine.tx`. A partial prune that deletes half the matched rows
+is worse than no prune — it orphans cascades or splits a state's
+history. SQLite's cascade behavior removes dependent `job_scores` and
+`applications` rows automatically when a `jobs` row is deleted.
+
+### Scheduler integration — cadence-gated maintenance hook
+
+The scheduler gained an optional `maintenance: MaintenanceHook | None`
+plus `maintenance_interval_s` (default 3600s). At the end of each
+cycle, the scheduler checks "has the interval elapsed since last
+maintenance?" via a monotonic-clock comparison. First call after
+construction is *always* due (cold-starts inside the interval
+shouldn't silently skip). Exceptions from the maintenance hook are
+isolated like stage worker exceptions — recorded in `cycle.stage_errors`
+under the `"maintenance"` key, loop continues. The hook itself is
+injected by `av3 run`'s CLI closure that wires retention.
+
+Why at the *end* of each cycle and not the start: by end-of-cycle,
+filter / score / optimize have already drained and apply has either
+ran or been quiet-skipped. Doing maintenance here minimizes contention
+with the heavy stages and gives the backup snapshot a clean window
+where writes have just settled (SQLite's online backup API uses a
+WAL checkpoint that briefly takes the write lock).
+
+Why a monotonic clock instead of wall-clock: the wall clock can move
+backward (NTP adjustments, DST in some implementations); monotonic
+time is guaranteed to only increase, which is what we want for an
+"every N seconds" cadence.
+
+### Doctor backup-recency check
+
+`check_backups` returns:
+
+  * **PASS** when the newest `app.db.*` snapshot is younger than
+    2 × `retention.maintenance_interval_s` (so a one-cycle blip doesn't
+    trip monitoring).
+  * **WARN** when older or missing. Not FAIL — backups are recoverable
+    from the live DB until something catastrophic happens, and a
+    fresh install legitimately has no backup yet. WARN flags a real
+    operational concern without breaking CI.
+
+### CLI shape
+
+  * **`av3 prune [--ephemeral-days N] [--events-days N]`**: ad-hoc
+    or cron-driven prune. CLI overrides win over settings; output
+    surfaces effective values so operators can verify they didn't
+    typo the flag.
+  * **`av3 backup`**: ad-hoc or cron-driven snapshot. Exit code 1
+    on any backup failure (the asymmetric-resilience contract still
+    holds — the OTHER DB still gets attempted; we just surface the
+    failure to monitoring).
+
+Both commands are safe to run while `av3 run` is active because the
+prune txns + backup API both tolerate concurrent reads + writes via
+WAL.
+
+### What's NOT in this sub-phase
+
+  * **Auto-prune of generated PDFs / cover letters**. The optimize
+    worker writes per-job artifacts under `artifacts_dir/generated/`;
+    these accumulate forever. A `prune_artifacts` function paired
+    with the scheduler hook would be a clean follow-up but the disk
+    impact is small (~50KB/job) and not blocking v3.0.
+  * **Configurable per-state retention**. Currently `EPHEMERAL_STATES`
+    shares one window. A power-user might want "SKIPPED at 7d but
+    FILTERED at 30d" — defer until someone asks.
+  * **Backup verification**. The backup API guarantees consistency but
+    we don't open + checksum each snapshot. A `doctor` step that
+    opens the newest snapshot and runs `PRAGMA integrity_check` is a
+    clean follow-up but rarely fails in practice.
+
+### Edge cases covered
+
+| Path | Outcome |
+|---|---|
+| SKIPPED/FILTERED older than cutoff | deleted |
+| SKIPPED younger than cutoff | kept |
+| APPLIED of any age | kept (never pruned) |
+| Non-ephemeral states (DESCRIBED, etc.) | kept (in-flight not ephemera) |
+| Cascade: prune a job with scores + apps | cascade removes them |
+| Empty match-set | deleted=0, no error |
+| Events older than cutoff | deleted |
+| Backup creates timestamped snapshot | snapshot exists in backups_dir |
+| Backup rotates to keep=N | rotated count matches surplus, dir size matches |
+| run_backup_cycle, one DB fails | error recorded, other DB still backed up |
+| Scheduler: first cycle | maintenance fires immediately |
+| Scheduler: within interval | maintenance skipped |
+| Scheduler: no hook | no-op, maintenance_ran stays False |
+| Scheduler: hook raises | error in stage_errors, loop continues |
+| Doctor: no backups dir | WARN |
+| Doctor: empty backups dir | WARN |
+| Doctor: recent snapshot | PASS |
+| Doctor: stale snapshot | WARN |
