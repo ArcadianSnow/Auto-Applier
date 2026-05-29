@@ -677,6 +677,42 @@ element). Required knockouts will trigger the §8b downgrade to ASSISTED_PENDING
 through the unresolved-required path. Resolver + driver extensions to handle
 button-enums are tracked as Phase-3 work, not Phase-2-blocking.
 
+## JobSpy discovery wired (2026-05-29, Phase 2 (7/N))
+
+`av3/sources/jobspy.py` wraps `python-jobspy` behind the v3 source-capability
+shape (mirrors `LeverSource` / `AshbySource`). `JobSpyQuery` dataclass +
+`JobSpySource.discover(query)` returns a list of `JobSpyListing` (same field
+shape as the other listings). Discovery-only — no apply path; browser-board
+applying is a Phase-3 capability.
+
+Design decisions:
+
+- **Per-row `source` = JobSpy's `site` column** (`indeed` / `zip_recruiter` /
+  ...), NOT the wrapper's organizational `source_name = "jobspy"`. This way
+  cross-source dedup works correctly and the apply worker's unknown-source
+  skip keeps browser-board jobs out of any auto-apply path until a Phase-3
+  driver lands.
+- **Default sites = Indeed + ZipRecruiter only.** LinkedIn is in JobSpy but is
+  intentionally excluded — TLS fingerprinting defeats stealth even through
+  scrapers ([[project_linkedin_research_2026-04-14]]).
+- **Stable source_job_id.** Newer JobSpy emits an `id`; older versions don't.
+  Falls back to `sha256(job_url)[:16]` so re-running the same query dedups
+  correctly against `(source, source_job_id)`.
+- **NaN-tolerant.** Pandas uses NaN for missing cells; `_row_value` treats NaN
+  as missing (the `val != val` trick avoids depending on numpy).
+- **Best-effort.** Scraper exceptions → `[]` (never crashes the discovery
+  pipeline); a row with neither id nor job_url is dropped (nothing stable to
+  dedup on).
+- **Optional install.** `pip install -e ".[v3,jobspy]"` — pulls pandas as a
+  transitive dep, hence opt-in. Lazy-imported; absence raises a clear
+  `ImportError` with the install command.
+
+Validation: 13 new tests in `tests_v3/test_jobspy_source.py` cover the happy
+path, kwargs threading, default-site exclusion, hours-old omission, stable-ID
+fallback, NaN tolerance, empty results, scraper exceptions, lazy-import error,
+multi-site per-row source assignment, and DataFrame-to-records conversion.
+Pandas is NOT required for the tests (fakes return plain dicts).
+
 ## Sources
 
 - [Greenhouse — Invisible reCAPTCHA](https://support.greenhouse.io/hc/en-us/articles/115005448066-Invisible-reCAPTCHA)

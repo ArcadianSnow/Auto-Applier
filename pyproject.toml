@@ -55,6 +55,13 @@ v3 = [
     "rapidfuzz>=3.0",        # fabrication-guard L1 fuzzy entity match (spec §6b)
     "python-dateutil>=2.8",  # fabrication-guard L1 date-range checks
 ]
+# Optional JobSpy discovery for browser boards (Indeed/ZipRecruiter, Phase 2). Smoketest
+# in research/prior-art-and-methodology.md S3 confirmed Indeed = no rate limit, works out
+# of the box. Pulls pandas as a transitive dep, hence opt-in. Install with:
+#   pip install -e ".[v3,jobspy]"
+jobspy = [
+    "python-jobspy>=1.1.50",
+]
 
 [project.scripts]
 auto-applier = "auto_applier.main:cli"
