@@ -1018,3 +1018,140 @@ in 200 lines and runs in 80 ms. No BeautifulSoup dep just for CI.
     run `pytest tests_v3/test_selector_drift.py -v` after refresh
     by convention — adding it to the script muddles the script's
     single responsibility (capture HTML).
+
+---
+
+## Phase 3 (9/M) — live smoke tests landed (Phase 3 DONE)
+
+`tests_v3/test_live_smoke.py` (7 `@pytest.mark.smoke` tests covering
+discovery reachability + JD describe + form-load with expected
+selectors for GH / Lever / Ashby), `scripts/run_smoke.py` (cron-
+friendly runner with structured pass/fail line), and the `smoke`
+marker registered in `pyproject.toml` `addopts`. **Spec §11b
+satisfied:** the scheduled outermost gate is in place. The (8/M)
+mocked-source CI catches drift against saved fixtures (fast, runs
+on every PR); these live smoke tests catch drift against real ATS
+sites (slow, runs on a cron). Together they're a layered "are our
+selectors still correct?" answer.
+
+### Three tests per ATS
+
+  1. **Discovery reachable** — hits the real public API against a
+     curated list of stable tokens (2-3 per ATS). At least ONE
+     token must return jobs. Per-token errors are collected
+     non-fatally so a single dead token doesn't trip the test —
+     when EVERY token in the list is dead, we know the API itself
+     is the problem and the list needs rotation.
+  2. **JD describe works** (Greenhouse only — Lever/Ashby return
+     descriptions at discovery time so no separate step). `describe()`
+     must return a non-trivially-sized JD on a healthy token.
+     Catches "the JD field renamed" / "empty descriptions now"
+     regressions.
+  3. **Form-load with expected selectors** — opens one real apply
+     URL via the production `BrowserSession` stack, lets it settle
+     3s, asserts the standard selectors our drivers depend on are
+     present in the live HTML via substring matching. **NEVER
+     submits.** Substring rather than full HTML parsing is robust
+     to vendor reshuffles of surrounding markup; we want to catch
+     "this selector our driver depends on is GONE," not "the
+     markup around it changed."
+
+### Hard contract: NEVER submits
+
+Every test ends at form load or earlier. The form-load test
+opens the page, waits 3s for SPA/CAPTCHA render, dumps
+`page.content()`, asserts selectors, closes. No click on any
+submit button anywhere in this file. Per Rule 2.6 (gather vs.
+act), live smoke tests are GATHER work — running them in cron is
+safe even if the cron fires mid-incident.
+
+### Failure handling — distinguish flakiness from drift
+
+Network flakiness on one URL doesn't kill the whole run. Each test
+catches network/HTTP exceptions per-target and accumulates them in a
+"per-token errors" dict. The net assertion is "at least one curated
+target succeeded." When every target fails, the test fails LOUDLY
+with the per-token error map so the operator can see at a glance
+whether it's a service outage (all 3 GH tokens returned 503) or a
+real API shape change (all 3 returned 200 but the response parser
+crashed). Selector drift in form-load is the loud failure case:
+substring assertion fires, naming the missing selector + ATS + URL.
+
+### Cron / Task Scheduler shape
+
+`scripts/run_smoke.py`:
+  * Wraps `pytest -m smoke -v --tb=short` with cwd at repo root.
+  * Emits structured `[smoke] started_at=ISO` / `[smoke] finished_at=ISO
+    status=pass|FAIL exit=N` lines so log parsers can grep.
+  * Exits non-zero on any pytest failure so cron alerting fires.
+
+Install examples (in the script's docstring):
+  * **Windows**: `schtasks /create /tn "AutoApplier_Smoke" /sc daily
+    /st 09:00 /tr "python C:\path\scripts\run_smoke.py"`
+  * **Linux/macOS**: `0 9 * * * cd /path && python scripts/run_smoke.py
+    >> /var/log/autoapplier-smoke.log 2>&1`
+
+Daily cadence is the recommended default. More frequent (hourly) is
+fine but wastes ATS bandwidth; less frequent (weekly) leaves drift
+windows long enough for users to hit broken applies before the next
+run catches it.
+
+### What to do when this trips
+
+  1. Read the pytest output — names the missing selector + ATS + URL.
+  2. Reproduce locally: `pytest tests_v3/test_live_smoke.py -m smoke -v`.
+  3. If the live HTML changed: run `scripts/refresh_fixtures.py <ats>
+     <url>` against a current posting to capture new HTML, update the
+     per-ATS driver code to match the new selectors, re-run
+     `tests_v3/test_selector_drift.py` to confirm fixture+driver
+     alignment.
+  4. Commit fixture + driver changes together; next scheduled run
+     should pass.
+
+### Edge cases covered
+
+| Path | Outcome |
+|---|---|
+| GH discovery on all 3 stable tokens | passes when ≥1 returns jobs |
+| GH discovery: all 3 tokens dead | LOUD FAIL with per-token error map |
+| GH `describe()` returns short JD | LOUD FAIL with byte count + token |
+| Lever discovery on 2 stable sites | passes when ≥1 returns jobs |
+| Ashby discovery on 3 stable slugs | passes when ≥1 returns jobs |
+| GH form-load: selectors present | passes |
+| GH form-load: `#first_name` missing | LOUD FAIL naming selector + URL |
+| Lever form-load: standard fields present | passes |
+| Ashby form-load: `_systemfield_*` present | passes |
+| No curated discovery succeeded | SKIP (network bad enough to distrust form-load result) |
+
+### What's NOT in this sub-phase
+
+  * **CAPTCHA pass-rate measurement**. The form-load smoke checks
+    selectors, not whether CAPTCHA passes silently. CAPTCHA pass-rate
+    needs gated real submits (the Phase-2-closing live Lever
+    smoketest carry-over) — separate, user-gated, NOT cron.
+  * **JobSpy / browser-board smoke**. (9/M) covers ATS APIs only.
+    JobSpy + Indeed/Zip live smoke would be its own slice when the
+    browser-board apply path lands (post-Phase 3).
+  * **Per-page screenshot capture on failure**. Useful when drift is
+    subtle; the failure message names the selector, which is enough
+    for the first round. Screenshot-on-failure can land alongside the
+    Phase 4 web UI (where viewing screenshots will be natural).
+
+### Phase 3 — DONE
+
+With (9/M) committed, **Phase 3 is COMPLETE**. v3.0 ships:
+
+  * (1/M) Embedding pre-filter
+  * (2/M) LLM dimension scoring
+  * (3/M) Optimize+Strict gate
+  * (4/M) Session-expiry graceful degradation
+  * (5/M) Staged-worker scheduler — the production entry
+  * (6/M) Retention + backups
+  * (7/M) Scoring eval harness
+  * (8/M) Mocked-source CI for selector drift
+  * (9/M) Live smoke tests for real-world drift
+
+**End-to-end pipeline working** (discover → filter → describe →
+score → optimize+Strict gate → apply). **Operational hardening
+done** (retention, backups, doctor, drift detection). Next: Phase 4
+(web UI + worker service) — separate scope.

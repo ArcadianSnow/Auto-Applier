@@ -81,7 +81,9 @@ testpaths = ["tests", "tests_v3"]
 markers = [
     "integration: tests that hit live external services (network required)",
     "eval: scoring quality eval harness against a labeled golden set (live LLM required)",
+    "smoke: live ATS smoke tests (real API + form-load, NEVER submits) — for scheduled cron",
 ]
-# Skip integration + eval by default; opt in via `pytest -m integration` or
-# `pytest -m eval` (the eval harness needs a reachable Ollama or Gemini key).
-addopts = "-m 'not integration and not eval'"
+# Skip integration + eval + smoke by default; opt in via marker.
+# Smoke tests are scheduled via cron / Task Scheduler to catch real-world selector
+# drift between releases (the #1 v2 bug source).
+addopts = "-m 'not integration and not eval and not smoke'"
