@@ -80,6 +80,8 @@ av3 = ["db/*.sql"]
 testpaths = ["tests", "tests_v3"]
 markers = [
     "integration: tests that hit live external services (network required)",
+    "eval: scoring quality eval harness against a labeled golden set (live LLM required)",
 ]
-# Skip integration tests by default; opt in via `pytest -m integration`.
-addopts = "-m 'not integration'"
+# Skip integration + eval by default; opt in via `pytest -m integration` or
+# `pytest -m eval` (the eval harness needs a reachable Ollama or Gemini key).
+addopts = "-m 'not integration and not eval'"

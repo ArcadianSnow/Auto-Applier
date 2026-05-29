@@ -810,3 +810,110 @@ WAL.
 | Doctor: empty backups dir | WARN |
 | Doctor: recent snapshot | PASS |
 | Doctor: stale snapshot | WARN |
+
+---
+
+## Phase 3 (7/M) — scoring eval harness landed
+
+`tests_v3/eval/golden_set.jsonl` (12 hand-authored JD+band pairs:
+4 high / 4 mid / 4 low), `tests_v3/eval/test_score_quality.py`
+(live-LLM harness gated by `@pytest.mark.eval`), and the
+`@pytest.mark.eval` marker registered in `pyproject.toml`
+`addopts` (skipped by default, opt-in via `pytest -m eval`).
+**Spec §10 + §11b satisfied:** the (2/M) prompt-version stamps now
+have a regression detector. A prompt or model change that drifts
+the score distribution will surface as a band miss with the exact
+`SCORE_JD.version` in the failure message — no more "scoring looks
+weird; was it the prompt or the model?" debugging.
+
+### Two tests, two roles
+
+  * **`test_golden_set_loads_and_validates`** (NO eval marker —
+    runs in the default suite): parses the JSONL file, asserts all
+    three bands are represented, asserts no duplicate ids, asserts
+    field-shape contract. A broken golden set surfaces on every PR,
+    not only when someone runs the eval explicitly. Cheap insurance
+    against the file being malformed by an editor or merge conflict.
+  * **`test_golden_set_score_bands`** (`@pytest.mark.eval` — opt-in):
+    the real harness. Constructs a real `ScoreWorker` with a real
+    `CompletionClient` (Ollama → Gemini fallback), seeds every JD as
+    a DESCRIBED job, runs one `run_once()` pass, asserts every
+    pair's `total` lands in the labeled `[band_min, band_max]` range.
+    The per-pair failure message embeds `SCORE_JD.version` so a band
+    miss points at the exact prompt revision that regressed.
+
+### LLM-availability skip vs fail
+
+If neither Ollama is reachable nor `GEMINI_API_KEY` is set, the eval
+test *skips* rather than fails — a dev machine without a model
+configured shouldn't break CI gates. The point of the harness is
+"when the LLM IS available, here is the quality bar." Live LLM is
+the contract; absence is "not measured this run."
+
+### The canonical profile is fixed in the test file
+
+The eval profile is a senior Python data engineer with ETL /
+Airflow / dbt / Snowflake background, ~7 years experience, $150k+
+salary expectation, defined inline in `test_score_quality.py` rather
+than read from a real fact bank. Reproducibility — the harness gives
+the same answer on any machine. The 12 JDs are labeled against
+*this* profile, so swapping in a different one would invalidate
+every band assertion.
+
+### Band ranges (inclusive)
+
+  * **low**: `[0.0, 3.5]` — completely off-target
+    (frontend, embedded, marketing, junior QA)
+  * **mid**: `[3.5, 6.5]` — adjacent but not core
+    (data scientist, backend, data analyst, ML engineer)
+  * **high**: `[6.0–6.5, 10.0]` — core fit (senior DE, staff DE,
+    early-stage DE, senior analytics engineer)
+
+The `band_min` for HIGH is slightly relaxed to 6.0 on the looser
+pairs (early-stage data engineer at a startup, analytics engineer)
+because comp + seniority dimensions pull the total down a little
+even on a strong skills+experience match. The relaxed lower bound
+catches realistic LLM noise without making the assertion meaningless.
+
+### Per-pair version stamping
+
+The harness reads `JobScore.model` (which the score worker stamps
+with `{SCORE_JD.version}|{settings.llm.ollama_model}`) on every
+score row and asserts the prompt version is present. Two
+regressions get caught:
+
+  * **Prompt drift** (band miss): the LLM scored within the prompt
+    schema, but the new prompt steers it differently than before.
+    Re-pin `band_min`/`band_max` in JSONL after manual verification
+    the new behavior is acceptable.
+  * **Stamping regression**: if a future refactor breaks the
+    `model` field shape (e.g. drops the version), the harness fails
+    with "model tag X missing prompt version Y" rather than
+    silently no-oping.
+
+### Calibration finding from this harness — DEFERRED
+
+The handoff §4 (7/M) suggested using the harness output to pick
+defensible production values for the `0.6` filter threshold and
+`4.0`/`7.0` score thresholds. **This requires a real run with the
+configured model**, which is the user's call to make on their box.
+The harness is now in place to support that calibration; the
+thresholds stay at their spec defaults until the user runs
+`pytest -m eval` and the bands tell us what to tune.
+
+### What's NOT in this sub-phase
+
+  * **Per-axis assertions**. A future enhancement could pin
+    individual dimensions (e.g. "skills must be ≥ 7 on a DE JD")
+    rather than just the total. Band-level total is the first
+    meaningful gate; per-axis comes after the total assertion
+    proves stable.
+  * **Auto-tuning of thresholds from the eval output**. The harness
+    detects drift; it doesn't change config. Threshold tuning
+    remains a deliberate user decision.
+  * **Statistical pass criteria** (e.g. "11/12 pairs must pass"
+    instead of "every pair"). Loosen only if calibration shows
+    persistent borderline cases that aren't quality regressions.
+  * **More than 12 pairs**. The spec said "a dozen"; we ship 12.
+    Adding pairs is cheap; growth happens organically as users hit
+    edge cases worth pinning.
