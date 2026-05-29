@@ -3,6 +3,14 @@
 {% block content %}
   <div x-data="dashboard()" x-init="init()" class="dashboard">
 
+    {# ------- onboarding banner (5/M) ------- #}
+    <div class="onboarding-banner" x-show="onboarding && !onboarding.is_complete">
+      <span>
+        Finish onboarding to start the scheduler &mdash;
+        <a href="/onboarding">open the wizard</a>.
+      </span>
+    </div>
+
     {# ------- header / scheduler status ------- #}
     <section class="card status-bar" :class="status.scheduler.paused ? 'is-paused' : ''">
       <div class="status-line">

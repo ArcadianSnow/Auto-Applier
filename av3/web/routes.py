@@ -48,6 +48,18 @@ from av3.sources.health import (
     snapshot as health_snapshot,
 )
 from av3.web.control import SOURCE_MANUAL
+from av3.web.onboarding import (
+    load_fact_bank,
+    load_user_config,
+    merge_contact,
+    merge_education,
+    merge_skills,
+    merge_work_auth,
+    merge_work_history,
+    onboarding_status,
+    save_fact_bank,
+    save_user_config,
+)
 from av3.web.views import (
     PIPELINE_STATES,
     event_payload,
@@ -677,6 +689,194 @@ async def _read_optional_reason(request: Request) -> str:
     return raw if isinstance(raw, str) else ""
 
 
+# ---------------------------------------------------------------- /api/onboarding (5/M)
+
+# Phase 4 (5/M) — guided-but-skippable onboarding wizard (spec §11a).
+#
+# Step-wise endpoints (not one big PUT) so the user can close the tab
+# mid-step and reopen later. Each step writes to the same artifacts the
+# rest of v3 reads from (master.json + user_config.json) so the dashboard
+# / CLI / scheduler-ready gate all see the same truth — no separate
+# "wizard state" table to drift out of sync.
+
+
+@api_router.get("/onboarding/state")
+async def onboarding_state(request: Request) -> dict:
+    """Return the current onboarding state — which steps are complete,
+    plus the current saved values so the wizard renders the existing
+    data as defaults when the user re-opens the tab."""
+    web_state = _get_state(request)
+    status = onboarding_status(web_state.settings.data_dir)
+    return status.to_dict()
+
+
+@api_router.post("/onboarding/contact")
+async def onboarding_contact(request: Request) -> dict:
+    """Save contact info (name + email + phone + location + links).
+    Empty strings clear existing fields — the user may need to blank a
+    wrong entry."""
+    payload = await _read_json_dict(request)
+    web_state = _get_state(request)
+    bank = load_fact_bank(web_state.settings.data_dir)
+    merge_contact(bank, payload)
+    save_fact_bank(web_state.settings.data_dir, bank)
+    return onboarding_status(web_state.settings.data_dir).to_dict()
+
+
+@api_router.post("/onboarding/work-history")
+async def onboarding_work_history(request: Request) -> dict:
+    """Replace the work-history list wholesale. Payload shape:
+    ``{"work_history": [{"company", "title", "start", "end", "bullets"}]}``.
+    """
+    payload = await _read_json_dict(request)
+    entries = payload.get("work_history", [])
+    if not isinstance(entries, list):
+        raise HTTPException(
+            status_code=400, detail="work_history must be a list",
+        )
+    web_state = _get_state(request)
+    bank = load_fact_bank(web_state.settings.data_dir)
+    merge_work_history(bank, entries)
+    save_fact_bank(web_state.settings.data_dir, bank)
+    return onboarding_status(web_state.settings.data_dir).to_dict()
+
+
+@api_router.post("/onboarding/education")
+async def onboarding_education(request: Request) -> dict:
+    """Replace education entries wholesale. Payload: ``{"education": [...]}.``
+    Optional step — empty list is fine if the user has no formal
+    education to list."""
+    payload = await _read_json_dict(request)
+    entries = payload.get("education", [])
+    if not isinstance(entries, list):
+        raise HTTPException(
+            status_code=400, detail="education must be a list",
+        )
+    web_state = _get_state(request)
+    bank = load_fact_bank(web_state.settings.data_dir)
+    merge_education(bank, entries)
+    save_fact_bank(web_state.settings.data_dir, bank)
+    return onboarding_status(web_state.settings.data_dir).to_dict()
+
+
+@api_router.post("/onboarding/skills")
+async def onboarding_skills(request: Request) -> dict:
+    """Replace the skills list. Payload: ``{"skills": ["Python", ...]}.``
+    Dedupes case-insensitively + drops empties before saving."""
+    payload = await _read_json_dict(request)
+    skills = payload.get("skills", [])
+    if not isinstance(skills, list):
+        raise HTTPException(
+            status_code=400, detail="skills must be a list",
+        )
+    web_state = _get_state(request)
+    bank = load_fact_bank(web_state.settings.data_dir)
+    merge_skills(bank, [str(s) for s in skills])
+    save_fact_bank(web_state.settings.data_dir, bank)
+    return onboarding_status(web_state.settings.data_dir).to_dict()
+
+
+@api_router.post("/onboarding/work-auth")
+async def onboarding_work_auth(request: Request) -> dict:
+    """Save work-authorization + sponsorship status (spec §6b — no silent
+    default). Payload: ``{"work_authorization": "US citizen",
+    "requires_sponsorship": false}``. ``requires_sponsorship`` may be
+    ``null`` to leave the question unanswered (the apply path then bails
+    to REVIEW on that question instead of guessing)."""
+    payload = await _read_json_dict(request)
+    web_state = _get_state(request)
+    bank = load_fact_bank(web_state.settings.data_dir)
+    merge_work_auth(bank, payload)
+    save_fact_bank(web_state.settings.data_dir, bank)
+    return onboarding_status(web_state.settings.data_dir).to_dict()
+
+
+@api_router.post("/onboarding/targeting")
+async def onboarding_targeting(request: Request) -> dict:
+    """Save job-targeting config. Payload mirrors :class:`TargetingConfig`:
+    ``{"titles": [...], "locations": [...], "remote_ok": bool,
+    "onsite_ok": bool, "salary_floor": int|null, "seniority": "..."}.``
+    """
+    payload = await _read_json_dict(request)
+    web_state = _get_state(request)
+    cfg = load_user_config(web_state.settings.data_dir)
+    targeting = cfg.get("targeting", {}) or {}
+    # Merge field-by-field so a partial payload doesn't blank fields the
+    # caller didn't include. Lists default to [] when the caller sends
+    # them so "I cleared all titles" works.
+    for k in ("titles", "locations", "remote_ok", "onsite_ok",
+              "salary_floor", "seniority"):
+        if k in payload:
+            targeting[k] = payload[k]
+    cfg["targeting"] = targeting
+    save_user_config(web_state.settings.data_dir, cfg)
+    return onboarding_status(web_state.settings.data_dir).to_dict()
+
+
+@api_router.post("/onboarding/telemetry")
+async def onboarding_telemetry(request: Request) -> dict:
+    """Save the telemetry opt-in decision (spec §9). Payload:
+    ``{"enabled": bool, "handle": str|null, "relay_url": str|null}``.
+    The presence of the ``telemetry`` key in user_config — even with
+    ``enabled: false`` — counts as "the user made a decision" for the
+    onboarding-complete gate."""
+    payload = await _read_json_dict(request)
+    web_state = _get_state(request)
+    cfg = load_user_config(web_state.settings.data_dir)
+    telemetry = cfg.get("telemetry", {}) or {}
+    for k in ("enabled", "handle", "relay_url"):
+        if k in payload:
+            telemetry[k] = payload[k]
+    # Default to OFF when the user submitted without the enabled key —
+    # spec §9 says telemetry is opt-IN.
+    telemetry.setdefault("enabled", False)
+    cfg["telemetry"] = telemetry
+    save_user_config(web_state.settings.data_dir, cfg)
+    return onboarding_status(web_state.settings.data_dir).to_dict()
+
+
+@api_router.post("/onboarding/web-prefs")
+async def onboarding_web_prefs(request: Request) -> dict:
+    """Save the F6 hotkey + idle-detect preferences from the wizard.
+    Payload keys mirror :class:`WebConfig`: ``hotkey_enabled``,
+    ``hotkey``, ``idle_detect_enabled``, ``idle_threshold_s``.
+
+    A change requires restarting ``av3 serve`` to re-register the
+    hotkey — the wizard surfaces that note in the UI. We don't restart
+    the watchers from here because that would race with whatever the
+    user is doing in the dashboard right now."""
+    payload = await _read_json_dict(request)
+    web_state = _get_state(request)
+    cfg = load_user_config(web_state.settings.data_dir)
+    web_cfg = cfg.get("web", {}) or {}
+    for k in ("hotkey_enabled", "hotkey",
+              "idle_detect_enabled", "idle_threshold_s"):
+        if k in payload:
+            web_cfg[k] = payload[k]
+    cfg["web"] = web_cfg
+    save_user_config(web_state.settings.data_dir, cfg)
+    return onboarding_status(web_state.settings.data_dir).to_dict()
+
+
+async def _read_json_dict(request: Request) -> dict:
+    """Parse a JSON body as a dict; reject other shapes with 400. The
+    onboarding endpoints all take dict payloads, so a list/scalar should
+    fail fast rather than mysteriously do nothing."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="request body must be valid JSON",
+        )
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="request body must be a JSON object",
+        )
+    return body
+
+
 # ---------------------------------------------------------------- /  (HTML)
 
 @pages_router.get("/", response_class=HTMLResponse)
@@ -688,6 +888,20 @@ async def index(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "dashboard.html",
+        {"version": __version__},
+    )
+
+
+@pages_router.get("/onboarding", response_class=HTMLResponse)
+async def onboarding_page(request: Request) -> HTMLResponse:
+    """The onboarding wizard. Single-page Alpine.js app that walks the
+    user through contact → work history → skills → work-auth → targeting
+    → telemetry → web prefs. Each step posts to the matching
+    /api/onboarding/* endpoint so closing the tab mid-step is safe."""
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request,
+        "onboarding.html",
         {"version": __version__},
     )
 

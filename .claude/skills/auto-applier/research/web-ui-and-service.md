@@ -639,3 +639,202 @@ The onboarding wizard (5/M) is the natural place to set:
   profile?" toggle — for users who'd rather sign in via a password
   manager popup in their own browser. The launcher already supports
   the fallback; the wizard just adds the user-config knob.
+
+---
+
+## Phase 4 (5/M) — onboarding wizard landed
+
+Seven-step guided-but-skippable wizard at `/onboarding`: contact →
+work history → skills → work-auth → targeting → telemetry opt-in →
+control prefs. Power users can hit the dashboard's "Skip to dashboard"
+link at any step. The dashboard renders an onboarding banner until
+`is_complete` flips. `tests_v3/test_web_onboarding.py` (+28 tests;
+full v3 suite 489 green, 11 deselected by design). **Spec §11a +
+§11b Phase 4 bullet 3 ("guided-but-skippable onboarding incl.
+fact-bank review") satisfied.**
+
+### New surface
+
+| Module / endpoint | Purpose |
+|---|---|
+| `av3/web/onboarding.py` | `OnboardingStatus` (per-step gates), atomic `save_fact_bank` / `save_user_config`, merge helpers for contact / work-history / education / skills / work-auth |
+| `av3/config/settings.py` `TargetingConfig` | Job-targeting filters (titles, locations, remote/onsite, salary floor, seniority) — spec §6c |
+| `GET /api/onboarding/state` | Status snapshot — which steps are done + current values for hydration |
+| `POST /api/onboarding/contact` | Save name + email + phone + location |
+| `POST /api/onboarding/work-history` | Wholesale-replace work entries |
+| `POST /api/onboarding/education` | Wholesale-replace education entries |
+| `POST /api/onboarding/skills` | Replace skills (case-insensitive dedupe + empty drop) |
+| `POST /api/onboarding/work-auth` | Save work_authorization + tri-state requires_sponsorship |
+| `POST /api/onboarding/targeting` | Partial-merge targeting fields into user_config |
+| `POST /api/onboarding/telemetry` | Save the opt-in decision (default OFF) |
+| `POST /api/onboarding/web-prefs` | Save F6 / idle preferences |
+| `GET /onboarding` | The wizard HTML |
+| Dashboard banner | "Finish onboarding to start the scheduler" — shows iff `!is_complete` |
+
+### Why step-wise endpoints, not one big PUT
+
+The wizard must survive a tab close in the middle. Each "Save &
+continue" button posts to its endpoint and waits for the new status
+snapshot before advancing — so the user can refresh, close the laptop,
+come back tomorrow, and the wizard re-opens at the first incomplete
+step. One big PUT-on-finish would either:
+
+* lose every field if the user closed before the final submit, or
+* require client-side localStorage shadowing (which then diverges from
+  the actual fact bank, generating its own bug class).
+
+Each step's endpoint is idempotent; re-posting the same step just
+overwrites. The wizard tracks `step` client-side because *that's* UI
+state, not domain state — the server doesn't care which page the user
+is on.
+
+### Why there's no separate "wizard state" table
+
+`is_complete` is derived from the same files the rest of v3 already
+reads: `data/profile/master.json` (fact bank) + `data/user_config.json`
+(settings). That means:
+
+* The CLI's `serve_cmd` scheduler-ready gate (which checks the fact
+  bank exists) and the dashboard's "finish onboarding" banner are
+  **answering the same question** with the same query — they can't
+  drift.
+* Power users who hand-edit `master.json` (the spec explicitly
+  supports this — "user-reviewable doc") don't get a stale "you
+  haven't onboarded yet" banner from a separate state table.
+* Resetting onboarding is just `rm data/profile/master.json
+  data/user_config.json` — no "ONBOARDING_DONE" flag to forget about.
+
+The wizard is a thin façade over file ops; the domain owns the truth.
+
+### Why we DON'T LLM-parse a pasted résumé in v3.0
+
+The spec lists "upload résumé → review the extracted fact bank" as
+the ideal flow. Skipping the auto-extract for v3.0 is deliberate:
+
+1. **Variant-merge is research-heavy.** Spec §6b ("Fact-bank merge
+   conflicts: keep all variants, user picks canonical") requires a
+   merge UX that's its own design problem — not a freebie that drops
+   out of "parse the PDF."
+2. **Fabrication risk.** An LLM extraction that hallucinates a
+   credential into the bank breaks the load-bearing fabrication
+   invariant *upstream of the guard*. The guard checks generation
+   against the bank; if the bank itself is wrong, the guard can't
+   save us.
+3. **Eval gap.** v3.0 doesn't yet have a golden-set eval for résumé
+   extraction. Adding extraction without one is the v2 mistake.
+
+v3.0 collects the structured fields manually; the wizard supports
+pasting raw text into the work-history textarea as a copy-paste
+convenience. v3.1 lands upload → LLM extract → user-review-as-merge
+once the extraction prompt has its own eval gate.
+
+### Why work_authorization + requires_sponsorship are tri-state
+
+Spec §6b is explicit: *"work-authorization + sponsorship status
+captured explicitly in onboarding — no silent default"*. v2's "default
+to Yes because the user is probably American" produced wrong answers
+on real applications. v3's `requires_sponsorship` is `True | False |
+None`:
+
+* `False` → user explicitly answered "no" → answer resolver fills
+  "No" on the form.
+* `True` → user explicitly answered "yes" → resolver fills "Yes".
+* `None` → user **left the field unanswered** → resolver **bails to
+  REVIEW** on that question rather than guessing.
+
+The merge helper preserves the `None` (doesn't coerce to `False`)
+and the radio widget exposes a "Skip / unanswered" option that POSTs
+`null`. The completeness gate counts the question as answered if
+*either* `work_authorization` is non-empty *or*
+`requires_sponsorship` is not None — so a citizen who skips
+sponsorship still passes the gate, and a non-citizen who answers
+sponsorship can leave work-auth blank.
+
+### Atomic writes via temp-and-replace
+
+`save_fact_bank` and `save_user_config` both write to a `.tmp` sibling
+then `Path.replace()` — POSIX-atomic on the same filesystem so a
+crash mid-write can't leave a half-written file that breaks the next
+load. Important because:
+
+* The fact bank is load-bearing — every apply path reads from it. A
+  corrupt load is a hard service failure.
+* The wizard's UX gives the user a "Save" button that implies
+  durability. A non-atomic write makes that an implicit lie.
+
+`load_user_config` quarantines an unreadable file to
+`user_config.json.broken` and returns `{}` so the wizard recovers
+without surfacing a JSON parse error — the original file is
+preserved for forensics, but the user isn't stuck unable to onboard.
+
+### Edge cases covered (see `tests_v3/test_web_onboarding.py`)
+
+| Concern | Test |
+|---|---|
+| Fact bank round-trips through save/load | `test_save_and_load_fact_bank_round_trip` |
+| Missing fact bank returns empty (not raise) | `test_load_fact_bank_returns_empty_when_missing` |
+| user_config write leaves no .tmp on success | `test_save_user_config_is_atomic` |
+| Corrupt user_config quarantines + returns {} | `test_corrupt_user_config_is_quarantined` |
+| Contact merge replaces existing fields | `test_merge_contact_replaces_fields` |
+| Work-history merge is wholesale, not partial | `test_merge_work_history_is_wholesale_replace` |
+| Skills dedupe case-insensitively + drop empties | `test_merge_skills_dedupes_case_insensitively` |
+| work-auth tri-state preserves explicit null | `test_merge_work_auth_no_silent_default` |
+| work-auth accepts explicit False | `test_merge_work_auth_accepts_false` |
+| Empty state has no completed gates | `test_empty_state_is_not_complete` |
+| Full population flips is_complete | `test_complete_when_all_gates_pass` |
+| Telemetry-decision = False still counts | `test_telemetry_decision_counts_when_disabled` |
+| work-auth gate passes on sponsorship alone | `test_work_auth_gate_passes_on_sponsorship_alone` |
+| /contact persists + returns status | `test_post_persists_and_returns_status` |
+| /contact rejects non-JSON-object body | `test_post_400_when_body_not_json_object` |
+| /work-history wholesale-replace | `test_replace_wholesale` |
+| /work-history 400 on non-list payload | `test_400_when_payload_not_list` |
+| /skills dedupe-and-save | `test_dedupe_and_save` |
+| /work-auth persists explicit null | `test_explicit_null_sponsorship_persists` |
+| /work-auth no silent default on empty | `test_no_default_when_unset` |
+| /targeting persists into user_config | `test_persists_into_user_config` |
+| /targeting partial update preserves keys | `test_partial_update_preserves_other_keys` |
+| /telemetry disabled decision counts | `test_disabled_decision_counts` |
+| /telemetry defaults enabled=False when omitted | `test_default_enabled_false_when_omitted` |
+| /web-prefs persists hotkey + idle threshold | `test_persists_hotkey_and_idle` |
+| /state empty install returns hydration defaults | `test_empty_install` |
+| /onboarding HTML renders | `test_renders` |
+| Full step-by-step flow flips is_complete | `test_step_by_step` |
+
+### What's NOT in this sub-phase
+
+* **LLM-extract from uploaded résumé.** v3.0 collects fields
+  manually; v3.1 lands upload + extract + variant-merge once the
+  extraction prompt has its own eval. The status field
+  `has_resume` exists so a future upload form can light it up.
+* **NL-intent targeting** ("remote senior data analyst, $120k+,
+  no clearance" → LLM parses into structured filters). v3.0 ships
+  the structured form straight; the underlying TargetingConfig
+  shape is identical so the LLM-parse step is a UI nicety that
+  drops in later.
+* **Live config reload.** Changing `web.hotkey` / `idle_*` via the
+  wizard writes user_config but the running uvicorn process keeps
+  the old values until restart. The wizard surfaces a "applies
+  after restart" note next to those fields. Hot-reloading the
+  watchers is non-trivial (the Win32 message loop is on a daemon
+  thread we'd need to tear down + recreate); not worth the
+  complexity for a setting most users tweak once.
+* **Bulk skill / work-history paste-and-parse.** The textareas
+  accept raw text but each entry is structured. A pasted résumé
+  text → structured-entries parser would help here; deferred to
+  the v3.1 upload-and-extract work above.
+* **Onboarding reset from the UI.** The user has to
+  `rm master.json user_config.json` if they want to redo the
+  wizard. A dashboard "Reset onboarding" button would be helpful
+  but is destructive enough that requiring the file delete is the
+  safer v3.0 default.
+
+### Carry-over: targeting config not yet read by the discovery producer
+
+`TargetingConfig` lives on `Settings` and persists from the wizard,
+but the existing Greenhouse/Lever/Ashby discovery sources still use
+their own seed-list config (per spec Phase 1 — sources were "wire
+their own discovery"). Phase 2's discovery producer will read
+`settings.targeting` directly. Until then the wizard's
+titles/locations are captured but inert — visible in the status
+snapshot, ready for Phase 2 to consume. Noted so the next phase
+doesn't re-invent the schema.

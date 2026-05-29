@@ -49,6 +49,7 @@ function dashboard() {
     connState: 'connecting',
     controlBusy: false,
     sourceBusy: {},        // {sourceName: bool} — per-row spinner gate for (4/M)
+    onboarding: null,      // (5/M) onboarding status snapshot for the banner
     _pollTimer: null,
     _eventSource: null,
     _pollInFlight: false,
@@ -79,16 +80,21 @@ function dashboard() {
       if (this._pollInFlight) return;
       this._pollInFlight = true;
       try {
-        const [status, sources, queue, history] = await Promise.all([
+        const [status, sources, queue, history, onboarding] = await Promise.all([
           fetch('/api/status').then(r => r.json()),
           fetch('/api/sources').then(r => r.json()),
           fetch('/api/queue').then(r => r.json()),
           fetch('/api/history?limit=20').then(r => r.json()),
+          // Best-effort — endpoint may not be reachable on a stripped
+          // install (it's wired in (5/M)); the banner just stays hidden.
+          fetch('/api/onboarding/state').then(r => r.ok ? r.json() : null)
+            .catch(() => null),
         ]);
         this.status = status;
         this.sources = sources.sources || [];
         this.queue = queue;
         this.history = history.applications || [];
+        this.onboarding = onboarding;
       } catch (e) {
         // Best-effort: keep stale data on screen rather than blanking.
         console.error('refreshAll failed', e);

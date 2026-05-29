@@ -328,6 +328,125 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .events .event-skip    .event-status { color: var(--muted); }
 .events .event-start   .event-status { color: var(--accent); }
 
+/* ---------------- onboarding (5/M) ---------------- */
+.onboarding { max-width: 760px; margin: 0 auto; }
+.onboarding-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0.8rem 0 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.5rem;
+}
+.onboarding-steps li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-soft);
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+.onboarding-steps li.step-active { border-color: var(--accent); }
+.onboarding-steps li.step-done-row .step-link { color: var(--fg-muted); }
+.step-index {
+  display: inline-block;
+  min-width: 1.2rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
+}
+.step-link {
+  text-align: left;
+  flex: 1;
+  padding: 0.05rem 0.2rem;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.step-link:hover { color: var(--accent); }
+.step-link:focus-visible { outline: 2px solid var(--accent); }
+.step-done { font-size: 0.9rem; color: var(--ok); }
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.7rem;
+  margin: 0.6rem 0;
+}
+.onboarding-step label {
+  display: block;
+  margin: 0.5rem 0;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+.onboarding-step input[type="text"],
+.onboarding-step input[type="email"],
+.onboarding-step input[type="tel"],
+.onboarding-step input[type="number"],
+.onboarding-step select,
+.onboarding-step textarea {
+  display: block;
+  width: 100%;
+  margin-top: 0.2rem;
+  padding: 0.4rem 0.55rem;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.onboarding-step textarea { font-family: var(--mono); font-size: 0.9rem; }
+.onboarding-step input:focus,
+.onboarding-step select:focus,
+.onboarding-step textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+.work-entry {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.7rem 0.9rem;
+  margin: 0.7rem 0;
+}
+.radio-row {
+  border: 0;
+  padding: 0;
+  margin: 0.6rem 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+}
+.radio-row legend {
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  margin-bottom: 0.3rem;
+}
+.radio-row label, .onboarding-step p > label {
+  font-size: 0.9rem;
+  color: var(--fg);
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  margin: 0;
+}
+
+/* dashboard onboarding banner */
+.onboarding-banner {
+  background: var(--bg-soft);
+  border-left: 4px solid var(--accent);
+  padding: 0.7rem 1rem;
+  margin-bottom: 1rem;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.onboarding-banner a { font-weight: 600; }
+
 /* ---------------- assisted submit (4/M) ---------------- */
 .assisted-panel { border-left: 4px solid var(--accent); }
 .assisted-panel p { color: var(--fg); }

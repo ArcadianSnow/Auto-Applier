@@ -106,6 +106,26 @@ class TelemetryConfig(BaseModel):
     relay_url: str | None = None
 
 
+class TargetingConfig(BaseModel):
+    """Job-targeting filters (spec §6c — NL intent → structured filters).
+
+    v3.0 ships the structured form straight (hand-edit in onboarding); the
+    LLM-parse-from-NL step is a (5/M) onboarding nicety that lands later — the
+    underlying storage shape is the structured filter set either way so the
+    pipeline doesn't need to know which entry path was used.
+
+    Empty lists mean "no constraint on this axis" — the discovery producer
+    defaults to whatever the source's bounded breadth allows (spec §7b).
+    """
+
+    titles: list[str] = Field(default_factory=list)
+    locations: list[str] = Field(default_factory=list)
+    remote_ok: bool = True
+    onsite_ok: bool = True
+    salary_floor: int | None = None  # USD/year; None = no floor
+    seniority: str = ""              # "junior" | "mid" | "senior" | "staff" | "" any
+
+
 class SchedulerConfig(BaseModel):
     """Always-on staged-worker loop tuning (spec §7a — fixed pacing for v3.0).
 
@@ -215,6 +235,7 @@ class Settings(BaseModel):
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     web: WebConfig = Field(default_factory=WebConfig)
+    targeting: TargetingConfig = Field(default_factory=TargetingConfig)
 
     # --- derived paths (system of record + observability spine, spec §4) ---
     @property
