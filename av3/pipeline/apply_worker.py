@@ -164,6 +164,8 @@ class ApplyRunSummary:
     ``review`` covers ASSISTED_PENDING + UNCONFIRMED + driver-FAILED (everything that
     transitioned to ``JobState.REVIEW``). ``skipped`` covers rate-limit drops and
     unknown-source rows; ``errors`` covers unhandled exceptions during ``_process_one``.
+    ``recovered`` counts jobs swept from a crashed prior run's APPLYING state back to
+    QUEUED_APPLY (spec §5 crash-sweep mandate; runs at the top of every ``run_once``).
     """
 
     run_id: str
@@ -172,6 +174,7 @@ class ApplyRunSummary:
     review: int = 0       # any non-APPLIED real status (ASSISTED_PENDING/UNCONFIRMED/FAILED)
     skipped: int = 0      # rate-limit / unknown source
     errors: int = 0       # exception during _process_one
+    recovered: int = 0    # crash-sweep: APPLYING leftovers re-queued (spec §5)
     dry_run_count: int = 0
     elapsed_s: float = 0.0
     notes: list[str] = field(default_factory=list)
@@ -238,12 +241,45 @@ class ApplyWorker:
 
     # -- public ------------------------------------------------------------
 
+    def recover_crashed(self) -> int:
+        """Re-queue jobs left in ``APPLYING`` from a crashed prior run (spec §5 mandate).
+
+        A previous run that died between ``set_state(APPLYING)`` and the next state
+        transition leaves the job stuck in ``APPLYING`` — out of the queue, but the
+        attempt never reached a terminal state. The strict state machine allows
+        ``APPLYING → QUEUED_APPLY`` exactly for this case; this method walks the leftover
+        rows and re-queues them so the next ``run_once`` picks them up. Idempotent — if
+        nothing is stuck, this is a single read and a no-op.
+
+        Returns the count of jobs re-queued. ``run_once`` calls this automatically; the
+        method is public so a doctor command or stand-alone "av3 recover" can use it
+        without booting a browser session.
+        """
+        stuck = self._job_repo.list_by_state(JobState.APPLYING)
+        for job in stuck:
+            self._job_repo.set_state(job.id, JobState.QUEUED_APPLY)
+        return len(stuck)
+
     async def run_once(self, limit: int | None = None) -> ApplyRunSummary:
         """Process up to ``limit`` QUEUED_APPLY jobs. Returns a structured summary so
-        the CLI / dashboard can show what just happened without re-querying the DB."""
+        the CLI / dashboard can show what just happened without re-querying the DB.
+
+        Auto-runs the spec §5 crash-sweep first so a previous run's APPLYING leftovers
+        rejoin the queue *before* we read it (otherwise they'd sit out yet another
+        cycle).
+        """
         run_id = new_run_id()
         summary = ApplyRunSummary(run_id=run_id)
         t0 = time.perf_counter()
+
+        # Spec §5: re-queue APPLYING leftovers from a crashed prior run BEFORE pulling
+        # the queue, so the same run picks them up. The recovered count is recorded for
+        # observability; the swept jobs flow through the normal pipeline below.
+        summary.recovered = self.recover_crashed()
+        if summary.recovered:
+            summary.notes.append(
+                f"crash-sweep: re-queued {summary.recovered} APPLYING leftover(s)"
+            )
 
         queued = self._job_repo.list_by_state(JobState.QUEUED_APPLY, limit=limit)
         prior_was_apply = False

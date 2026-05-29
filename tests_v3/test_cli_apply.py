@@ -147,6 +147,7 @@ def test_apply_emits_summary_line_on_clean_run(tmp_path, monkeypatch):
         review=1,
         skipped=0,
         errors=0,
+        recovered=0,
         dry_run_count=0,
         elapsed_s=12.3,
     )
@@ -159,6 +160,7 @@ def test_apply_emits_summary_line_on_clean_run(tmp_path, monkeypatch):
     assert "applied=1" in out
     assert "review=1" in out
     assert "errors=0" in out
+    assert "recovered=0" in out
     assert "elapsed=12.3s" in out
 
 

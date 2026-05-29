@@ -271,7 +271,8 @@ def apply(once: bool, limit: int | None, source: str | None,
         f"run_id={summary.run_id} attempted={summary.attempted} "
         f"applied={summary.applied} review={summary.review} "
         f"skipped={summary.skipped} errors={summary.errors} "
-        f"dry_run={summary.dry_run_count} elapsed={summary.elapsed_s:.1f}s"
+        f"recovered={summary.recovered} dry_run={summary.dry_run_count} "
+        f"elapsed={summary.elapsed_s:.1f}s"
     )
     if summary.notes:
         click.echo("Notes:")

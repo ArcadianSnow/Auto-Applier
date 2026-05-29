@@ -625,3 +625,114 @@ def test_job_to_greenhouse_listing_recovers_board_token():
 def test_default_drivers_registers_both_atses():
     drivers = default_drivers()
     assert set(drivers.keys()) == {"lever", "greenhouse"}
+
+
+# --------------------------------------------------------------- crash-sweep (spec §5)
+
+def _seed_stuck_applying_lever(
+    conn: sqlite3.Connection, *, company: str, source_job_id: str
+):
+    """Walk a job all the way through to APPLYING and STOP there — simulates a crash
+    between ``set_state(APPLYING)`` and the next transition."""
+    repo = JobRepo(conn)
+    job = Job(
+        source="lever", source_job_id=source_job_id, title="Stuck Job", company=company,
+        url=f"https://jobs.lever.co/{company}/{source_job_id}",
+    )
+    repo.add(job)
+    for nxt in (
+        JobState.DESCRIBED, JobState.SCORED, JobState.DECIDED,
+        JobState.QUEUED_APPLY, JobState.APPLYING,
+    ):
+        repo.set_state(job.id, nxt)
+    return repo.get(job.id)
+
+
+def test_recover_crashed_requeues_applying_leftovers(settings, conn):
+    """Spec §5: jobs left in APPLYING from a crashed prior run must be re-queued."""
+    job_a = _seed_stuck_applying_lever(conn, company="acmeco", source_job_id="stuck-1")
+    job_b = _seed_stuck_applying_lever(conn, company="otherco", source_job_id="stuck-2")
+    worker = _build_worker(
+        settings, conn,
+        driver=_fake_driver(_make_outcome(status=ApplicationStatus.APPLIED)),
+    )
+
+    recovered = worker.recover_crashed()
+
+    assert recovered == 2
+    assert JobRepo(conn).get(job_a.id).state is JobState.QUEUED_APPLY
+    assert JobRepo(conn).get(job_b.id).state is JobState.QUEUED_APPLY
+
+
+def test_recover_crashed_is_noop_when_no_applying_leftovers(settings, conn):
+    """Idempotency: no APPLYING rows -> zero work, no errors."""
+    _seed_queued_lever(conn, company="acmeco", source_job_id="queued-only")
+    worker = _build_worker(
+        settings, conn,
+        driver=_fake_driver(_make_outcome(status=ApplicationStatus.APPLIED)),
+    )
+
+    assert worker.recover_crashed() == 0
+    # The QUEUED_APPLY job is untouched (recovery only walks APPLYING).
+    queued = JobRepo(conn).list_by_state(JobState.QUEUED_APPLY)
+    assert len(queued) == 1
+
+
+def test_run_once_auto_runs_recovery_and_drains_recovered_job(settings, conn):
+    """run_once must crash-sweep BEFORE pulling QUEUED_APPLY so the recovered job
+    flows through the same cycle (otherwise it sits out another full cycle)."""
+    stuck = _seed_stuck_applying_lever(conn, company="acmeco", source_job_id="stuck-3")
+    worker = _build_worker(
+        settings, conn,
+        driver=_fake_driver(_make_outcome(status=ApplicationStatus.APPLIED)),
+    )
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.recovered == 1
+    assert summary.applied == 1
+    assert summary.attempted == 1
+    assert JobRepo(conn).get(stuck.id).state is JobState.APPLIED
+    # The crash-sweep recovery is surfaced as a note for the dashboard / CLI.
+    assert any("crash-sweep" in n for n in summary.notes)
+
+
+def test_run_once_summary_recovered_is_zero_when_nothing_stuck(settings, conn):
+    """The summary.recovered field stays at 0 on a clean queue (no spurious notes)."""
+    _seed_queued_lever(conn, company="acmeco", source_job_id="clean-1")
+    worker = _build_worker(
+        settings, conn,
+        driver=_fake_driver(_make_outcome(status=ApplicationStatus.APPLIED)),
+    )
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.recovered == 0
+    assert not any("crash-sweep" in n for n in summary.notes)
+
+
+def test_recovery_can_be_called_without_browser_session(settings, conn):
+    """recover_crashed is sync and never touches the driver or browser — operational
+    tools (a doctor check, an 'av3 recover' command) must be able to use it without
+    booting Chrome."""
+    _seed_stuck_applying_lever(conn, company="acmeco", source_job_id="stuck-4")
+
+    # Build the worker with a driver whose `prepare` would EXPLODE if called — proving
+    # recovery doesn't touch the driver path.
+    def _bomb(*_a, **_kw):
+        raise AssertionError("driver must not run during recovery")
+
+    bomb_driver = DriverEntry(
+        listing_from_job=lambda j: _job_to_lever_listing(j), prepare=_bomb,
+    )
+    worker = ApplyWorker(
+        settings=settings,
+        conn=conn,
+        fact_bank=_bank(),
+        resume_path="/tmp/resume.pdf",
+        new_page=_new_page,
+        applicant=Applicant("Pat", "Doe", "pat@example.com", "555-0100"),
+        drivers={"lever": bomb_driver},
+    )
+
+    assert worker.recover_crashed() == 1

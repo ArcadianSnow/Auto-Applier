@@ -619,6 +619,25 @@ Junk-target Lever posting required. Record the outcome (confirmation detection,
 `resolver_inferred` rows in `events.db`, post-submit `JobState`) in this doc
 as the live-pass data point we've been chasing.
 
+## Crash-sweep landed (2026-05-29, Phase 2 (5/N))
+
+Spec §5 mandate satisfied. `ApplyWorker.recover_crashed()` walks
+`JobRepo.list_by_state(APPLYING)` and routes each leftover via
+`APPLYING → QUEUED_APPLY` (the edge already existed; just had no caller).
+`run_once()` calls it BEFORE pulling the queue so the recovered jobs flow
+through the same cycle — otherwise they'd sit out another full one. The count
+lands in `summary.recovered` and produces one human-readable Notes line.
+
+`recover_crashed()` is sync and never touches the driver path, so an
+operational tool ("doctor" check, future `av3 recover` command) can call it
+without booting a `BrowserSession`. CLI summary line now reads
+`... errors=N recovered=N dry_run=N elapsed=N.Ns`.
+
+Validation: 5 new tests in `tests_v3/test_apply_worker.py` cover the bare
+recovery method, idempotency (zero APPLYING → zero work), auto-run inside
+`run_once`, clean-queue stays at recovered=0 with no spurious notes, and the
+no-browser-required guarantee (proven with a bombing driver stub).
+
 ## Sources
 
 - [Greenhouse — Invisible reCAPTCHA](https://support.greenhouse.io/hc/en-us/articles/115005448066-Invisible-reCAPTCHA)
