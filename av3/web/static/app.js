@@ -37,7 +37,7 @@ function ago(isoTs) {
 function dashboard() {
   return {
     status: {
-      scheduler: { running: false, paused: false },
+      scheduler: { running: false, paused: false, pause_reasons: {} },
       jobs_by_state: {},
       pipeline_order: [],
       last_cycle: null,
@@ -47,6 +47,7 @@ function dashboard() {
     history: [],
     events: [],
     connState: 'connecting',
+    controlBusy: false,
     _pollTimer: null,
     _eventSource: null,
     _pollInFlight: false,
@@ -138,6 +139,68 @@ function dashboard() {
       if (state === 'REVIEW' || state === 'FAILED') return 'cell-warn';
       if (state === 'SKIPPED' || state === 'FILTERED') return 'cell-muted';
       return 'cell-normal';
+    },
+
+    /**
+     * Active pause-reason strings for the status bar. Returns the values
+     * (reason strings) so the UI doesn't need to render the source keys
+     * directly — keeps display copy under designer control instead of
+     * leaking 'manual' / 'hotkey' / 'idle' to the user.
+     */
+    pauseReasonsList() {
+      const r = this.status?.scheduler?.pause_reasons || {};
+      return Object.values(r).filter(Boolean);
+    },
+
+    /**
+     * True iff the manual source is currently holding the pause. The
+     * button label flips based on this — hotkey/idle pauses don't make
+     * the button say 'Resume' because the dashboard can't clear those
+     * (the user has to release F6 / become idle).
+     */
+    manuallyPaused() {
+      const r = this.status?.scheduler?.pause_reasons || {};
+      return Object.prototype.hasOwnProperty.call(r, 'manual');
+    },
+
+    /**
+     * POST /api/control/{pause,resume} based on current manual-pause
+     * state. Optimistically refreshes the status panel from the response
+     * so the UI updates before the next poll tick.
+     */
+    async togglePause() {
+      if (this.controlBusy) return;
+      this.controlBusy = true;
+      try {
+        const endpoint = this.manuallyPaused()
+          ? '/api/control/resume'
+          : '/api/control/pause';
+        const r = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (!r.ok) {
+          console.error('control toggle failed', r.status);
+          return;
+        }
+        const snap = await r.json();
+        // Splice the new pause state into status so the UI updates
+        // immediately. The next poll will rewrite this with the canonical
+        // server state including counts etc.
+        this.status = {
+          ...this.status,
+          scheduler: {
+            ...this.status.scheduler,
+            paused: !!snap.paused,
+            pause_reasons: snap.reasons || {},
+          },
+        };
+      } catch (e) {
+        console.error('togglePause error', e);
+      } finally {
+        this.controlBusy = false;
+      }
     },
 
     ago,

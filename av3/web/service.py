@@ -4,10 +4,12 @@ The web app's FastAPI lifespan needs to:
 
   1. **Start** the staged-worker scheduler as a background ``asyncio.Task``.
   2. **Stop** it cleanly on shutdown (task.cancel + await).
-  3. Expose a **pause flag** that the scheduler's ``pause_predicate`` reads
-     every cycle — the (3/M) ControlState replaces the simple bool with F6 +
-     idle-detect, but the wiring lands here so 3/M only changes the predicate
-     source.
+  3. Expose a **pause-source union** that the scheduler's ``pause_predicate``
+     reads every cycle. Phase 4 (3/M) replaces the (1/M) bare bool with a
+     :class:`av3.web.control.ControlState` — three independent sources
+     (``manual`` / ``hotkey`` / ``idle``) OR together behind a thread-safe
+     lock so the F6 watcher, idle poll loop, and HTTP handlers all flip the
+     same union without races.
 
 This module never builds the scheduler itself. The CLI knows how to construct
 workers + session + LLM clients; it hands us a factory that takes our pause
@@ -23,8 +25,8 @@ Tests can pass a synchronous lambda wrapped in :func:`sync_factory`.
 
 **Why a factory at all (instead of a pre-built scheduler):** the Scheduler
 constructor takes its ``pause_predicate`` immutably (one closure capture at
-build time). The service needs to *inject* a predicate that reads
-``self._paused``, which only exists after ``SchedulerService`` is
+build time). The service needs to *inject* a predicate that reads the
+:class:`ControlState`, which only exists after ``SchedulerService`` is
 instantiated. The factory closure resolves the circular ownership.
 """
 
@@ -34,6 +36,12 @@ import asyncio
 from typing import Awaitable, Callable, Protocol
 
 from av3.pipeline import Scheduler, SchedulerRunSummary
+from av3.web.control import (
+    SOURCE_HOTKEY,
+    SOURCE_MANUAL,
+    ControlState,
+    PauseSnapshot,
+)
 
 
 class AsyncSchedulerFactory(Protocol):
@@ -67,11 +75,14 @@ def sync_factory(
 class SchedulerService:
     """Manages the scheduler's lifecycle behind the FastAPI lifespan.
 
-    Phase 4 (1/M) ships:
-      * ``start()`` / ``stop()`` for the lifespan hooks
-      * ``pause()`` / ``resume()`` methods (no API endpoint yet — exposed in
-        (3/M) along with F6 + idle wiring)
-      * ``snapshot()`` for the read-only dashboard endpoints
+    Phase 4 (3/M) surface:
+      * ``start()`` / ``stop()`` for the lifespan hooks (1/M).
+      * ``pause(source=...)`` / ``resume(source=...)`` / ``toggle(source=...)``
+        — drive the :class:`ControlState` union (3/M). The legacy zero-arg
+        ``pause()`` / ``resume()`` default to the ``manual`` source so (1/M)
+        tests still pass.
+      * ``snapshot()`` for the read-only dashboard endpoints — now includes
+        the active pause-reason set.
     """
 
     def __init__(
@@ -79,20 +90,27 @@ class SchedulerService:
         factory: AsyncSchedulerFactory,
         *,
         teardown: Callable[[], Awaitable[None]] | None = None,
+        control: ControlState | None = None,
     ):
         """``factory`` builds the Scheduler inside the running event loop;
         ``teardown`` runs after ``stop()`` cancels the task, for tearing down
         resources the factory created (BrowserSession, etc.). Both are
         optional — a test service can pass ``factory=sync_factory(...)`` and
-        no teardown."""
+        no teardown.
+
+        ``control`` lets callers inject a shared :class:`ControlState` so the
+        hotkey watcher + idle watcher + HTTP handlers all flip the same
+        union. When omitted, the service builds its own — fine for tests
+        and for ``--no-scheduler`` mode where no watcher exists.
+        """
         self._factory = factory
         self._teardown = teardown
         self._scheduler: Scheduler | None = None
         self._task: asyncio.Task[SchedulerRunSummary] | None = None
-        # ``_paused`` is the v3.0 (1/M) source of truth for the pause predicate.
-        # (3/M) wraps a ControlState around this so manual + idle + hotkey all
-        # OR together cleanly. The predicate stays a simple ``bool`` here.
-        self._paused: bool = False
+        # The (1/M) bare bool became a ControlState in (3/M) — the predicate
+        # below reads ``control.is_paused()``, which OR-unions ``manual`` +
+        # ``hotkey`` + ``idle`` sources behind a thread-safe lock.
+        self._control: ControlState = control if control is not None else ControlState()
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -142,19 +160,38 @@ class SchedulerService:
 
     # ---------------------------------------------------------------- pause
 
-    def pause(self) -> None:
+    def pause(self, source: str = SOURCE_MANUAL, *, reason: str = "") -> PauseSnapshot:
         """Cooperative pause. The scheduler reads ``pause_predicate()`` once
         per cycle; the next cycle after this call returns without running
-        any stage. (3/M) replaces this with a ControlState union."""
-        self._paused = True
+        any stage.
 
-    def resume(self) -> None:
-        """Clear the pause flag. The next cycle resumes normal stage drain."""
-        self._paused = False
+        ``source`` defaults to ``manual`` so the legacy zero-arg signature
+        from (1/M) still works (it represents "the user pressed pause from
+        the dashboard"). The hotkey + idle watchers pass their own source.
+        """
+        return self._control.pause(source, reason=reason)
+
+    def resume(self, source: str = SOURCE_MANUAL) -> PauseSnapshot:
+        """Clear ``source`` from the pause set. The next cycle resumes
+        normal stage drain unless another source still holds a pause."""
+        return self._control.resume(source)
+
+    def toggle(self, source: str = SOURCE_HOTKEY, *, reason: str = "") -> PauseSnapshot:
+        """Atomic toggle for the hotkey watcher — F6 is conceptually a
+        switch, not a directional command. Default source is ``hotkey`` so
+        callers pass nothing in the common case."""
+        return self._control.toggle(source, reason=reason)
+
+    @property
+    def control(self) -> ControlState:
+        """Expose the underlying ControlState so the hotkey + idle watchers
+        + HTTP handlers all flip the same union. Read-only access via the
+        property keeps test code that pokes the predicate cleanly."""
+        return self._control
 
     @property
     def is_paused(self) -> bool:
-        return self._paused
+        return self._control.is_paused()
 
     @property
     def is_running(self) -> bool:
@@ -167,14 +204,20 @@ class SchedulerService:
     def snapshot(self) -> dict:
         """Lightweight status surface for ``/api/status``. Read-only and
         cheap to call on every request — no DB queries here."""
+        pause_snap = self._control.snapshot()
         return {
             "running": self.is_running,
-            "paused": self.is_paused,
+            "paused": pause_snap.paused,
+            # New in (3/M): the dashboard's status bar renders the set of
+            # active reasons so the user sees *why* the scheduler is paused
+            # (e.g. "F6 control-handoff + user active").
+            "pause_reasons": pause_snap.reasons,
         }
 
     # ---------------------------------------------------------------- internals
 
     def _pause_predicate(self) -> bool:
         """The closure handed to the Scheduler constructor. Reads the current
-        pause flag at call time so toggles take effect on the next cycle."""
-        return self._paused
+        pause-union flag at call time so toggles from any thread take effect
+        on the next cycle."""
+        return self._control.is_paused()

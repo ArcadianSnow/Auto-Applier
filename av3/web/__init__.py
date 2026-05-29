@@ -21,10 +21,16 @@ def create_app(
     *,
     state: WebState,
     service: SchedulerService | None = None,
+    watchers=None,
 ):
     """Thin re-export so callers don't import the module path directly. The
     real factory lives in :mod:`av3.web.app` to keep this ``__init__`` light
-    (and skip the FastAPI import until the app is actually built)."""
+    (and skip the FastAPI import until the app is actually built).
+
+    ``watchers`` (3/M) are control-handoff daemons (F6 + idle-detect) the
+    lifespan manages alongside the scheduler service. ``None`` is the test
+    default — the dashboard pause button still works without them.
+    """
     from av3.web.app import create_app as _build
 
-    return _build(state=state, service=service)
+    return _build(state=state, service=service, watchers=watchers)

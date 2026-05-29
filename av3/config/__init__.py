@@ -8,19 +8,25 @@ validates everything up front so ``doctor`` can fail fast on bad config.
 from av3.config.settings import (
     LLMConfig,
     PacingConfig,
+    RetentionConfig,
+    SchedulerConfig,
     ScoringConfig,
     ScoringWeights,
     Settings,
     TelemetryConfig,
+    WebConfig,
     load_settings,
 )
 
 __all__ = [
     "LLMConfig",
     "PacingConfig",
+    "RetentionConfig",
+    "SchedulerConfig",
     "ScoringConfig",
     "ScoringWeights",
     "Settings",
     "TelemetryConfig",
+    "WebConfig",
     "load_settings",
 ]

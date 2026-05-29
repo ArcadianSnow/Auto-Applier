@@ -206,11 +206,20 @@ class TestSchedulerService:
         asyncio.run(_go())
 
     def test_snapshot_shape(self):
+        """Snapshot keeps its (1/M) running/paused fields and gained the
+        (3/M) ``pause_reasons`` dict so the dashboard can render which
+        source(s) are pausing."""
         service, _ = _make_stub_service()
         snap = service.snapshot()
-        assert snap == {"running": False, "paused": False}
-        service.pause()
-        assert service.snapshot() == {"running": False, "paused": True}
+        assert snap["running"] is False
+        assert snap["paused"] is False
+        assert snap["pause_reasons"] == {}
+        service.pause()  # zero-arg = ``manual`` source per (3/M) compat
+        snap = service.snapshot()
+        assert snap["paused"] is True
+        # Default manual reason is the canonical "paused from dashboard"
+        # string — see ControlState._default_reason.
+        assert "manual" in snap["pause_reasons"]
 
 
 # --------------------------------------------------------------- app + endpoints

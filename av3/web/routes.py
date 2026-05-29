@@ -1,20 +1,22 @@
 """FastAPI routers — JSON API + dashboard HTML pages.
 
-Surface as of Phase 4 (2/M):
+Surface as of Phase 4 (3/M):
 
-  * ``/api/health``        — liveness probe (no DB hit; cheap)
-  * ``/api/status``        — scheduler state + job counts + last cycle summary
-  * ``/api/sources``       — per-source health (the (4/M) login-needed badge feed)
-  * ``/api/queue``         — review + queued_apply + applying lists
-  * ``/api/history``       — recent applications + outcomes joined with jobs
-  * ``/api/jobs/<id>``     — per-job detail (job + score + applications)
-  * ``/api/events``        — SSE stream of new events.db rows (live activity)
-  * ``/``                  — dashboard (3 panels + recent activity)
-  * ``/jobs/<id>``         — per-job detail page
+  * ``/api/health``           — liveness probe (no DB hit; cheap)
+  * ``/api/status``           — scheduler state + job counts + last cycle
+                                summary + active pause reasons
+  * ``/api/sources``          — per-source health (the (4/M) login-needed badge feed)
+  * ``/api/queue``            — review + queued_apply + applying lists
+  * ``/api/history``          — recent applications + outcomes joined with jobs
+  * ``/api/jobs/<id>``        — per-job detail (job + score + applications)
+  * ``/api/events``           — SSE stream of new events.db rows (live activity)
+  * ``/api/control/pause``    — POST: pause via ``manual`` source (3/M)
+  * ``/api/control/resume``   — POST: clear ``manual`` pause (3/M)
+  * ``/``                     — dashboard (3 panels + recent activity)
+  * ``/jobs/<id>``            — per-job detail page
 
-(3/M) adds the pause toggle endpoint; (4/M) adds login-on-demand; (5/M)
-adds the onboarding flow. Each lands in its own router section to keep
-diffs reviewable.
+(4/M) adds login-on-demand; (5/M) adds the onboarding flow. Each lands
+in its own router section to keep diffs reviewable.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from av3 import __version__
 from av3.db.repositories import ApplicationRepo, JobRepo, ScoreRepo
 from av3.domain.state import JobState
 from av3.sources.health import snapshot as health_snapshot
+from av3.web.control import SOURCE_MANUAL
 from av3.web.views import (
     PIPELINE_STATES,
     event_payload,
@@ -323,6 +326,78 @@ async def events_stream(
         # but harmless and right when host=0.0.0.0 sits behind one).
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ---------------------------------------------------------------- /api/control
+
+# Manual pause / resume — driven from the dashboard's status-bar toggle and
+# from any CLI / curl ergonomics. The hotkey + idle watchers flip OTHER
+# sources on the same union; the manual source is what these endpoints
+# touch so a user pressing "Pause" on the dashboard doesn't fight the
+# hotkey state when they later toggle F6.
+#
+# We deliberately don't expose an endpoint that touches the hotkey/idle
+# sources directly — those are watcher-owned, and a UI override that
+# pretends F6 is off when the watcher is still flipping it would be
+# misleading.
+
+@api_router.post("/control/pause")
+async def control_pause(request: Request) -> dict:
+    """Pause the scheduler via the ``manual`` source.
+
+    Optional JSON body: ``{"reason": "..."}`` — a short human-readable
+    string the dashboard renders in the status bar. Returns the updated
+    pause snapshot so the UI can refresh without a follow-up GET.
+
+    No service attached (read-only diagnostics mode) → 409: there's
+    nothing to pause.
+    """
+    service = _get_service(request)
+    if service is None:
+        raise HTTPException(
+            status_code=409,
+            detail="no scheduler service is attached (read-only mode)",
+        )
+    reason = await _read_optional_reason(request)
+    snap = service.pause(SOURCE_MANUAL, reason=reason)
+    return snap.to_dict()
+
+
+@api_router.post("/control/resume")
+async def control_resume(request: Request) -> dict:
+    """Clear the ``manual`` pause source. Other sources (``hotkey``,
+    ``idle``) keep their state — the scheduler stays paused if either of
+    them is still holding it, with the active reasons visible in the
+    response. That's deliberate: a user can't unpause the bot from the
+    dashboard while F6 is engaged.
+
+    No service attached → 409 (same as pause)."""
+    service = _get_service(request)
+    if service is None:
+        raise HTTPException(
+            status_code=409,
+            detail="no scheduler service is attached (read-only mode)",
+        )
+    snap = service.resume(SOURCE_MANUAL)
+    return snap.to_dict()
+
+
+async def _read_optional_reason(request: Request) -> str:
+    """Pull the optional ``reason`` field out of a JSON body without
+    forcing the client to send one (a curl ``-X POST`` with no body is
+    a valid pause request).
+
+    A malformed body is ignored — the user pressing the dashboard button
+    shouldn't get a 400 because their browser sent an empty string.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    raw = body.get("reason", "")
+    return raw if isinstance(raw, str) else ""
 
 
 # ---------------------------------------------------------------- /  (HTML)

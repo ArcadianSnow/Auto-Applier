@@ -2,6 +2,25 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ Working discipline — ALWAYS document research (read first)
+
+**The most important rule for this repo: always write investigations, research, and findings into a file
+structure you can easily read and reference — never leave them only in the conversation.** A finding that
+lives only in chat is one the next session wastes time re-deriving. Writing it down is part of "definition of
+done," like passing tests.
+
+- **Invoke the `auto-applier` skill at the start of any session** — it's the single-source-of-truth router +
+  working discipline for the v3 rebuild. For long iterative/debug work, also invoke the `unstuck` skill.
+- **Research / investigation findings →** `.claude/skills/auto-applier/research/<topic>.md`.
+- **Architecture & design decisions →** `docs/v3-architecture.md` (the v3 spec), and mirror the rationale in
+  the project memory ([[project_v3_rewrite]]).
+- When a session learns something durable, record it in the right place **before** calling the task done —
+  see the `auto-applier` skill's "How to extend this skill" section.
+
+> Note: the app is mid-rewrite to **v3** (ground-up). The sections below describe the **v2** codebase, kept
+> as reference/lessons. For v3 architecture and current decisions, the spec in `docs/v3-architecture.md` and
+> the `auto-applier` skill are authoritative.
+
 ## Project Overview
 
 **Auto Applier v2** is a Python desktop app that automates job applications across multiple platforms (LinkedIn, Indeed, Dice, ZipRecruiter, and more). It uses AI (local Ollama or free Gemini API) to score jobs against multiple resumes, pick the best resume per job, fill application forms intelligently, generate tailored cover letters, and evolve resumes over time based on skill gap patterns.

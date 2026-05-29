@@ -802,9 +802,19 @@ def prune_cmd(ephemeral_days: int | None, events_days: int | None) -> None:
 @click.option("--no-llm", is_flag=True, default=False,
               help="Skip Ollama/Gemini wiring. Filter fail-opens, score+optimize "
                    "fail-CLOSED, apply resolver uses bank + sensitive policy only.")
+@click.option("--no-hotkey", is_flag=True, default=False,
+              help="Disable the F6 control-handoff hotkey. Default is enabled "
+                   "on Windows (soft-fails on other platforms). Override the "
+                   "key in user_config.json: web.hotkey.")
+@click.option("--idle-detect/--no-idle-detect", default=None,
+              help="Override settings.web.idle_detect_enabled. When enabled, "
+                   "the scheduler auto-pauses while the user is actively "
+                   "interacting with the machine and resumes after "
+                   "settings.web.idle_threshold_s of no input.")
 def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
               quiet_hours: str | None, cycle_interval_s: float | None,
-              dry_run: bool, mode: str, no_llm: bool) -> None:
+              dry_run: bool, mode: str, no_llm: bool,
+              no_hotkey: bool, idle_detect: bool | None) -> None:
     """Run the local web UI + background worker service (spec section 11b Phase 4).
 
     The Phase 4 (1/M) entry: starts the FastAPI app on http://host:port and
@@ -963,11 +973,53 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
 
         service = SchedulerService(_factory, teardown=_teardown)
 
-    app = create_app(state=web_state, service=service)
+    # (3/M) — F6 hotkey + idle-detect watchers. Both are optional; both
+    # share the service's ControlState so manual + hotkey + idle pause
+    # sources OR cleanly in the predicate. Only attach when a service
+    # exists — a read-only diagnostics mode has nothing to pause.
+    watchers: list = []
+    if service is not None:
+        effective_hotkey_enabled = (
+            settings.web.hotkey_enabled and not no_hotkey
+        )
+        effective_idle_enabled = (
+            idle_detect if idle_detect is not None
+            else settings.web.idle_detect_enabled
+        )
+        if effective_hotkey_enabled:
+            from av3.web.hotkey import HotkeyWatcher, build_hotkey_toggle
+            watchers.append(HotkeyWatcher(
+                on_toggle=build_hotkey_toggle(service),
+                key=settings.web.hotkey,
+            ))
+        if effective_idle_enabled:
+            from av3.web.idle import IdleWatcher
+            watchers.append(IdleWatcher(
+                control=service.control,
+                idle_threshold_s=settings.web.idle_threshold_s,
+                poll_interval_s=settings.web.idle_poll_s,
+            ))
 
+    app = create_app(
+        state=web_state,
+        service=service,
+        watchers=watchers or None,
+    )
+
+    hotkey_label = (
+        settings.web.hotkey if service is not None and any(
+            type(w).__name__ == "HotkeyWatcher" for w in watchers
+        ) else "off"
+    )
+    idle_label = (
+        "on" if service is not None and any(
+            type(w).__name__ == "IdleWatcher" for w in watchers
+        ) else "off"
+    )
     click.echo(
         f"Starting av3 web UI on http://{effective_host}:{effective_port} "
-        f"(scheduler={'on' if service is not None else 'off'})"
+        f"(scheduler={'on' if service is not None else 'off'} "
+        f"hotkey={hotkey_label} idle-detect={idle_label})"
     )
 
     try:

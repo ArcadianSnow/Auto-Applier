@@ -126,7 +126,7 @@ class SchedulerConfig(BaseModel):
 
 
 class WebConfig(BaseModel):
-    """Local web app + worker service config (spec §3, §10 — Phase 4 (1/M)).
+    """Local web app + worker service config (spec §3, §10 — Phase 4).
 
     The dashboard binds to localhost by default so an unattended runner doesn't
     silently expose pipeline state to the LAN. Set ``host: "0.0.0.0"`` in
@@ -134,10 +134,32 @@ class WebConfig(BaseModel):
     browser, incl. a dedicated runner box" mode from spec §2. The port default
     (8765) is chosen to avoid the common 8000/8080 collision space; tests pass
     port=0 to let the OS pick a free port.
+
+    (3/M) adds the control-handoff knobs from spec §7a: ``hotkey_enabled`` is
+    the F6 system-level hotkey (Windows-native primary; soft-fail elsewhere),
+    and ``idle_detect_enabled`` is the OPTIONAL idle-detection companion that
+    auto-pauses while the user is actively interacting with the machine.
     """
 
     host: str = "127.0.0.1"
     port: int = 8765
+
+    # Phase 4 (3/M) — F6 control-handoff hotkey.
+    # ``hotkey_enabled`` defaults ON because (a) it's the spec default,
+    # (b) the Windows-only watcher soft-fails on non-Windows so flipping the
+    # default doesn't break anyone, and (c) the dashboard pause button still
+    # works without it.
+    hotkey_enabled: bool = True
+    hotkey: str = "F6"
+
+    # Phase 4 (3/M) — optional idle-detect.
+    # Defaults OFF: spec §7a explicitly says "*Optional* idle-detection
+    # complements [F6]." On a shared machine many users would rather the bot
+    # NOT pause on every keystroke; F6 is enough. The (5/M) onboarding wizard
+    # asks.
+    idle_detect_enabled: bool = False
+    idle_threshold_s: float = 60.0
+    idle_poll_s: float = 2.0
 
     @model_validator(mode="after")
     def _port_in_range(self) -> "WebConfig":
@@ -148,6 +170,14 @@ class WebConfig(BaseModel):
             return self
         if not (1024 <= self.port <= 65535):
             raise ValueError(f"port must be 1024..65535 (got {self.port})")
+        return self
+
+    @model_validator(mode="after")
+    def _idle_knobs_sane(self) -> "WebConfig":
+        if self.idle_threshold_s <= 0:
+            raise ValueError("idle_threshold_s must be > 0")
+        if self.idle_poll_s <= 0:
+            raise ValueError("idle_poll_s must be > 0")
         return self
 
 

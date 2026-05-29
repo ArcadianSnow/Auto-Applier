@@ -13,15 +13,24 @@
           <strong x-text="status.scheduler.running
             ? (status.scheduler.paused ? 'Paused' : 'Running')
             : 'Stopped'"></strong>
-          <span class="muted" x-show="status.last_cycle">
+          <span class="muted" x-show="pauseReasonsList().length > 0">
+            &middot; <span x-text="pauseReasonsList().join(' + ')"></span>
+          </span>
+          <span class="muted" x-show="status.last_cycle && pauseReasonsList().length === 0">
             &middot; last cycle <span x-text="status.last_cycle?.status || ''"></span>
             (<span x-text="ago(status.last_cycle?.ts)"></span>)
           </span>
-          <span class="muted" x-show="!status.last_cycle && status.scheduler.running">
+          <span class="muted" x-show="!status.last_cycle && status.scheduler.running && pauseReasonsList().length === 0">
             &middot; warming up...
           </span>
         </span>
         <span class="status-right">
+          <button class="pause-btn"
+                  x-show="status.scheduler.running"
+                  :disabled="controlBusy"
+                  @click="togglePause()"
+                  :title="manuallyPaused() ? 'Click to resume the scheduler' : 'Click to pause the scheduler'"
+                  x-text="manuallyPaused() ? 'Resume' : 'Pause'"></button>
           <span class="muted" x-text="connState"></span>
         </span>
       </div>

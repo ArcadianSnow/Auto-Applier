@@ -279,3 +279,168 @@ because it can't actually be triggered.
 them. (3/M) lands `/api/control/pause` + `/api/control/resume` and wires
 the dashboard's status bar to flip via Alpine. The (1/M) pause-predicate
 plumbing already supports it; the missing piece is the HTTP verb.
+
+---
+
+## Phase 4 (3/M) — F6 hotkey + idle-detect + ControlState landed
+
+The (1/M) bare `bool` pause flag became a thread-safe **union of three
+sources** — `manual`, `hotkey`, `idle` — so the dashboard button, the
+F6 system hotkey, and the optional idle-detector all OR cleanly behind
+one predicate. `/api/control/pause` + `/api/control/resume` ship; the
+status bar grew a real Pause/Resume button + a "Paused — F6 control-handoff
++ user active 3s ago" reason readout. `tests_v3/test_web_control.py`
+(+36 tests; full v3 suite 433 green, 11 deselected by design). **Spec
+§7a + §11b Phase 4 bullet 4 satisfied.**
+
+### New surface
+
+| Module | Purpose |
+|---|---|
+| `av3/web/control.py` | `ControlState` — thread-safe OR union, three sources, immutable `PauseSnapshot` for the API |
+| `av3/web/hotkey.py` | `HotkeyWatcher` — Win32 `RegisterHotKey` on a daemon thread; soft-fails non-Win32 |
+| `av3/web/idle.py` | `IdleWatcher` — `GetLastInputInfo` poll on a daemon thread; soft-fails non-Win32 |
+| `av3/web/service.py` | Refactored: `_paused: bool` → `_control: ControlState`; `pause(source=...)`, `resume(source=...)`, `toggle(source=...)` |
+| `av3/web/app.py` | `create_app(... watchers=...)` — lifespan starts watchers AFTER service, stops them BEFORE service teardown |
+| `POST /api/control/pause` | Manual pause + optional `{"reason": ...}` body |
+| `POST /api/control/resume` | Clears `manual` source only — F6 / idle pauses keep going |
+| `/api/status` | Now includes `pause_reasons: {source: reason_string}` |
+
+### Why a union object (and not three bools)
+
+Three pause sources fire from three different threads:
+
+* `manual` — FastAPI request handler (asyncio loop)
+* `hotkey` — Win32 message loop on a daemon thread
+* `idle`   — poll loop on another daemon thread
+
+A naïve "`if self._manual or self._hotkey or self._idle:`" predicate has
+a two-flag race window: thread A clears `_manual` while thread B is
+reading `_hotkey`. The `ControlState` centralizes the lock in one place
+so the predicate is atomic w.r.t. every mutation. Each mutator returns
+the resulting `PauseSnapshot` so the HTTP layer can echo the new state
+without a follow-up GET.
+
+### Why Win32 `RegisterHotKey` (and not `pynput` / `keyboard`)
+
+Spec §7a is explicit: *"a system-level key hook so it works even while
+the browser has focus."* That rules out per-window listeners. The two
+common Python options are:
+
+* **`keyboard` (BoppreH)** — Windows OK without admin, but **requires
+  root on Linux** and is incompatible with macOS in modern releases.
+  Last release 2022.
+* **`pynput`** — cleaner cross-platform story but ~1 MB of Python +
+  pyobjc on macOS for one keypress.
+
+Win32 `RegisterHotKey` via `ctypes`:
+
+* Zero new dependency. `ctypes` ships with Python.
+* Non-elevated integrity — no admin / no UAC.
+* The canonical system-wide hotkey API on Windows (Win+L uses it).
+* Soft-fail story matches the spec: non-Windows → `start()` returns
+  `False`, the dashboard pause button still works, and the spec
+  itself says *"On a dedicated runner box, neither matters — the bot
+  owns the screen"*.
+
+The watcher runs a message loop on a **daemon thread** because
+`RegisterHotKey` requires the registering thread to dispatch
+`WM_HOTKEY`. Daemon means a stuck loop never blocks process exit if
+teardown hits an edge case; `WM_QUIT` is the clean stop signal.
+
+### Why Win32 `GetLastInputInfo` (and not a global keyboard / mouse hook)
+
+The idle detector needs *system-wide* "any input" — keyboard or mouse,
+in our process or somebody else's. `GetLastInputInfo` returns the
+tick-count of the last system input, which is exactly the signal we
+want. The alternatives (`SetWindowsHookEx`, raw input registration)
+would force us to inspect every key/mouse event in the system to
+update a timer — heavy-handed for a 60-second threshold check.
+
+The reader is a static module function (`_win32_idle_seconds`) so tests
+inject a fake `read_idle_seconds` callable; production picks up the
+Win32 default. macOS / Linux backends can swap in later via the same
+seam (v3.1 likely).
+
+### Semantic: user-active → bot paused
+
+The idle source pauses the scheduler when `idle_seconds < threshold` —
+i.e. *the opposite* of what "idle" sounds like. The naming is awkward
+but matches the dashboard's "Paused — user active" reason copy and the
+spec's "auto-pause on input" language. We pay the cognitive cost once
+in the docstring instead of inverting the source name and breaking the
+"every pause source has a positive pause meaning" pattern.
+
+### Why resume(manual) doesn't clear hotkey
+
+The dashboard's Resume button POSTs `/api/control/resume`, which clears
+**only** the `manual` source. If F6 is engaged or the user is actively
+typing, the scheduler stays paused — visible via the lingering reason
+in the status bar. Otherwise the UI would let the user "un-do" their
+own F6 press from the dashboard, which surprises them when the next
+cycle still pauses (hotkey is still ON). Each source has one
+authoritative writer.
+
+### Lifespan ordering: watchers between service and shutdown
+
+```
+startup:  service.start()  →  watchers[*].start()
+shutdown: watchers[*].stop()  →  service.stop()
+```
+
+* **Watchers AFTER service on startup** so a watcher firing during init
+  can't race with a half-constructed scheduler.
+* **Watchers BEFORE service on shutdown** so a watcher can't fire a
+  final pause/resume against a torn-down service.
+* Watcher exceptions are swallowed at both ends — losing F6 is better
+  than failing app boot or stalling teardown.
+
+### Edge cases covered (see `tests_v3/test_web_control.py`)
+
+| Concern | Test |
+|---|---|
+| Union pauses iff any source is paused | `test_multi_source_union` |
+| Snapshot is an immutable copy (no leak) | `test_snapshot_is_immutable_copy` |
+| Unknown source raises ValueError → 400 | `test_unknown_source_rejected` |
+| Last reason wins on idempotent re-pause | `test_pause_is_idempotent_last_reason_wins` |
+| Thread-safety under contention | `test_thread_safety_smoke` |
+| Legacy zero-arg `pause()` = manual | `test_legacy_zero_arg_pause_uses_manual_source` |
+| Predicate reads union live, not at build | `test_predicate_reads_union_live` |
+| External writer (shared control) visible | `test_shared_control_state_visible_to_external_writer` |
+| /api/control/pause flips manual source | `test_pause_endpoint_flips_manual_source` |
+| Empty body is a valid pause | `test_pause_endpoint_accepts_empty_body` |
+| Resume(manual) keeps hotkey pause | `test_resume_only_clears_manual_not_hotkey` |
+| /api/status surfaces pause reasons | `test_status_endpoint_surfaces_pause_reasons` |
+| 409 without service (read-only mode) | `test_endpoints_409_without_service` |
+| Hotkey non-Windows soft-fail | `test_non_windows_soft_fail` |
+| Hotkey unknown key soft-fail | `test_unknown_key_soft_fail` |
+| Hotkey stop without start safe | `test_stop_without_start_is_safe` |
+| F6 toggle source = hotkey (not manual) | `test_build_hotkey_toggle_targets_hotkey_source` |
+| Idle pauses on user active | `test_pauses_when_user_recently_active` |
+| Idle resumes after threshold | `test_resumes_when_user_goes_idle` |
+| Idle stop releases lingering pause | `test_stop_clears_lingering_pause` |
+| Idle read error doesn't kill loop | `test_read_error_does_not_kill_loop` |
+| Lifespan boots + tears down watchers | `test_lifespan_starts_and_stops_watchers` |
+| Watcher start error doesn't fail boot | `test_lifespan_swallows_watcher_start_errors` |
+
+### What's NOT in this sub-phase
+
+* **Login-on-demand UX.** `/api/sources` already shows the badge data;
+  the "Log in" button + headed-browser launch is (4/M).
+* **Onboarding wizard.** F6 + idle-detect config (`web.hotkey`,
+  `web.idle_detect_enabled`, etc.) is hand-edit-only until (5/M) ships
+  the wizard panel that asks.
+* **One-click launcher.** Ships `.cmd` wrapper in (6/M).
+* **macOS / Linux idle-detect.** Soft-fails today; CGEventSource +
+  XScreenSaverQueryInfo backends are a v3.1 ask if a non-Windows user
+  needs the feature.
+* **Hotkey reconfiguration without restart.** Changing the key requires
+  restarting `av3 serve` so the watcher re-registers. The (5/M)
+  onboarding wizard can collect this and prompt for the restart.
+
+### Carry-over: onboarding-collected hotkey + idle preferences
+
+The watchers respect `settings.web.hotkey` / `idle_detect_enabled` /
+`idle_threshold_s` already; (5/M) wires the onboarding wizard to
+populate those into `user_config.json`. No code change needed in (3/M)
+— the seam exists, it's UI-only follow-through.
