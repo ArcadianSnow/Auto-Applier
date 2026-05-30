@@ -164,3 +164,154 @@ FROM events WHERE platform IS NOT NULL GROUP BY stage, platform ORDER BY stage;
 
 Not worth shipping until a real operator workflow asks for it; one of
 those things to remember exists, not to build proactively.
+
+---
+
+## Phase 5 (2/M) — telemetry mirror queue + categorized scrubbers landed
+
+Client-side spool for the opt-in remote mirror (spec §9). When telemetry
+is **opted in**, `EventSink.emit` now also enqueues a category-scrubbed
+payload into a `mirror_queue` table inside `events.db`, for later
+out-of-band drainage by the Phase 5 (4/M) relay client. The HTTP POST
+itself is **not** in this sub-phase. 39 new tests; full v3 suite **568
+green**.
+
+### New surface
+
+| Surface | Purpose |
+|---|---|
+| `MirrorQueue` (`av3/telemetry/mirror.py`) | The spool. enqueue / next_due / mark_delivered / mark_failed / pending_count / prune_delivered |
+| `MirrorPolicy` (`av3/telemetry/mirror.py`) | Frozen dataclass holding identity (user_id) + opt-in state. Attached to the sink at startup |
+| `user_id_from_handle(handle)` | `sha256(handle)[:10]` — the §9 attribution mechanism |
+| `scrub_error_event(payload)` | Category scrubber for §9 (a) error/critical events |
+| `scrub_inferred_answer_event(payload)` | Category scrubber for §9 (b) inferred-answer events |
+| `EventSink.attach_mirror(policy)` / `detach_mirror()` | Sink-side opt-in hook |
+| `attach_mirror_from_settings(sink, settings)` | The CLI one-liner; called via `_install_sink(settings)` everywhere |
+
+### Load-bearing design decisions to remember
+
+1. **Single `mirror_queue` table inside `events.db` — not a column on
+   `events`, not a JSONL spool.**
+   * Same DB as the event row → atomic enqueue on the same connection /
+     WAL, no second persistence layer to corrupt independently.
+   * Separate table (not `mirror_state` on `events`) because `events` is
+     high-write append-mostly and a column update would have the drainer
+     constantly UPDATEing old rows, fighting WAL page reuse. A small hot
+     queue table keeps the drainer's scan tiny.
+   * Not JSONL because (a) composability with future `cli stats`
+     `mirror_pending`, (b) the relay (4/M) only needs one SQLite
+     connection, and (c) JSONL would need its own append-lock and reader.
+
+2. **Category scrubbers are at the *structured-field* level, not just
+   text.** §9 (a) and (b) have different allow-lists. The error scrubber
+   re-keys `error_msg` → `scrubbed_error_msg` after running the text
+   `scrub()`; the inferred-answer scrubber has **no `answer` field at
+   all** — even if a regression accidentally passes one, the scrubber's
+   allow-list drops it. That "the schema cannot carry the answer" is the
+   most load-bearing test in `test_mirror_queue.py`
+   (`test_answer_value_is_dropped_even_if_passed`).
+
+3. **EEO inferred-answer rows do not mirror at all (§8d defence in
+   depth).** The apply worker already filters them upstream
+   (`_mirror_inferred_resolutions`), but `scrub_inferred_answer_event`
+   returns `{}` if `category == "eeo"` and `MirrorQueue.enqueue` returns
+   `None` on empty scrubbed payload, so a regression upstream still cannot
+   leak an EEO row to the queue.
+
+4. **Identity computed once, at policy construction.**
+   `MirrorPolicy.from_settings()` calls `user_id_from_handle(handle)` so
+   the raw handle is referenced exactly once at startup and otherwise lives
+   only in `TelemetryConfig.handle` on disk. The queue stores the
+   short-hex `user_id`, never the raw name.
+
+5. **Opt-in gating is single-point.** `EventSink.emit` mirrors only when
+   `mirror_policy is not None and mirror_policy.enabled` is True.
+   `attach_mirror_from_settings` builds the policy from
+   `settings.telemetry` so the default (`enabled=False`) keeps the
+   mirror cold. The data layer (`MirrorQueue`) is oblivious to settings —
+   the caller decides when to attach.
+
+6. **`enabled=False` policy is still attached.** This lets a future
+   `cli telemetry status` introspect identity ("you'd send as
+   `a3f9c1d204`") without flipping sending on. The sink simply returns
+   early in `_maybe_mirror`.
+
+7. **Backoff ladder is hardcoded (0/30s/2m/10m/1h/6h), top step reused
+   indefinitely.** No exponential overflow risk. Pending rows are
+   retried forever (bounded only by `prune_delivered`); delivered rows
+   are kept long enough for one audit window then pruned.
+
+8. **The HTTP relay is (4/M).** This sub-phase ships ONLY the spool +
+   the drainage API (`next_due` / `mark_delivered` / `mark_failed`). The
+   relay client and `cli telemetry on|off|status` UX land in subsequent
+   sub-phases. No outbound network call is reachable from this sub-phase's
+   code.
+
+### Edge cases covered (see `tests_v3/test_mirror_queue.py`)
+
+| Concern | Test |
+|---|---|
+| Error scrubber matches the §9 (a) shape | `test_shape_matches_spec` |
+| Error msg is text-scrubbed (PII, paths) | `test_error_msg_is_pii_scrubbed` |
+| Unknown keys dropped from error payload | `test_unknown_keys_are_dropped` |
+| `None`-valued fields stripped from wire payload | `test_none_values_stripped` |
+| Overlong `error_type` truncated | `test_long_error_type_truncated` |
+| Inferred-answer scrubber matches the §9 (b) shape | `test_shape_matches_spec` |
+| **Answer value never appears even if caller passes one** | `test_answer_value_is_dropped_even_if_passed` |
+| EEO inferred-answer row drops entirely | `test_eeo_category_drops_row_entirely` |
+| Question text is PII-scrubbed | `test_question_text_is_pii_scrubbed` |
+| Unknown keys dropped from answer payload | `test_unknown_keys_are_dropped` |
+| `user_id_from_handle` stable + 10-char + whitespace-normalized | `TestUserIdFromHandle::*` |
+| Enqueue persists scrubbed payload + delivered_at NULL | `test_enqueue_error_persists_scrubbed_payload` |
+| EEO inferred-answer enqueue returns None, writes nothing | `test_enqueue_eeo_inferred_answer_returns_none` |
+| Unknown category raises ValueError | `test_enqueue_unknown_category_raises` |
+| `next_due` returns oldest first (chronological drain) | `test_next_due_returns_oldest_first` |
+| `next_due` honors limit | `test_next_due_respects_limit` |
+| `next_due` skips delivered rows | `test_next_due_skips_delivered` |
+| `next_due` skips not-yet-due rows | `test_next_due_skips_not_yet_due` |
+| `mark_failed` bumps attempts + reschedules | `test_mark_failed_bumps_attempts_and_pushes_next_retry` |
+| `mark_failed` backoff caps at top step (no overflow) | `test_mark_failed_caps_backoff_at_top_step` |
+| `mark_delivered` clears `last_error` | `test_mark_delivered_clears_last_error` |
+| `mark_failed` truncates long reason | `test_mark_failed_truncates_long_reason` |
+| `pending_count` / `delivered_count` | `test_pending_and_delivered_counts` |
+| `prune_delivered` deletes delivered, keeps pending | `test_prune_delivered_only` |
+| **No policy → no mirror** (gating) | `test_no_policy_attached_writes_locally_only` |
+| **Disabled policy → no mirror** (gating) | `test_policy_disabled_writes_locally_only` |
+| Enabled policy mirrors errors with user_id + app_version | `test_policy_enabled_mirrors_error` |
+| Enabled policy mirrors resolver_inferred → answer absent | `test_policy_enabled_mirrors_resolver_inferred` |
+| status=ok non-resolver events do NOT mirror | `test_status_ok_non_resolver_does_not_mirror` |
+| status=skip events do NOT mirror | `test_status_skip_does_not_mirror` |
+| `detach_mirror` silences subsequent emits | `test_detach_mirror_silences_subsequent_emits` |
+| EEO resolver_inferred → dropped even via emit path | `test_resolver_inferred_with_eeo_category_does_not_mirror` |
+| `attach_mirror_from_settings` with disabled telemetry | `test_disabled_telemetry_attaches_disabled_policy` |
+| `attach_mirror_from_settings` with enabled+handle | `test_enabled_telemetry_with_handle_attaches_user_id` |
+| Enabled without handle → `user_id="anonymous"` | `test_enabled_without_handle_falls_back_to_anonymous` |
+
+### Why `_next_retry_iso` uses `isoformat(timespec="seconds")` (not `strftime`)
+
+First version used `strftime("%Y-%m-%dT%H:%M:%S")` and broke immediately
+because `utcnow_iso()` emits the `+00:00` offset (Python's
+`isoformat` always includes the tz on a tz-aware datetime). The fix is
+to use `isoformat(timespec="seconds")` so `next_retry_at` has the SAME
+shape as `enqueued_at` (and as every other timestamp `EventSink.emit`
+writes), so SQL lexicographic compare in
+`WHERE next_retry_at <= ?` works without a format mismatch.
+
+The `--since` parser in `av3 cli main` uses `strftime` without the
+offset — that's intentional and safe there: lexicographically a string
+without `+00:00` sorts *before* the same time with `+00:00`, so
+`ts >= cutoff_no_offset` matches all real events with the offset
+suffix. That asymmetry is a (1/M) decision; we don't need to fix it,
+just remember it.
+
+### What's NOT in this sub-phase
+
+* **HTTP relay client.** Drainage iterator that walks `next_due()`,
+  POSTs to the relay, calls `mark_delivered` / `mark_failed`. Phase 5 (4/M).
+* **`cli telemetry on|off|status`.** The user-facing opt-in toggle. (3/M).
+* **`cli export-diagnostics`.** Bundles diagnostics tarball. (3/M).
+* **`cli stats` showing `mirror_pending`.** The plumbing exists
+  (`MirrorQueue.pending_count()`) but the CLI surface doesn't add a
+  column yet — no point until (4/M) makes "pending" meaningful.
+* **Owner-hosted Cloudflare Worker relay + Turso write token.** (4/M).
+* **Doctor relay-reachability check.** (4/M).

@@ -4,6 +4,12 @@ Every ``@stage`` emits start/ok/error/skip rows here, into a SEPARATE ``events.d
 the high-write event log never contends with app.db and can be pruned on its own cadence.
 ``cli errors`` / ``cli stats`` (and any debugging session) read straight from SQL — no
 log files. The opt-in Turso mirror (Phase 5) consumes a scrubbed subset of these rows.
+
+(2/M) adds the mirror-queue spool — :meth:`attach_mirror` wires in a
+:class:`MirrorPolicy` + :class:`MirrorQueue` and, while attached and
+``policy.enabled`` is True, :meth:`emit` enqueues a category-scrubbed payload
+alongside the local row. Detached or disabled → :meth:`emit` is unchanged. The
+HTTP relay client lands in Phase 5 (4/M); this sub-phase ships the spool only.
 """
 
 from __future__ import annotations
@@ -13,6 +19,7 @@ import sqlite3
 from pathlib import Path
 
 from av3.domain.models import utcnow_iso
+from av3.telemetry.mirror import MirrorPolicy, MirrorQueue
 
 _EVENTS_DDL = """
 CREATE TABLE IF NOT EXISTS events (
@@ -47,6 +54,22 @@ class EventSink:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=30000")
         self.conn.executescript(_EVENTS_DDL)
+        # Mirror queue lives in the same DB so enqueue is atomic with the event row;
+        # the table DDL is idempotent. The policy stays detached until configured.
+        self.mirror_queue: MirrorQueue = MirrorQueue(self.conn)
+        self.mirror_policy: MirrorPolicy | None = None
+
+    def attach_mirror(self, policy: MirrorPolicy) -> None:
+        """Install the opt-in mirror policy. With ``policy.enabled`` False this is
+        still a no-op at :meth:`emit` — attaching is cheap and lets the dashboard
+        / `cli telemetry status` introspect identity even when sending is off.
+        """
+        self.mirror_policy = policy
+
+    def detach_mirror(self) -> None:
+        """Drop the mirror policy. After this call, :meth:`emit` writes locally
+        only (the default). Idempotent."""
+        self.mirror_policy = None
 
     def emit(
         self,
@@ -61,18 +84,69 @@ class EventSink:
         error_msg: str | None = None,
         context: dict | None = None,
     ) -> int:
-        """Write one event row (full local detail). Returns the row id."""
+        """Write one event row (full local detail). Returns the row id.
+
+        When a :class:`MirrorPolicy` is attached AND ``policy.enabled`` is True,
+        also enqueue a scrubbed payload for the opt-in remote relay. The
+        category is inferred from ``status``/``stage``; categories we don't
+        recognize don't mirror at all.
+        """
+        ts = utcnow_iso()
         cur = self.conn.execute(
             """INSERT INTO events (run_id, ts, stage, platform, job_id, status,
                    duration_ms, error_type, error_msg, context_json)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (
-                run_id, utcnow_iso(), stage, platform, job_id, status,
+                run_id, ts, stage, platform, job_id, status,
                 duration_ms, error_type, error_msg,
                 json.dumps(context) if context else None,
             ),
         )
-        return cur.lastrowid
+        row_id = cur.lastrowid
+        self._maybe_mirror(
+            ts=ts, stage=stage, status=status, platform=platform,
+            error_type=error_type, error_msg=error_msg, context=context,
+        )
+        return row_id
+
+    def _maybe_mirror(
+        self, *, ts: str, stage: str, status: str, platform: str | None,
+        error_type: str | None, error_msg: str | None, context: dict | None,
+    ) -> None:
+        """Dispatch to the right mirror category if telemetry is opted in.
+
+        Single point that knows which event shapes belong to which §9 mirror
+        category — keeps the rule discoverable and easy to extend.
+        """
+        policy = self.mirror_policy
+        if policy is None or not policy.enabled:
+            return
+        if status == "error":
+            self.mirror_queue.enqueue(
+                "error",
+                {
+                    "user_id": policy.user_id,
+                    "app_version": policy.app_version,
+                    "stage": stage,
+                    "platform": platform,
+                    "error_type": error_type,
+                    "error_msg": error_msg,
+                    "ts": ts,
+                },
+            )
+            return
+        if stage == "resolver_inferred" and status == "ok" and context:
+            self.mirror_queue.enqueue(
+                "inferred_answer",
+                {
+                    "user_id": policy.user_id,
+                    "question_text": context.get("question"),
+                    "category": context.get("category"),
+                    "confidence": context.get("confidence"),
+                    "outcome": context.get("outcome"),
+                    "ts": ts,
+                },
+            )
 
     def recent(self, limit: int = 50) -> list[sqlite3.Row]:
         return self.conn.execute(

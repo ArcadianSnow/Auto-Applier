@@ -7,7 +7,17 @@ tests point it at a temp ``events.db``.
 
 from __future__ import annotations
 
-from av3.telemetry.scrub import scrub
+from av3.telemetry.mirror import (
+    MirrorPolicy,
+    MirrorQueue,
+    QueuedMirrorRow,
+    user_id_from_handle,
+)
+from av3.telemetry.scrub import (
+    scrub,
+    scrub_error_event,
+    scrub_inferred_answer_event,
+)
 from av3.telemetry.sink import EventSink
 
 _sink: EventSink | None = None
@@ -37,4 +47,32 @@ def reset_sink() -> None:
     _sink = None
 
 
-__all__ = ["EventSink", "configure_sink", "get_sink", "reset_sink", "scrub"]
+def attach_mirror_from_settings(sink: EventSink, settings) -> MirrorPolicy:
+    """Build a :class:`MirrorPolicy` from ``settings.telemetry`` and attach it.
+
+    Returns the policy for callers that want to introspect it (e.g. the
+    ``cli telemetry status`` command in 3/M). Safe to call whether or not
+    telemetry is enabled — ``policy.enabled=False`` keeps :meth:`EventSink.emit`
+    silent on the mirror path.
+    """
+    from av3 import __version__ as _app_version
+
+    policy = MirrorPolicy.from_settings(settings.telemetry, _app_version)
+    sink.attach_mirror(policy)
+    return policy
+
+
+__all__ = [
+    "EventSink",
+    "MirrorPolicy",
+    "MirrorQueue",
+    "QueuedMirrorRow",
+    "attach_mirror_from_settings",
+    "configure_sink",
+    "get_sink",
+    "reset_sink",
+    "scrub",
+    "scrub_error_event",
+    "scrub_inferred_answer_event",
+    "user_id_from_handle",
+]

@@ -23,11 +23,22 @@ from av3.config import load_settings
 from av3.db import init_app_db
 from av3.doctor import Status, fail_count, run_doctor
 from av3.db.repositories import JobRepo
-from av3.telemetry import EventSink, configure_sink
+from av3.telemetry import EventSink, attach_mirror_from_settings, configure_sink
 
 # ASCII-only markers — the Windows console (cp1252) can't encode unicode glyphs and
 # raises UnicodeEncodeError. This is dev tooling; reliability beats prettiness.
 _GLYPH = {Status.PASS: "+", Status.WARN: "!", Status.FAIL: "x"}
+
+
+def _install_sink(settings) -> EventSink:
+    """One-liner used by every worker-side CLI command: open the events.db sink,
+    install it as the process-global sink (so ``@stage`` writes through it),
+    and attach the opt-in mirror policy. The policy is a no-op when telemetry
+    is disabled, so this is safe to call unconditionally.
+    """
+    sink = configure_sink(EventSink(settings.events_db_path))
+    attach_mirror_from_settings(sink, settings)
+    return sink
 
 
 @click.group()
@@ -102,7 +113,7 @@ def survey(gh_tokens: str, lever_sites: str, ashby_slugs: str, max_jobs: int) ->
 
     settings = load_settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    configure_sink(EventSink(settings.events_db_path))
+    _install_sink(settings)
 
     def _split(s: str) -> list[str]:
         return [x.strip() for x in s.split(",") if x.strip()]
@@ -217,7 +228,7 @@ def apply(once: bool, limit: int | None, source: str | None,
 
     bank = FactBank.load(fact_bank_path)
     conn = init_app_db(settings.app_db_path)
-    configure_sink(EventSink(settings.events_db_path))
+    _install_sink(settings)
 
     drivers = default_drivers()
     if source:
@@ -325,7 +336,7 @@ def filter_cmd(once: bool, limit: int | None, threshold: float, no_llm: bool) ->
 
     bank = FactBank.load(fact_bank_path)
     conn = init_app_db(settings.app_db_path)
-    configure_sink(EventSink(settings.events_db_path))
+    _install_sink(settings)
 
     # Embed client is HTTP-lazy: constructor doesn't touch the network, so a down
     # Ollama just surfaces at run time and the worker fail-opens per-job.
@@ -411,7 +422,7 @@ def score_cmd(once: bool, limit: int | None, no_llm: bool) -> None:
 
     bank = FactBank.load(fact_bank_path)
     conn = init_app_db(settings.app_db_path)
-    configure_sink(EventSink(settings.events_db_path))
+    _install_sink(settings)
 
     # LLM client is HTTP-lazy: constructor doesn't touch the network, so a down
     # Ollama just surfaces at run time and the worker fail-closes per-job.
@@ -501,7 +512,7 @@ def optimize_cmd(once: bool, limit: int | None, no_llm: bool) -> None:
 
     bank = FactBank.load(fact_bank_path)
     conn = init_app_db(settings.app_db_path)
-    configure_sink(EventSink(settings.events_db_path))
+    _install_sink(settings)
 
     # Ensure the artifacts dir exists - the worker's renderer mkdirs the
     # generated/ subdir, but the parent must exist for that to chain.
@@ -624,7 +635,7 @@ def run_cmd(max_cycles: int | None, quiet_hours: str | None,
 
     bank = FactBank.load(fact_bank_path)
     conn = init_app_db(settings.app_db_path)
-    configure_sink(EventSink(settings.events_db_path))
+    _install_sink(settings)
 
     settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
 
@@ -754,7 +765,7 @@ def prune_cmd(ephemeral_days: int | None, events_days: int | None) -> None:
 
     settings = load_settings()
     conn = init_app_db(settings.app_db_path)
-    configure_sink(EventSink(settings.events_db_path))
+    _install_sink(settings)
 
     eff_eph = ephemeral_days if ephemeral_days is not None else settings.retention.ephemeral_days
     eff_evt = events_days if events_days is not None else settings.retention.events_days
@@ -853,7 +864,7 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
     effective_port = port if port is not None else settings.web.port
 
     conn = init_app_db(settings.app_db_path)
-    configure_sink(EventSink(settings.events_db_path))
+    _install_sink(settings)
 
     web_state = WebState(
         settings=settings,
@@ -1386,7 +1397,7 @@ def backup_cmd() -> None:
     from av3.pipeline.retention import run_backup_cycle
 
     settings = load_settings()
-    configure_sink(EventSink(settings.events_db_path))
+    _install_sink(settings)
     settings.backups_dir.mkdir(parents=True, exist_ok=True)
 
     summary = run_backup_cycle(settings)
