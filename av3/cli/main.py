@@ -1571,6 +1571,60 @@ def export_diagnostics_cmd(raw: bool, error_limit: int) -> None:
     )
 
 
+@cli.group("mirror")
+def mirror_group() -> None:
+    """Drain / manage the opt-in telemetry mirror queue (spec §9, Phase 5 4/M)."""
+
+
+@mirror_group.command("drain")
+@click.option("--limit", type=int, default=50, show_default=True,
+              help="Max queued rows to POST this pass. The queue is durable; "
+                   "undelivered rows retry on the next drain.")
+@click.option("--timeout-s", type=float, default=10.0, show_default=True,
+              help="Per-request HTTP timeout to the relay.")
+def mirror_drain_cmd(limit: int, timeout_s: float) -> None:
+    """POST queued, scrubbed telemetry rows to the owner-hosted relay (spec §9).
+
+    The out-of-band drainer: schedule it on your own cron / Task Scheduler so a
+    slow relay never blocks the pipeline. Gated — does nothing unless telemetry
+    is enabled AND a relay_url is set. Always exits 0 on transient relay failure
+    (rows retry via the backoff ladder); exits 2 only on a config problem.
+    """
+    from av3.telemetry.client import MirrorClient
+
+    settings = load_settings()
+
+    if not settings.telemetry.enabled:
+        click.echo("telemetry disabled — nothing to send (`av3 telemetry on` to enable).")
+        return
+    if not settings.telemetry.relay_url:
+        click.echo("  x FAIL no relay_url set", err=True)
+        click.echo(
+            "        fix -> `av3 telemetry on --relay-url https://<your-relay>`",
+            err=True,
+        )
+        sys.exit(2)
+
+    sink = EventSink(settings.events_db_path)
+    try:
+        client = MirrorClient(
+            sink.mirror_queue, settings.telemetry.relay_url, timeout_s=timeout_s
+        )
+        result = client.drain(limit=limit)
+        pending = sink.mirror_queue.pending_count()
+    finally:
+        sink.close()
+
+    click.echo(
+        f"drained attempted={result.attempted} delivered={result.delivered} "
+        f"failed={result.failed} still_pending={pending}"
+    )
+    # Always exit 0: a failed POST is a transient REMOTE condition (relay redeploy,
+    # network blip), not a local error, and the backoff ladder retries it. Failing
+    # here would flap a user's cron alert on every brief relay outage. A genuine
+    # config problem (no relay_url) already exited 2 above.
+
+
 @cli.command("backup")
 def backup_cmd() -> None:
     """Snapshot app.db + events.db; rotate older snapshots (spec section 4).

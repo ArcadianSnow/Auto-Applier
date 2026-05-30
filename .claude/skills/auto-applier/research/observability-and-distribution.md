@@ -405,3 +405,88 @@ green** (11 deselected by design).
   happens until (4/M).
 * **Owner-hosted Cloudflare Worker relay + Turso write token.** (4/M).
 * **Doctor relay-reachability check.** (4/M).
+
+---
+
+## Phase 5 (4/M) — relay client + drainer + Cloudflare Worker template + doctor check landed
+
+Closes the telemetry loop: the queue from (2/M) now has a way OUT. The
+owner-hosted relay (template) holds the Turso write token; the client drainer
+POSTs scrubbed rows to it out-of-band; doctor pings its `/health`. 13 new tests;
+full v3 suite **592 green** (11 deselected by design).
+
+### New surface
+
+| Surface | Purpose |
+|---|---|
+| `MirrorClient` (`av3/telemetry/client.py`) | Drains a `MirrorQueue`: `next_due → POST → mark_delivered/mark_failed`. Pluggable POST transport (httpx default, mockable) |
+| `DrainResult` | `{attempted, delivered, failed}` + `all_delivered` |
+| `av3 mirror drain [--limit N] [--timeout-s S]` | One-shot out-of-band drain. Gated on telemetry.enabled + relay_url |
+| `doctor.check_relay_reachable` | `GET {relay}/health` when telemetry on; PASS off, WARN if no url / unreachable |
+| `relay/worker.js` + `wrangler.toml` + `schema.sql` + `README.md` | Deployable Cloudflare Worker relay template (Turso token in env, re-scrub, KV rate-limit) |
+
+### Load-bearing design decisions to remember
+
+1. **The drainer is a standalone one-shot, NOT a synchronous pipeline step.**
+   Spec §9: "out-of-band so a slow relay never blocks the pipeline." Wiring HTTP
+   into the scheduler's synchronous `_maintenance` hook would put relay latency
+   on the apply loop's critical path. So `av3 mirror drain` is a separate command
+   the user crons (same cheap-rerun shape as `av3 backup` / `av3 prune`). An
+   integrated async drain *tick* (own cancellable task + hard time budget) is a
+   deliberate later refinement — the queue is durable and backoff is bounded, so
+   nothing is lost draining on an external cadence. **This was the (4/M) open
+   choice ("separate tick or one-shot CLI"); resolved to the CLI for v3.0 because
+   it's the only option that *structurally* can't block the loop.**
+
+2. **`mirror drain` always exits 0 on transient relay failure.** A failed POST is
+   a remote condition (redeploy, network blip), not a local error; the backoff
+   ladder retries it. Exiting non-zero would flap the user's cron alert on every
+   brief outage. Only a genuine *config* problem (no relay_url) exits 2. Mirrors
+   the (1/M) "asking for errors isn't an error" exit-code philosophy.
+
+3. **Pluggable POST transport = no network in tests.** `MirrorClient(post=...)`
+   injects the transport; the httpx default is built lazily (`_httpx_post`) so the
+   telemetry package never imports httpx unless a real drain runs. Tests pass a
+   closure returning a status code or raising — full coverage of 2xx / 4xx-5xx /
+   transport-exception / per-row-isolation without a server.
+
+4. **The relay re-scrubs as a SECOND line of defence and never trusts the wire.**
+   `worker.js`'s `rescrub()` re-applies the §9 (a)/(b) allow-lists — same
+   invariants as `av3/telemetry/scrub.py`: **no `answer` field exists** (the value
+   can't reach Turso even from a hostile client) and **EEO rows drop** (returns
+   `202 dropped` so the client stops retrying a row we deliberately discard).
+   Keep `ERROR_FIELDS`/`INFERRED_FIELDS` in `worker.js` in sync with the Python
+   allow-lists if the §9 schema changes.
+
+5. **The app holds no Turso token — ever.** It lives only as a Worker secret
+   (`wrangler secret put TURSO_AUTH_TOKEN`). The client POSTs unauthenticated
+   scrubbed JSON; the relay rate-limits by `user_id` (KV, fixed window, soft-fails
+   open if the KV binding is omitted) and inserts via the libSQL HTTP pipeline
+   API. Compromised client ⇒ no credential to steal (spec §9 threat model).
+
+6. **`doctor` relay check WARNs, never FAILs.** Telemetry is additive + opt-in; a
+   down relay must not fail CI for users who don't use telemetry, and even for
+   opted-in users the local pipeline is unaffected (the queue just backs up). Off
+   → PASS, on-without-url → WARN, on-and-unreachable → WARN.
+
+### Edge cases covered (`tests_v3/test_mirror_client.py`)
+
+| Concern | Test |
+|---|---|
+| `_ingest_url` appends `/ingest`, handles trailing slash | `test_ingest_url_appends_path` |
+| 2xx → all delivered, queue empty, correct POST shape | `test_drain_delivers_all_on_2xx` |
+| HTTP 5xx → mark_failed, rows stay pending, attempts bumped | `test_drain_marks_failed_on_http_error` |
+| transport exception → mark_failed | `test_drain_marks_failed_on_transport_exception` |
+| `--limit` bounds the pass | `test_drain_respects_limit` |
+| one row's failure doesn't abort the others | `test_drain_per_row_isolation` |
+| doctor: off→PASS / no-url→WARN / healthy→PASS / unreachable→WARN | `test_relay_check_*` |
+| CLI gating: disabled→noop, no-url→exit 2, happy→delivered | `test_mirror_drain_*` |
+
+### What's NOT in this sub-phase
+
+* **Live relay deploy.** `relay/` is a template; deploying it (Cloudflare account
+  + Turso DB) is an owner one-time op documented in `relay/README.md`, not part
+  of the client build or test suite.
+* **Integrated async drain tick** in the scheduler — deferred (decision #1 above).
+* **Bundled installer + auto-update feed.** (5/M).
+* **Fresh CLAUDE.md for v3.** (6/M).

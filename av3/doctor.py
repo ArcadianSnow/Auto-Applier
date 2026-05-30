@@ -161,6 +161,41 @@ def check_backups(settings: Settings) -> CheckResult:
     )
 
 
+def check_relay_reachable(settings: Settings) -> CheckResult:
+    """Telemetry relay reachability (spec §9, §3 doctor scope; Phase 5 4/M).
+
+    Only meaningful when telemetry is opted in. Three cases:
+      * telemetry OFF        → PASS (nothing to reach; the default, not an error).
+      * ON but no relay_url  → WARN (rows queue locally but can never drain).
+      * ON with relay_url    → GET ``{relay}/health``; PASS on 2xx, else WARN.
+
+    WARN, never FAIL: telemetry is additive and opt-in (spec §9). A down relay
+    must not fail ``doctor`` / break CI for users who don't even use telemetry,
+    and even for opted-in users the local pipeline is unaffected — the queue just
+    backs up and drains later.
+    """
+    tele = settings.telemetry
+    if not tele.enabled:
+        return CheckResult("relay", Status.PASS, "telemetry off (no relay needed)")
+    if not tele.relay_url:
+        return CheckResult(
+            "relay", Status.WARN,
+            "telemetry on but no relay_url — scrubbed rows queue locally, never sent",
+            fix="set one: `av3 telemetry on --relay-url https://<your-relay>`",
+        )
+    health = tele.relay_url.rstrip("/") + "/health"
+    try:
+        resp = httpx.get(health, timeout=3.0)
+        resp.raise_for_status()
+    except Exception as exc:
+        return CheckResult(
+            "relay", Status.WARN,
+            f"relay unreachable at {health} ({type(exc).__name__}) — rows will queue",
+            fix="check the relay is deployed and the URL is correct; rows retry automatically",
+        )
+    return CheckResult("relay", Status.PASS, f"relay healthy at {health}")
+
+
 def run_doctor() -> list[CheckResult]:
     """Run all checks; return results in display order."""
     results: list[CheckResult] = []
@@ -172,6 +207,7 @@ def run_doctor() -> list[CheckResult]:
     results.append(check_events_db(settings))
     results.append(check_llm(settings))
     results.append(check_backups(settings))
+    results.append(check_relay_reachable(settings))
     return results
 
 
