@@ -23,16 +23,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from av3.domain.models import Job
 from av3.domain.state import OutcomeKind
+from av3.reconcile import extract_candidate_skills
 
 __all__ = [
     "GroupStat",
     "ConversionReport",
     "WeightNudge",
+    "SkillGapTrend",
     "compute_conversion_report",
     "recommend_weight_nudges",
+    "compute_skill_gap_trends",
     "SCORE_BANDS",
+    "HIGH_BAND_MIN",
 ]
+
+#: A job at/above this score is "high-fit" — a gap demanded by these is more worth
+#: learning than one demanded only by marginal jobs. Matches the top SCORE_BAND floor.
+HIGH_BAND_MIN = 7.0
 
 #: Score-band buckets (label, low-inclusive, high-exclusive) over the 0–10 scale. The top
 #: band is high-inclusive so a perfect 10 lands somewhere. Mirrors the §10 decision bands
@@ -233,3 +242,68 @@ def recommend_weight_nudges(
             ),
         )]
     return []
+
+
+# --------------------------------------------------------------- what-to-learn trends (§7b/§10)
+
+@dataclass(frozen=True)
+class SkillGapTrend:
+    """A skill the user lacks, ranked by *demand from high-fit jobs* (spec §10 "what to
+    learn next" trends). ``demand_count`` = jobs whose JD demands it; ``high_fit_count`` =
+    those scoring ≥ :data:`HIGH_BAND_MIN`; ``avg_demanding_score`` = mean score of the
+    demanding jobs (None when none were scored). Ranking key is ``high_fit_count`` then
+    ``demand_count`` — learning a skill that unlocks jobs you already fit best pays off most."""
+
+    skill: str
+    demand_count: int
+    high_fit_count: int
+    avg_demanding_score: float | None
+
+
+def compute_skill_gap_trends(
+    jobs: list[Job],
+    scores_by_job_id: dict[str, float],
+    bank_skills: list[str],
+    *,
+    vocabulary: tuple[str, ...] | None = None,
+    top: int | None = None,
+) -> list[SkillGapTrend]:
+    """Rank skills the bank lacks by demand from high-fit jobs (spec §10/§7b, pure).
+
+    For every job with a JD, extract demanded skills (deterministic, via
+    :func:`av3.reconcile.extract_candidate_skills`), drop those already in the bank, and
+    accumulate per-skill demand count + how many demanding jobs are high-fit (score ≥
+    :data:`HIGH_BAND_MIN`) + the mean demanding-job score. Ranked high_fit desc, then demand
+    desc, then name. ``top`` caps the list. No I/O — the CLI supplies the jobs + scores."""
+    have = {s.strip().lower() for s in bank_skills if s and s.strip()}
+    demand: dict[str, int] = {}
+    high_fit: dict[str, int] = {}
+    score_sum: dict[str, float] = {}
+    score_n: dict[str, int] = {}
+
+    for job in jobs:
+        demanded = extract_candidate_skills(job.description or "", vocabulary)
+        score = scores_by_job_id.get(job.id)
+        for skill in demanded:
+            if skill.lower() in have:
+                continue
+            demand[skill] = demand.get(skill, 0) + 1
+            if score is not None:
+                score_sum[skill] = score_sum.get(skill, 0.0) + score
+                score_n[skill] = score_n.get(skill, 0) + 1
+                if score >= HIGH_BAND_MIN:
+                    high_fit[skill] = high_fit.get(skill, 0) + 1
+
+    trends = [
+        SkillGapTrend(
+            skill=skill,
+            demand_count=demand[skill],
+            high_fit_count=high_fit.get(skill, 0),
+            avg_demanding_score=(
+                round(score_sum[skill] / score_n[skill], 2) if score_n.get(skill) else None
+            ),
+        )
+        for skill in demand
+    ]
+    trends.sort(key=lambda t: (t.high_fit_count, t.demand_count, t.skill), reverse=True)
+    return trends[:top] if top is not None else trends

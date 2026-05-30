@@ -314,6 +314,13 @@ operation the *default mode*, not a `--continuous` flag:
 
 > **Scope:** the batch flow and *passive* gap-recurrence proposals are **v3.0 core**. The **interactive
 > skill-reconciliation conversation/toggle is v3.1.**
+>
+> **Status (Phase 6 5/M, 2026-05-30):** LIVE as a CLI reconciliation loop. `av3/reconcile.py` (deterministic
+> JD skill extraction over a curated vocabulary — no LLM; `record_batch_gaps` wires the previously-dead
+> `SkillGapRepo`; `build_proposals` ranks gaps; `apply_proposals` additively inserts into the bank) +
+> `av3 reconcile [--scan] [--min-count N] [--apply "s1,s2"]`. Preview is read-only; **`--apply` is the only
+> fact-bank mutation and is additive + user-named** (Rule 2.6 — the bank is the fabrication-guard source of
+> truth). The interactive web conversation is deferred to (7/M) branded UI. See `research/phase6-v3.1.md` §(5/M).
 
 v3 works in **batches**, not one-job-at-a-time: discovery producers fill the queue across all sources, then
 a batch is scored and résumés generated together. An **optional skill-reconciliation checkpoint** sits
@@ -686,9 +693,14 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
     `compute_conversion_report` (conversion by source/title/score-band; silent-applied = implicit ghost) +
     `recommend_weight_nudges` (advisory only, gated behind `MIN_SAMPLES_FOR_NUDGE=20`). CLI `av3 outcome` +
     `av3 analytics` (`--json`). Auto-tuning is surfaced-not-applied (Rule 2.6). +24 tests (full suite 692 green).
-  - **Remaining:** interactive batch skill-reconciliation (§7b); story bank + company research (on-demand) +
-    rich analytics / what-to-learn trends (§ skill-gap trends); branded UI polish; strategy concurrency +
-    session-rotation knobs.
+  - **(5/M) interactive batch skill-reconciliation §7b. ✅ DONE (2026-05-30).** `av3/reconcile.py`
+    (deterministic JD skill extraction over a curated vocab; `record_batch_gaps` wires the dead
+    `SkillGapRepo`; `build_proposals` ranks; `apply_proposals` additively inserts) + `SkillGapRepo.set_status`
+    + `JobRepo.list_all_with_description` + `av3 reconcile [--scan] [--min-count] [--apply]`. Preview is
+    read-only; fact-bank insert gated behind `--apply` (Rule 2.6). +22 tests (full suite 714 green).
+  - **Remaining:** story bank + company research (on-demand) + rich analytics / what-to-learn trends
+    (§ skill-gap trends); branded UI polish (incl. the interactive reconciliation conversation); strategy
+    concurrency + session-rotation knobs.
 
 ---
 

@@ -97,6 +97,16 @@ class JobRepo:
             params += (limit,)
         return [self._row_to_job(r) for r in self.conn.execute(sql, params)]
 
+    def list_all_with_description(self) -> list[Job]:
+        """Every job that has a non-empty JD — the corpus skill-reconciliation (§7b)
+        scans to surface demanded skills. State-agnostic: a skill demanded by a SKIPPED
+        job is still a real market signal worth surfacing."""
+        rows = self.conn.execute(
+            "SELECT * FROM jobs WHERE description IS NOT NULL AND description != '' "
+            "ORDER BY discovered_at"
+        )
+        return [self._row_to_job(r) for r in rows]
+
     def set_state(self, job_id: str, new_state: JobState) -> Job:
         """Validated state change. Raises InvalidTransition on a disallowed move."""
         job = self.get(job_id)
@@ -205,6 +215,12 @@ class ScoreRepo:
             model=row["model"] or "",
             scored_at=row["scored_at"],
         )
+
+    def totals_by_job(self) -> dict[str, float]:
+        """``{job_id: total}`` for every scored job — the bulk read the §8e/§7b
+        'what to learn next' analytics joins against jobs (avoids N per-job queries)."""
+        rows = self.conn.execute("SELECT job_id, total FROM job_scores").fetchall()
+        return {r["job_id"]: r["total"] for r in rows}
 
 
 # ------------------------------------------------------------------- applications
@@ -389,6 +405,13 @@ class SkillGapRepo:
             )
             for r in rows
         ]
+
+    def set_status(self, skill: str, status: str) -> None:
+        """Move a gap out of 'open' (e.g. 'certified' once inserted into the fact bank
+        via reconciliation §7b, or 'dismissed'). No-op if the skill isn't present."""
+        self.conn.execute(
+            "UPDATE skill_gaps SET status = ? WHERE skill = ?", (status, skill)
+        )
 
 
 # ----------------------------------------------------------------------- answers

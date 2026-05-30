@@ -170,6 +170,147 @@ def status() -> None:
         click.echo(f"  {state:14} {n}")
 
 
+@cli.command("learn")
+@click.option("--top", type=int, default=15, show_default=True,
+              help="Show the top N skill gaps.")
+@click.option("--min-demand", type=int, default=1, show_default=True,
+              help="Only show skills demanded by at least this many JDs.")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Emit the trend list as JSON instead of the ASCII table.")
+def learn_cmd(top: int, min_demand: int, as_json: bool) -> None:
+    """What to learn next (spec section 10 skill-gap trends): rank skills your fact bank
+    lacks by demand from your HIGH-FIT jobs (score >= 7).
+
+    Read-only. Combines stored JDs + their scores: a skill demanded by jobs you already
+    score well on is the highest-leverage thing to learn. Pair with `av3 reconcile --apply`
+    once you actually have a skill.
+    """
+    import json as _json
+
+    from av3.analytics import compute_skill_gap_trends
+    from av3.db.repositories import ScoreRepo
+    from av3.resume.factbank import FactBank
+
+    settings = load_settings()
+    fact_bank_path = settings.data_dir / "profile" / "master.json"
+    if not fact_bank_path.exists():
+        click.echo(f"  x FAIL fact bank: missing at {fact_bank_path}", err=True)
+        click.echo("        fix -> seed the fact bank during onboarding first.", err=True)
+        sys.exit(2)
+
+    bank = FactBank.load(fact_bank_path)
+    conn = init_app_db(settings.app_db_path)
+    try:
+        jobs = JobRepo(conn).list_all_with_description()
+        scores = ScoreRepo(conn).totals_by_job()
+    finally:
+        conn.close()
+
+    trends = [
+        t for t in compute_skill_gap_trends(jobs, scores, bank.skills, top=None)
+        if t.demand_count >= min_demand
+    ][:top]
+
+    if as_json:
+        click.echo(_json.dumps([vars(t) for t in trends], indent=2, default=str))
+        return
+
+    if not trends:
+        click.echo(
+            "No skill-gap trends yet. Need stored jobs with descriptions (run discovery) "
+            "— and scores (`av3 score`) sharpen the high-fit ranking."
+        )
+        return
+    click.echo(
+        f"What to learn next ({len(jobs)} job(s) scanned; ranked by high-fit demand):"
+    )
+    for t in trends:
+        avg = f"{t.avg_demanding_score:.1f}" if t.avg_demanding_score is not None else "  -"
+        click.echo(
+            f"  {t.high_fit_count:3} high-fit / {t.demand_count:3} total  "
+            f"avg-score={avg}  {t.skill}"
+        )
+    click.echo(
+        "\nHave one of these? Add it:  av3 reconcile --apply \"Skill Name\""
+    )
+
+
+@cli.command("reconcile")
+@click.option("--scan", is_flag=True, default=False,
+              help="Scan every stored job's JD and record demanded-but-missing skills as "
+                   "gaps BEFORE showing proposals (the §7b surfacing step). Gather-only — "
+                   "writes the gap table, never the fact bank.")
+@click.option("--min-count", type=int, default=1, show_default=True,
+              help="Only propose skills demanded by at least this many JDs (recurrence).")
+@click.option("--apply", "apply_skills", default="",
+              help="Comma-separated skills to INSERT into the fact bank (the gated act). "
+                   "Additive — appends to master.json and marks those gaps reconciled. "
+                   "Omit to preview only.")
+def reconcile_cmd(scan: bool, min_count: int, apply_skills: str) -> None:
+    """Batch skill-reconciliation (spec section 7b): surface skills the stored JDs demand
+    but your fact bank lacks, and (with --apply) insert approved ones into the bank.
+
+    Default is PREVIEW (read-only). --scan records gaps from JD text first. --apply is the
+    only path that mutates the fact bank, and it's additive (never wipes existing skills) —
+    keeping the fabrication-guard source of truth under explicit user control.
+    """
+    from av3.db import SkillGapRepo
+    from av3.reconcile import apply_proposals, build_proposals, record_batch_gaps
+    from av3.resume.factbank import FactBank
+    from av3.web.onboarding import save_fact_bank
+
+    settings = load_settings()
+    fact_bank_path = settings.data_dir / "profile" / "master.json"
+    if not fact_bank_path.exists():
+        click.echo(f"  x FAIL fact bank: missing at {fact_bank_path}", err=True)
+        click.echo("        fix -> seed the fact bank during onboarding first.", err=True)
+        sys.exit(2)
+
+    bank = FactBank.load(fact_bank_path)
+    conn = init_app_db(settings.app_db_path)
+    try:
+        gap_repo = SkillGapRepo(conn)
+
+        if scan:
+            jobs = JobRepo(conn).list_all_with_description()
+            bumps = record_batch_gaps(jobs, bank, gap_repo)
+            conn.commit()
+            click.echo(f"scanned {len(jobs)} job(s); recorded {bumps} skill-gap bump(s).")
+
+        if apply_skills.strip():
+            approved = [s.strip() for s in apply_skills.split(",") if s.strip()]
+            before = len(bank.skills)
+            apply_proposals(bank, approved)
+            added = len(bank.skills) - before
+            save_fact_bank(settings.data_dir, bank)
+            for skill in approved:
+                gap_repo.set_status(skill, "certified")
+            conn.commit()
+            click.echo(
+                f"applied {added} new skill(s) to the fact bank "
+                f"({len(bank.skills)} total); marked {len(approved)} gap(s) reconciled."
+            )
+            return
+
+        proposals = build_proposals(bank, gap_repo, min_count=min_count)
+    finally:
+        conn.close()
+
+    if not proposals:
+        click.echo(
+            "No skill-gap proposals. Run `av3 reconcile --scan` to surface skills from "
+            "stored JDs, or lower --min-count."
+        )
+        return
+    click.echo(f"Skill-gap proposals (>= {min_count} JD(s) demand, not in bank):")
+    for p in proposals:
+        click.echo(f"  {p.count:4}x  {p.skill}")
+    click.echo(
+        "\nReview, then insert the ones you actually have:\n"
+        "  av3 reconcile --apply \"Skill One,Skill Two\""
+    )
+
+
 @cli.command("outcome")
 @click.argument("job_id")
 @click.argument("kind", type=click.Choice(
