@@ -65,6 +65,7 @@ from av3.llm.prompts import SCORE_JD
 from av3.pipeline.filter_worker import build_bank_summary
 from av3.pipeline.stage import StageSkip, new_run_id, stage
 from av3.resume.factbank import FactBank
+from av3.resume.salary import is_below_floor, parse_posted_range
 
 __all__ = ["AXIS_NAMES", "ScoreRunSummary", "ScoreWorker", "parse_dimensions"]
 
@@ -145,6 +146,7 @@ class ScoreRunSummary:
     attempted: int = 0
     decided: int = 0          # DESCRIBED -> SCORED -> DECIDED on real LLM pass
     below_bar: int = 0        # DESCRIBED -> SCORED -> DECIDED -> SKIPPED on real score
+    comp_skipped: int = 0     # DESCRIBED -> SCORED -> DECIDED -> SKIPPED (posted pay < floor, §8d)
     failed_closed: int = 0    # same walk, score=0 because LLM unavailable/failed
     errors: int = 0           # per-job LLM exceptions (rolled into failed_closed)
     elapsed_s: float = 0.0
@@ -247,6 +249,20 @@ class ScoreWorker:
             self._write_fail_closed(job, summary, reason="empty job description")
             raise StageSkip("fail-closed: empty job description")
 
+        # Compensation comp-filter (spec §8d) — BEFORE the LLM call so a below-floor job
+        # costs no scoring work. Only fires when BOTH a floor is configured AND the job
+        # posted a range whose top is below it. No posted range → can't filter → proceed.
+        posted = parse_posted_range(job.compensation)
+        if is_below_floor(posted, self._settings.salary.floor):
+            self._skip_below_comp(
+                job, summary,
+                reason=(
+                    f"posted {posted.low:,}-{posted.high:,} < floor "
+                    f"{self._settings.salary.floor:,}"
+                ),
+            )
+            raise StageSkip("comp-filter: posted pay below floor")
+
         # The LLM call — JSON-mode by contract (Ollama format=json /
         # Gemini responseMimeType). A backend exception propagates to run_once,
         # which fail-closes this one job and continues.
@@ -278,6 +294,25 @@ class ScoreWorker:
         summary.decided += 1
 
     # -- helpers -----------------------------------------------------------
+
+    def _skip_below_comp(
+        self, job: Job, summary: ScoreRunSummary, *, reason: str
+    ) -> None:
+        """Walk a below-comp-floor job DESCRIBED → SCORED → DECIDED → SKIPPED (spec §8d).
+
+        Durable writes only — does NOT raise (the caller raises StageSkip inside the
+        ``@stage`` frame). Writes a 0.0 score row tagged so the dashboard can tell a
+        comp-filtered skip from a low-merit skip and from a fail-closed skip — same
+        four-transition walk (no DESCRIBED → SKIPPED edge, spec §5) the other skip paths
+        use, so history renders uniformly."""
+        self._score_repo.upsert(
+            JobScore(job_id=job.id, total=0.0, dimensions={}, model=self._model_tag)
+        )
+        self._job_repo.set_state(job.id, JobState.SCORED)
+        self._job_repo.set_state(job.id, JobState.DECIDED)
+        self._job_repo.set_state(job.id, JobState.SKIPPED)
+        summary.comp_skipped += 1
+        summary.notes.append(f"comp-filter skip job {job.id}: {reason}")
 
     def _write_fail_closed(
         self, job: Job, summary: ScoreRunSummary, *, reason: str

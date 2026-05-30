@@ -121,6 +121,27 @@ class StrategyConfig(BaseModel):
     profile: StrategyProfile = StrategyProfile.BALANCED
 
 
+class SalaryConfig(BaseModel):
+    """Salary intelligence inputs (spec §8d, Phase 6). All optional — with nothing set,
+    the resolver simply has no ask to compute and bails salary questions to REVIEW.
+
+    ``floor`` is also the **comp-filter** floor: the score worker SKIPs a job whose posted
+    range is entirely below it (saves a wasted application, §8d). ``market_source`` selects
+    a pluggable wage source; default ``"none"`` keeps the pipeline local-first (no egress) —
+    the BLS OES adapter is an opt-in future entry (see ``build_market_source``).
+    """
+
+    floor: int | None = None       # USD/year; lower bound on the ask AND the comp-filter floor
+    ceiling: int | None = None     # USD/year; used as the ask when no posted/market data
+    market_source: str = "none"    # "none" (local-first default) | future "bls_oes"
+
+    @model_validator(mode="after")
+    def _floor_ceiling_ordered(self) -> "SalaryConfig":
+        if self.floor is not None and self.ceiling is not None and self.floor > self.ceiling:
+            raise ValueError(f"salary floor ({self.floor}) must be <= ceiling ({self.ceiling})")
+        return self
+
+
 class TelemetryConfig(BaseModel):
     """Opt-in remote error mirror (spec §9). Default OFF — only network egress in the product."""
 
@@ -255,6 +276,7 @@ class Settings(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     pacing: PacingConfig = Field(default_factory=PacingConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
+    salary: SalaryConfig = Field(default_factory=SalaryConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)

@@ -339,6 +339,80 @@ def test_partial_llm_payload_defaults_missing_to_neutral(settings, conn):
     assert score.total == 6.75
 
 
+# --------------------------------------------------------------- comp filter (§8d, Phase 6 3/M)
+
+def _salary_settings(settings, **kw):
+    from av3.config.settings import SalaryConfig
+    return settings.model_copy(update={"salary": SalaryConfig(**kw)})
+
+
+def _seed_described_comp(conn, *, source_job_id, compensation, description="Python SQL ETL role"):
+    repo = JobRepo(conn)
+    job = Job(
+        source="greenhouse", source_job_id=source_job_id, title="Data Engineer",
+        company="BetaCo", description=description, compensation=compensation,
+        url=f"https://job-boards.greenhouse.io/test/jobs/{source_job_id}",
+    )
+    repo.add(job)
+    repo.set_state(job.id, JobState.DESCRIBED)
+    return repo.get(job.id)
+
+
+def test_comp_filter_skips_below_floor_before_llm(settings, conn):
+    """A job whose posted range is entirely below the configured floor is skipped to
+    terminal SKIPPED WITHOUT calling the LLM (saves scoring work, §8d)."""
+    job = _seed_described_comp(conn, source_job_id="cf-1", compensation="$70,000 - $90,000")
+    llm = _FakeLLM({axis: 8.0 for axis in AXIS_NAMES})  # would pass if called
+    worker = _build(_salary_settings(settings, floor=120_000), conn, llm_client=llm)
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.comp_skipped == 1
+    assert summary.decided == 0
+    assert summary.below_bar == 0
+    assert summary.failed_closed == 0
+    assert JobRepo(conn).get(job.id).state is JobState.SKIPPED
+    assert llm.prompts == []  # comp-filter is BEFORE the LLM call
+    assert any("comp-filter" in n for n in summary.notes)
+
+
+def test_comp_filter_proceeds_when_range_overlaps_floor(settings, conn):
+    """A posted range that overlaps the floor is NOT filtered — it scores normally."""
+    job = _seed_described_comp(conn, source_job_id="cf-2", compensation="$110,000 - $140,000")
+    llm = _FakeLLM({axis: 8.0 for axis in AXIS_NAMES})
+    worker = _build(_salary_settings(settings, floor=120_000), conn, llm_client=llm)
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.comp_skipped == 0
+    assert summary.decided == 1
+    assert JobRepo(conn).get(job.id).state is JobState.DECIDED
+
+
+def test_comp_filter_proceeds_when_no_posted_range(settings, conn):
+    """No posted comp → can't filter → score normally (spec §8d)."""
+    job = _seed_described_comp(conn, source_job_id="cf-3", compensation="")
+    llm = _FakeLLM({axis: 8.0 for axis in AXIS_NAMES})
+    worker = _build(_salary_settings(settings, floor=120_000), conn, llm_client=llm)
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.comp_skipped == 0
+    assert summary.decided == 1
+
+
+def test_comp_filter_inert_without_floor(settings, conn):
+    """No configured floor → comp-filter never fires even on a low posted range."""
+    job = _seed_described_comp(conn, source_job_id="cf-4", compensation="$50,000 - $60,000")
+    llm = _FakeLLM({axis: 8.0 for axis in AXIS_NAMES})
+    worker = _build(settings, conn, llm_client=llm)  # no salary config
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.comp_skipped == 0
+    assert summary.decided == 1
+
+
 # --------------------------------------------------------------- bookkeeping
 
 def test_limit_caps_jobs_processed(settings, conn):

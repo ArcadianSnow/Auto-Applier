@@ -73,6 +73,50 @@ cover-letter is recorded on the row for the dashboard.
 
 ---
 
+## (3/M) — Salary intelligence §8d (2026-05-30)
+
+**What.** `av3/resume/salary.py` (pure logic, no I/O): `SalaryRange`, `SalaryRecommendation`,
+`recommend_ask` (priority **posted → market → user**; floor = hard lower bound; never overshoot posted
+ceiling), `parse_posted_range` (tolerant of `$`/`k`/`,`/`-`/`–`/`to`; rejects sub-1000 non-annual noise),
+`is_below_floor` (comp-filter gate), `format_ask`, plus a pluggable `MarketDataSource` Protocol +
+`NoMarketData` default + `build_market_source(name)` factory.
+
+**Decision: market data is local-first / default-OFF.** Project hard rule = zero net egress except opt-in
+telemetry. So `market_source="none"` → `NoMarketData` (returns `None`); recommendation math is 100% local on
+posted-range + user-range. The spec's "default BLS OES" is reframed as an **opt-in adapter** the user wires
+in `salary.market_source` (accepting egress) — `build_market_source` falls back to `NoMarketData` for any
+unknown/unimplemented name (fail-safe: never silently start network calls). Spec §8d updated to match.
+
+**Wiring.**
+- `SalaryConfig{floor, ceiling, market_source="none"}` on `Settings.salary` (validates floor ≤ ceiling);
+  re-exported from `av3.config`.
+- **Apply worker** builds the market source once; `_apply_salary_ask(job)` computes the per-job ask from
+  `{config floor/ceiling, parse_posted_range(job.compensation), market}` and sets
+  `resolver.salary_expectation` before each job's questions resolve (safe — jobs processed sequentially).
+  `None` recommendation → `""` → resolver bails salary Qs to REVIEW (unchanged v3.0 behaviour when nothing
+  configured). The market source is only *queried* when `market_source != none`.
+- **Score worker** runs `is_below_floor(parse_posted_range(job.compensation), salary.floor)` BEFORE the LLM
+  call → below-floor jobs skip to terminal SKIPPED (`comp_skipped` counter, new `_skip_below_comp` four-edge
+  walk matching the other skip paths). Saves the expensive LLM scoring + downstream generation on a job the
+  user wouldn't accept. No posted range or no floor → proceed (spec §8d).
+- CLI: `av3 score` summary gained `comp_skipped=N`.
+
+**Backward-compat.** All new config defaults to None/"none" → comp-filter inert, salary ask empty → exactly
+v3.0 behaviour. Existing score/apply worker tests untouched.
+
+**Tests.** `tests_v3/test_salary.py` (30: ranges, parser shapes + rejections, recommend posted/market/user
+priority + floor/ceiling clamps, comp-filter gate, format, default source). `test_apply_worker.py` (+3 salary
+ask: posted-anchor, ceiling fallback, empty). `test_score_worker.py` (+4 comp-filter: skips-below-floor-pre-LLM,
+overlap-proceeds, no-posted-proceeds, no-floor-inert). Full suite **668 green**.
+
+**Anti-stuck note.** Three `Edit`s to score_worker.py failed on guessed `old_string` text (docstring/summary
+wording differed from memory). Fix per Rule: re-Read the exact lines, then edit — don't retry guesses. Two
+edits had already landed referencing not-yet-imported names; the focused run caught it (`parse_posted_range
+not defined`, `no attribute comp_skipped`) and the re-Read fixed both. Verified via background run, not the
+stale foreground output.
+
+---
+
 ## (2/M) — Configurable Pareto strategy profiles §8a (2026-05-30)
 
 **What & why.** Retires v3.0's single fixed pacing point. The spec (§8a) frames pacing as a

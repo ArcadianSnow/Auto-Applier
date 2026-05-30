@@ -688,6 +688,61 @@ def test_failed_recovery_records_per_job_resume_path(settings, conn):
     assert apps[0].generated_resume_path == str(pdf)
 
 
+# --------------------------------------------------------------- salary intelligence (Phase 6 3/M)
+
+def _job_with_comp(conn, *, company, source_job_id, compensation):
+    """A QUEUED_APPLY lever job carrying a posted-comp string."""
+    repo = JobRepo(conn)
+    job = Job(
+        source="lever", source_job_id=source_job_id, title="Senior Data Analyst",
+        company=company, url=f"https://jobs.lever.co/{company}/{source_job_id}",
+        compensation=compensation,
+    )
+    repo.add(job)
+    for nxt in (JobState.DESCRIBED, JobState.SCORED, JobState.DECIDED, JobState.QUEUED_APPLY):
+        repo.set_state(job.id, nxt)
+    return repo.get(job.id)
+
+
+def _salary_settings(settings, **kw):
+    from av3.config.settings import SalaryConfig
+    return settings.model_copy(update={"salary": SalaryConfig(**kw)})
+
+
+def test_salary_ask_anchors_to_posted_range(settings, conn):
+    """With a posted range, the per-job ask is the upper-middle of that band, set on the
+    resolver before the job's questions resolve."""
+    job = _job_with_comp(conn, company="acmeco", source_job_id="sal-1",
+                         compensation="$120,000 - $160,000")
+    worker = _build_worker(
+        _salary_settings(settings, floor=100_000), conn,
+        driver=_fake_driver(_make_outcome(status=None)), dry_run=True,
+    )
+    worker._apply_salary_ask(job)
+    assert worker._resolver.salary_expectation == "$150,000"  # 120k + 3/4*40k
+
+
+def test_salary_ask_falls_back_to_user_ceiling_without_posted(settings, conn):
+    job = _job_with_comp(conn, company="acmeco", source_job_id="sal-2", compensation="")
+    worker = _build_worker(
+        _salary_settings(settings, floor=100_000, ceiling=130_000), conn,
+        driver=_fake_driver(_make_outcome(status=None)), dry_run=True,
+    )
+    worker._apply_salary_ask(job)
+    assert worker._resolver.salary_expectation == "$130,000"
+
+
+def test_salary_ask_empty_when_no_config_and_no_posted(settings, conn):
+    """No salary config + no posted comp → no ask → resolver bails salary Qs to REVIEW."""
+    job = _job_with_comp(conn, company="acmeco", source_job_id="sal-3", compensation="")
+    worker = _build_worker(
+        settings, conn,
+        driver=_fake_driver(_make_outcome(status=None)), dry_run=True,
+    )
+    worker._apply_salary_ask(job)
+    assert worker._resolver.salary_expectation == ""
+
+
 # --------------------------------------------------------------- strategy profiles (Phase 6 2/M)
 
 def _mode_recording_driver(seen: dict) -> DriverEntry:

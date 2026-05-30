@@ -454,16 +454,20 @@ Answer-resolver (§8b) policy for the fields that appear on nearly every form:
   sensitive attribute. These values are stored locally only — **never mirrored to telemetry.**
 - **Work authorization / sponsorship:** answered from the **explicitly-captured onboarding facts** (§6b) —
   no silent "authorized = yes" default (the v2 behavior, corrected).
-- **Salary expectation = salary intelligence** *(v3.1; v3.0 just fills from the user's configured range/floor
-  and keeps the simple "skip if posted comp < floor" gate).* Compute a recommended ask from three inputs: the user's
-  configured range, the job's **posted range** (if any), and **market data**. Corrects users who would
-  low-ball or overshoot. Market source is **pluggable, defaulting to free BLS OES wage data** (by
-  occupation + metro); Adzuna's free API as an optional second source. *Glassdoor/Levels.fyi are out of
-  scope — no legitimate free feed; scraping is brittle + ToS-risky, exactly what v3 avoids.*
+- **Salary expectation = salary intelligence.** *(Status: LIVE as of Phase 6 (3/M), 2026-05-30 —
+  `av3/resume/salary.py`.)* Compute a recommended ask from three inputs: the user's configured range, the
+  job's **posted range** (if any), and **market data**. Priority posted → market → user range; the floor is a
+  hard lower bound and the ask never overshoots the posted ceiling. Corrects users who would low-ball or
+  overshoot. Market source is **pluggable**; **v3.1 ships it defaulting to `none` (local-first, zero egress)**
+  — the BLS OES adapter is an opt-in entry the user wires in `salary.market_source` (accepting its egress),
+  not on by default, because the product's hard rule is no network egress in the core pipeline. Adzuna would
+  be an optional second adapter. *Glassdoor/Levels.fyi are out of scope — no legitimate free feed; scraping is
+  brittle + ToS-risky, exactly what v3 avoids.*
 - **Compensation filter (a scoring gate, not just a fill value):** if a job's **posted range is below the
-  user's floor / current pay**, the job is **SKIPPED before apply** — saving a wasted application. Folds
-  into the compensation scoring axis (§10, multi-dimensional scoring). If no range is posted, can't filter →
-  proceed and use the computed ask for any salary field.
+  user's floor / current pay**, the job is **SKIPPED before apply** — saving a wasted application. *(Status:
+  LIVE as of Phase 6 (3/M) — the **score worker** runs `is_below_floor` BEFORE the LLM call, so a below-floor
+  job costs no scoring/generation work; walks DESCRIBED → SCORED → DECIDED → SKIPPED, bucketed as
+  `comp_skipped`.)* If no range is posted, can't filter → proceed and use the computed ask for any salary field.
 
 ### 8e. Outcome feedback loop (gets smarter over time)
 
@@ -664,9 +668,15 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
     bias** (Cautious → assisted starting mode; safety-floor downgrade still fires on top). Balanced preset ==
     v3.0 defaults (backward-compat). Concurrency + session-rotation knobs deferred (scheduler work). +15
     tests (full suite 631 green).
-  - **Remaining:** salary intelligence + BLS OES market data (§8d); outcome feedback loop (§8e); interactive
-    batch skill-reconciliation (§7b); story bank + company research (on-demand) + rich analytics /
-    what-to-learn trends (§ skill-gap trends); branded UI polish; strategy concurrency + session-rotation knobs.
+  - **(3/M) salary intelligence §8d. ✅ DONE (2026-05-30).** `av3/resume/salary.py` (SalaryRange,
+    SalaryRecommendation, `recommend_ask` posted→market→user, `parse_posted_range`, `is_below_floor`,
+    pluggable `MarketDataSource`/`NoMarketData` default-OFF for local-first). `SalaryConfig{floor,ceiling,
+    market_source}` on Settings. Apply worker computes a per-job ask (config + posted comp + market) and sets
+    it on the resolver's SALARY branch; score worker runs the comp-filter pre-LLM (`comp_skipped`). BLS OES =
+    opt-in future adapter (no default egress). +37 tests (full suite 668 green).
+  - **Remaining:** outcome feedback loop (§8e); interactive batch skill-reconciliation (§7b); story bank +
+    company research (on-demand) + rich analytics / what-to-learn trends (§ skill-gap trends); branded UI
+    polish; strategy concurrency + session-rotation knobs.
 
 ---
 

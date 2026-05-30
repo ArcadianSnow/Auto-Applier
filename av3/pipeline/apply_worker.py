@@ -95,6 +95,12 @@ from av3.resume.generate import (
     generated_cover_letter_path,
     generated_resume_path,
 )
+from av3.resume.salary import (
+    build_market_source,
+    format_ask,
+    parse_posted_range,
+    recommend_ask,
+)
 from av3.sources.ashby import AshbyListing
 from av3.sources.browser import ashby_apply, greenhouse_apply, lever_apply
 from av3.sources.browser.apply_base import Applicant, ApplyOutcome
@@ -272,6 +278,14 @@ class ApplyWorker:
         # profile (balanced) resolves to the historical PacingConfig defaults, so v3.0
         # behaviour is unchanged.
         self._pacing: EffectivePacing = resolve_strategy(settings)
+
+        # Salary intelligence (spec §8d, Phase 6) — the market source is built ONCE
+        # (default NoMarketData = local-first, zero egress). The per-job recommended ask
+        # is computed inside _process_one from {config floor/ceiling, the job's posted
+        # comp, market}. The explicit ``salary_expectation`` constructor arg still seeds
+        # the resolver (back-compat); when salary config is present the per-job compute
+        # overrides it before each job's questions resolve.
+        self._market = build_market_source(settings.salary.market_source)
 
         self._job_repo = JobRepo(conn)
         self._app_repo = ApplicationRepo(conn)
@@ -455,6 +469,14 @@ class ApplyWorker:
         if not self._dry_run:
             self._job_repo.set_state(job.id, JobState.APPLYING)
 
+        # Per-job salary ask (spec §8d). Compute from config floor/ceiling + the job's
+        # posted comp (if any) + the market source, and set it on the shared resolver
+        # before this job's questions resolve. Safe because the worker processes jobs
+        # sequentially (one driver fully awaited before the next). When no salary config
+        # and no posted comp exist, recommend_ask returns None → "" → resolver bails any
+        # salary question to REVIEW (unchanged v3.0 behaviour).
+        self._apply_salary_ask(job)
+
         listing = driver.listing_from_job(job)
         page = await self._new_page()
 
@@ -510,6 +532,32 @@ class ApplyWorker:
             self._job_repo.set_state(job.id, JobState.REVIEW)
 
         return outcome.status
+
+    # -- salary ------------------------------------------------------------
+
+    def _apply_salary_ask(self, job: Job) -> None:
+        """Compute this job's recommended salary ask (spec §8d) and set it on the resolver.
+
+        Inputs: the user's configured floor/ceiling (``settings.salary``), the job's posted
+        comp string (``job.compensation``, parsed into a range when present), and the market
+        source. ``recommend_ask`` prioritises posted-range → market → user range; the floor
+        is a hard lower bound. Result is formatted (``"$140,000"``) and assigned to the
+        shared resolver's ``salary_expectation`` — the resolver's SALARY branch fills it.
+        A ``None`` recommendation (no inputs at all) clears it to ``""`` so the resolver
+        bails salary questions to REVIEW rather than inventing a number.
+        """
+        cfg = self._settings.salary
+        posted = parse_posted_range(job.compensation)
+        market = None
+        if cfg.market_source and cfg.market_source.lower() not in ("", "none", "off"):
+            market = self._market.estimate(title=job.title, location=job.location)
+        rec = recommend_ask(
+            user_floor=cfg.floor,
+            user_ceiling=cfg.ceiling,
+            posted=posted,
+            market=market,
+        )
+        self._resolver.salary_expectation = format_ask(rec)
 
     # -- artifacts ---------------------------------------------------------
 
