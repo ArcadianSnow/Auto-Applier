@@ -153,6 +153,19 @@ class JobRepo:
         ).fetchone()
         return row["n"]
 
+    def applied_count_on_day(self, on_day: date | None = None) -> int:
+        """How many jobs (across ALL companies) reached APPLIED on ``on_day`` (default UTC
+        today). Backs the soft daily target (spec §8a strategy profiles) — distinct from
+        :meth:`company_applied_count`, which is the per-company anti-spam cap. Same
+        ``updated_at`` date proxy + UTC default so the two counts agree on "today"."""
+        on_day = on_day or datetime.now(timezone.utc).date()
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM jobs "
+            "WHERE state = ? AND substr(updated_at, 1, 10) = ?",
+            (JobState.APPLIED.value, on_day.isoformat()),
+        ).fetchone()
+        return row["n"]
+
     def count_by_state(self) -> dict[str, int]:
         rows = self.conn.execute("SELECT state, COUNT(*) AS n FROM jobs GROUP BY state")
         return {r["state"]: r["n"] for r in rows}

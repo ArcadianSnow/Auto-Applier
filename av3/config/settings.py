@@ -18,6 +18,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, model_validator
 
+from av3.config.strategy import RiskBias, StrategyProfile
+
 DEFAULT_DATA_DIR = Path("data/v3")
 
 
@@ -80,22 +82,43 @@ class LLMConfig(BaseModel):
 
 
 class PacingConfig(BaseModel):
-    """v3.0 fixed pacing (spec §8a — Pareto strategy profiles are v3.1).
+    """Pacing knobs — the carrier for the ``custom`` strategy profile (spec §8a).
 
-    Safety floor (manual login, headed, never retry through CAPTCHA, downgrade on
-    detection) is NOT represented here — it is never tunable by config.
+    These defaults are intentionally identical to the **Balanced** preset
+    (:data:`av3.config.strategy.PROFILE_PRESETS`), so a fresh install with the default
+    ``strategy.profile = balanced`` behaves exactly as v3.0 did. When
+    ``strategy.profile != custom`` the named preset wins and these values are ignored
+    (select ``custom`` to use them — see :func:`av3.config.strategy.resolve_strategy`).
+
+    Safety floor (manual login, headed, never retry through CAPTCHA, downgrade on a
+    detection signal) is NOT represented here — it is never tunable by config. ``risk_bias``
+    only shifts the *starting* auto-vs-assisted posture, not the floor.
     """
 
     min_delay_s: float = 60.0
     max_delay_s: float = 180.0
     daily_target: int = 30  # soft goal, never a hard wall
     max_per_company_per_day: int = 2  # re-apply rate limit (spec §7)
+    risk_bias: RiskBias = RiskBias.BALANCED  # custom-profile starting posture (§8a)
 
     @model_validator(mode="after")
     def _delays_ordered(self) -> "PacingConfig":
         if self.min_delay_s > self.max_delay_s:
             raise ValueError("min_delay_s must be <= max_delay_s")
         return self
+
+
+class StrategyConfig(BaseModel):
+    """Pareto strategy-profile selector (spec §8a, Phase 6 / v3.1).
+
+    ``profile`` picks a coherent point on the throughput/detection-risk/user-effort
+    frontier. The named profiles (cautious / balanced / aggressive) carry frozen presets
+    in :data:`av3.config.strategy.PROFILE_PRESETS`; ``custom`` falls through to the
+    hand-set :class:`PacingConfig`. Default is **balanced**, whose preset equals the
+    PacingConfig defaults — so the selector is inert until a user opts into another point.
+    """
+
+    profile: StrategyProfile = StrategyProfile.BALANCED
 
 
 class TelemetryConfig(BaseModel):
@@ -231,6 +254,7 @@ class Settings(BaseModel):
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     pacing: PacingConfig = Field(default_factory=PacingConfig)
+    strategy: StrategyConfig = Field(default_factory=StrategyConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)

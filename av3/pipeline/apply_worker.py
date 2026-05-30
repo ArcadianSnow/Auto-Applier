@@ -52,10 +52,20 @@ in the per-ATS FakePage scaffolding, which means worker tests stay focused on th
 contract (state transitions, rate limiting, isolation, telemetry) and don't double-test
 the drivers.
 
-Pacing (spec §8a fixed for v3.0):
-  * Inter-apply random delay from ``settings.pacing.{min,max}_delay_s`` — applied between
-    *successful* submits only. Rate-limited skips don't burn a delay slot. The Pareto
-    strategy profiles are v3.1; v3.0 ships these fixed knobs.
+Pacing & strategy (spec §8a — Pareto profiles, Phase 6 / v3.1):
+  * The active :class:`av3.config.strategy.EffectivePacing` is resolved ONCE at
+    construction via ``resolve_strategy(settings)`` — the profile→knobs mapping lives in
+    ``av3.config.strategy``, not here. The worker reads ``self._pacing`` for every knob.
+  * Inter-apply random delay from ``pacing.{min,max}_delay_s`` — applied between
+    *successful* submits only. Rate-limited skips don't burn a delay slot.
+  * Per-company/day cap from ``pacing.max_per_company_per_day`` (spec §7 anti-spam).
+  * **Soft daily target** from ``pacing.daily_target`` — once the day's APPLIED count
+    reaches it, the worker stops INITIATING new applies this run and defers the rest
+    (left in QUEUED_APPLY); a *goal*, never a hard wall, and dry-runs never trip it.
+  * **Risk-router bias** from ``pacing.risk_bias`` — a ``leans_assisted`` profile starts
+    every job assisted (the *starting* posture; the driver's detection-signal downgrade,
+    the safety floor, still fires on top). Concurrency + session-rotation knobs from the
+    §8a table are NOT wired yet (scheduler-architecture work) — see ``strategy.py``.
 """
 
 from __future__ import annotations
@@ -68,6 +78,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from av3.config.settings import Settings
+from av3.config.strategy import EffectivePacing, RiskBias, resolve_strategy
 from av3.db.repositories import AnswerRepo, ApplicationRepo, JobRepo
 from av3.domain.models import Application, Job, utcnow_iso
 from av3.domain.state import ApplicationStatus, ApplyMode, JobState
@@ -208,6 +219,7 @@ class ApplyRunSummary:
     paused: int = 0       # subset of skipped: AUTH_REQUIRED source (spec §8b)
     errors: int = 0       # exception during _process_one
     recovered: int = 0    # crash-sweep: APPLYING leftovers re-queued (spec §5)
+    deferred_daily_target: int = 0  # jobs left in QUEUED_APPLY because the soft daily target was hit (§8a)
     dry_run_count: int = 0
     elapsed_s: float = 0.0
     notes: list[str] = field(default_factory=list)
@@ -253,6 +265,14 @@ class ApplyWorker:
         self._rng = rng or random.Random()
         self._drivers = drivers if drivers is not None else default_drivers()
 
+        # Strategy profile (spec §8a, Phase 6) — resolve the active pacing knobs ONCE.
+        # The profile→knobs mapping lives in av3.config.strategy; the worker reads the
+        # resolved EffectivePacing instead of settings.pacing directly so a non-default
+        # profile (cautious/aggressive) takes effect without touching this loop. Default
+        # profile (balanced) resolves to the historical PacingConfig defaults, so v3.0
+        # behaviour is unchanged.
+        self._pacing: EffectivePacing = resolve_strategy(settings)
+
         self._job_repo = JobRepo(conn)
         self._app_repo = ApplicationRepo(conn)
         self._answer_repo = AnswerRepo(conn)
@@ -273,6 +293,19 @@ class ApplyWorker:
         )
 
     # -- public ------------------------------------------------------------
+
+    def _effective_mode(self) -> ApplyMode:
+        """The apply mode after the strategy's risk-router bias (spec §8a).
+
+        A ``LEANS_ASSISTED`` profile (Cautious) starts every job in assisted regardless
+        of the requested mode — the low-risk, human-submits posture. Other biases honour
+        the constructor's ``mode``. This is the *starting* posture only; the driver's
+        downgrade-to-assisted on a real detection signal (the safety floor) is unaffected
+        and still fires on top of this.
+        """
+        if self._pacing.risk_bias is RiskBias.LEANS_ASSISTED:
+            return ApplyMode.BROWSER_ASSISTED
+        return self._mode
 
     def recover_crashed(self) -> int:
         """Re-queue jobs left in ``APPLYING`` from a crashed prior run (spec §5 mandate).
@@ -318,12 +351,31 @@ class ApplyWorker:
         prior_was_apply = False
 
         for job in queued:
-            # Pace between successive *real* applies (spec §8a fixed pacing). Skips
-            # don't burn a delay slot; the rate-limit branch sets prior_was_apply=False.
+            # Soft daily target (spec §8a) — a *goal*, never a hard wall. In a real
+            # (non-dry) run, once the day's APPLIED count reaches the profile's target we
+            # stop INITIATING new applies this run and leave the rest in QUEUED_APPLY for
+            # the next day. It never errors and never touches gather stages, so the
+            # pipeline isn't blocked; it just paces volume. Dry runs never count toward
+            # (or trip) the target — they don't produce APPLIED rows. company_applied_count
+            # already re-queries the DB so this naturally includes applies from this run.
+            if not self._dry_run:
+                applied_today = self._job_repo.applied_count_on_day()
+                if applied_today >= self._pacing.daily_target:
+                    remaining = len(queued) - (queued.index(job))
+                    summary.deferred_daily_target = remaining
+                    summary.notes.append(
+                        f"daily target reached ({applied_today}/"
+                        f"{self._pacing.daily_target}, profile="
+                        f"{self._pacing.profile.value}); deferring {remaining} job(s)"
+                    )
+                    break
+
+            # Pace between successive *real* applies (spec §8a). Skips don't burn a delay
+            # slot; the rate-limit branch sets prior_was_apply=False.
             if prior_was_apply:
                 delay = self._rng.uniform(
-                    self._settings.pacing.min_delay_s,
-                    self._settings.pacing.max_delay_s,
+                    self._pacing.min_delay_s,
+                    self._pacing.max_delay_s,
                 )
                 await self._sleep(delay)
 
@@ -348,13 +400,14 @@ class ApplyWorker:
                 prior_was_apply = False
                 continue
 
-            # Per-company/day rate limit (spec §7 re-apply policy).
+            # Per-company/day rate limit (spec §7 re-apply policy; cap from the active
+            # strategy profile, §8a).
             count = self._job_repo.company_applied_count(job.company)
-            if count >= self._settings.pacing.max_per_company_per_day:
+            if count >= self._pacing.max_per_company_per_day:
                 summary.skipped += 1
                 summary.notes.append(
                     f"rate-limit skip: {job.company} ({count}/"
-                    f"{self._settings.pacing.max_per_company_per_day})"
+                    f"{self._pacing.max_per_company_per_day})"
                 )
                 prior_was_apply = False
                 continue
@@ -417,7 +470,7 @@ class ApplyWorker:
             self._applicant,
             resume_used,
             dry_run=self._dry_run,
-            mode=self._mode,
+            mode=self._effective_mode(),
             resolver=self._resolver,
         )
 
@@ -505,7 +558,7 @@ class ApplyWorker:
         self._app_repo.add(
             Application(
                 job_id=job.id,
-                mode=self._mode,
+                mode=self._effective_mode(),
                 status=ApplicationStatus.FAILED,
                 generated_resume_path=resume_used,
                 cover_letter_path=cover_used,

@@ -70,3 +70,73 @@ sub-phase makes the worker *resolve + record* the right artifacts; the résumé 
 cover-letter is recorded on the row for the dashboard.
 
 **Validation:** full v3 suite green (612 → 616), 11 deselected by design.
+
+---
+
+## (2/M) — Configurable Pareto strategy profiles §8a (2026-05-30)
+
+**What & why.** Retires v3.0's single fixed pacing point. The spec (§8a) frames pacing as a
+**throughput ↔ detection-risk ↔ user-effort** frontier and exposes named **profiles**, each a coherent
+point on it: Cautious / Balanced / Aggressive / Custom.
+
+**Module: `av3/config/strategy.py`** (new). Pure config logic, no I/O.
+- `StrategyProfile` (str enum: cautious/balanced/aggressive/custom) + `RiskBias` (str enum:
+  leans_assisted/balanced/leans_auto). Both `str`-mixin so they round-trip through `user_config.json`.
+- `EffectivePacing` (frozen dataclass): the concrete knobs a profile resolves to — `min_delay_s`,
+  `max_delay_s`, `daily_target`, `max_per_company_per_day`, `risk_bias`, `profile`.
+- `PROFILE_PRESETS`: frozen presets for the three named profiles. **Balanced == the v3.0 `PacingConfig`
+  defaults** (60–180s, daily 30, 2/co/day, balanced) — THE backward-compat invariant (a test asserts it).
+  Cautious = 120–300s / daily 10 / 1-per-co / leans_assisted. Aggressive = 20–60s / daily 100 / 3-per-co /
+  leans_auto.
+- `resolve_strategy(settings) -> EffectivePacing`: named profile → its frozen preset (ignores
+  `settings.pacing`); `custom` → builds from the hand-set `settings.pacing`. **One** place owns the mapping.
+
+**Config wiring (`av3/config/settings.py`).** New `StrategyConfig{profile: StrategyProfile=BALANCED}` on
+`Settings.strategy`. `PacingConfig` gained `risk_bias: RiskBias=BALANCED` (the custom-profile carrier). Both
+re-exported from `av3.config`. `settings.py` imports the two enums from `strategy.py` (one-way; `strategy.py`
+only imports `Settings` under `TYPE_CHECKING` to avoid a cycle).
+
+**Worker consumption (`av3/pipeline/apply_worker.py`).** `ApplyWorker` resolves `self._pacing =
+resolve_strategy(settings)` ONCE at construction and reads it for every knob (no more
+`settings.pacing.*` direct reads). Four knobs now profile-driven:
+1. **Inter-apply delay** — `self._pacing.{min,max}_delay_s`.
+2. **Per-company/day cap** — `self._pacing.max_per_company_per_day`.
+3. **Soft daily target** — NEW: at the top of the per-job loop, in a *real* (non-dry) run, if
+   `JobRepo.applied_count_on_day()` ≥ `self._pacing.daily_target`, the worker stops INITIATING new applies
+   and `break`s, leaving the rest in QUEUED_APPLY (`summary.deferred_daily_target = remaining`). A **soft
+   goal, never a hard wall** — no error, no state change, gather stages untouched. Dry-runs never trip it
+   (they produce no APPLIED rows). `set_state(APPLIED)` stamps `updated_at=now`, so the count naturally
+   includes applies from the current run.
+4. **Risk-router bias** — NEW `_effective_mode()`: a `leans_assisted` profile (Cautious) starts every job in
+   `BROWSER_ASSISTED` regardless of the constructor's `mode`. This is the *starting* posture ONLY — the
+   driver's downgrade-to-assisted on a real detection signal (the safety floor) still fires on top and is
+   untouched. `balanced`/`leans_auto` honour the requested mode (distinct enums for a future per-job §8
+   router).
+
+**New repo method** `JobRepo.applied_count_on_day(on_day=None)` — all-companies APPLIED count for a UTC day
+(vs. `company_applied_count` which is per-company). Same `updated_at` date proxy + UTC default so the two
+agree on "today".
+
+**CLI.** `av3 apply` summary line gained `deferred=N` (the soft-target deferral count). No new flags this
+sub-phase — profile is config-driven (a `--profile` override + the onboarding selector are a later nicety;
+spec §11a notes profile selection appears in onboarding only in v3.1).
+
+**Scope deferred (documented in `strategy.py`).** Two of the five §8a knobs are NOT wired: **concurrency**
+(sources in parallel) and **session rotation** (time-box per source then rotate). The v3.0 scheduler drains
+stages sequentially and rotation needs per-source session bookkeeping that doesn't exist yet. `EffectivePacing`
+deliberately omits fields for them so a half-wired knob can't masquerade as live. They land in a later
+sub-phase (needs scheduler-architecture work).
+
+**Backward-compat.** Default profile = Balanced = the old PacingConfig defaults, so a fresh install behaves
+byte-for-byte as v3.0. `ApplyWorker.__init__` signature unchanged (`mode=` still the requested posture). All
+prior worker tests (which never set a profile) resolve to Balanced and pass untouched.
+
+**Tests.** `tests_v3/test_strategy.py` (+10: defaults/backward-compat invariant, named-preset directions,
+resolve-returns-preset, named-ignores-pacing, custom-uses-pacing, config round-trip incl. custom risk_bias).
+`tests_v3/test_apply_worker.py` (+5: cautious→assisted, balanced→honours-auto, soft-target defers,
+dry-run-ignores-target, aggressive widens per-company cap). Full v3 suite **631 green**, 11 deselected.
+
+**Anti-stuck note (count reconciliation).** Naive `def test_` counting suggested a mismatch vs the suite
+total; that proxy ignores parametrization/class methods. Resolution was *provenance* not arithmetic: `git
+status` confirmed only the two intended test files changed, so no existing test could be lost — the green
+suite is authoritative. Don't reconcile test counts by subtraction; check which files changed.

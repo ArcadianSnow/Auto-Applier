@@ -353,6 +353,14 @@ Thresholds/flags live in typed config so behavior is tunable without code edits.
 
 > **Scope:** **v3.1.** v3.0 ships sensible *fixed* pacing (basic rate-limit + per-source rotation); the
 > configurable Cautious/Balanced/Aggressive profile system below lands in v3.1.
+>
+> **Status (Phase 6 2/M, 2026-05-30):** the profile system is LIVE for the knobs with consumption points —
+> **inter-apply delay, soft daily target, per-company/day cap, and risk-router bias** (→ auto-vs-assisted
+> *starting* mode). Selector is `strategy.profile` in `user_config.json` (default `balanced`, whose preset ==
+> the v3.0 fixed defaults, so the default is inert). Profiles + presets live in `av3/config/strategy.py`;
+> `ApplyWorker` resolves them once via `resolve_strategy()`. **Still deferred:** the **concurrency** and
+> **session-rotation** knobs (need scheduler-architecture work — the v3.0 scheduler drains stages
+> sequentially). See `research/phase6-v3.1.md` §(2/M).
 
 Retire v2's rigid "10 apps/day, 60–180s between." A fixed cap is annoying to maintain *and* paternalistic
 toward a user who wants volume. The real tradeoff is a frontier — **throughput ↔ detection-risk ↔ user
@@ -649,9 +657,16 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
     file existence is the durable contract — no DB column) and records both on the `Application` row; the
     single global `artifacts/resume.pdf` is demoted to a fallback for jobs queued before optimize ran. Closes
     the oldest carry-over (auto-apply was uploading a generic résumé). +4 tests (full suite 616 green).
-  - **Remaining:** configurable strategy profiles (§8a); salary intelligence + BLS OES market data (§8d);
-    outcome feedback loop (§8e); interactive batch skill-reconciliation (§7b); story bank + company research
-    (on-demand) + rich analytics / what-to-learn trends (§ skill-gap trends); branded UI polish.
+  - **(2/M) configurable Pareto strategy profiles (§8a). ✅ DONE (2026-05-30).** `av3/config/strategy.py`
+    (StrategyProfile / RiskBias / EffectivePacing / PROFILE_PRESETS / `resolve_strategy`) + `StrategyConfig`
+    on Settings + `PacingConfig.risk_bias`. `ApplyWorker` resolves the active profile once and drives
+    inter-apply delay, per-company cap, **soft daily target** (defers, never blocks), and **risk-router
+    bias** (Cautious → assisted starting mode; safety-floor downgrade still fires on top). Balanced preset ==
+    v3.0 defaults (backward-compat). Concurrency + session-rotation knobs deferred (scheduler work). +15
+    tests (full suite 631 green).
+  - **Remaining:** salary intelligence + BLS OES market data (§8d); outcome feedback loop (§8e); interactive
+    batch skill-reconciliation (§7b); story bank + company research (on-demand) + rich analytics /
+    what-to-learn trends (§ skill-gap trends); branded UI polish; strategy concurrency + session-rotation knobs.
 
 ---
 

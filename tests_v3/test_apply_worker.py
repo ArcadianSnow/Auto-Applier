@@ -47,6 +47,8 @@ from av3.resume.answer_resolver import (
     ResolutionSource,
     SensitiveClass,
 )
+from av3.config.settings import PacingConfig, StrategyConfig
+from av3.config.strategy import RiskBias, StrategyProfile
 from av3.resume.factbank import Contact, FactBank
 from av3.resume.generate import (
     generated_cover_letter_path,
@@ -684,6 +686,118 @@ def test_failed_recovery_records_per_job_resume_path(settings, conn):
     apps = ApplicationRepo(conn).list_by_job(job.id)
     assert apps[0].status is ApplicationStatus.FAILED
     assert apps[0].generated_resume_path == str(pdf)
+
+
+# --------------------------------------------------------------- strategy profiles (Phase 6 2/M)
+
+def _mode_recording_driver(seen: dict) -> DriverEntry:
+    """A fake driver that records the apply ``mode`` kwarg it was handed."""
+
+    async def prepare(*_a, **kw):
+        seen["mode"] = kw.get("mode")
+        return _make_outcome(status=ApplicationStatus.APPLIED, mode=kw.get("mode"))
+
+    return DriverEntry(listing_from_job=lambda j: j, prepare=prepare)
+
+
+def _with_profile(settings: Settings, profile: StrategyProfile) -> Settings:
+    return settings.model_copy(update={"strategy": StrategyConfig(profile=profile)})
+
+
+def test_cautious_profile_forces_assisted_mode(settings, conn):
+    """risk_bias=LEANS_ASSISTED (Cautious) starts every job assisted even when the worker
+    was constructed with BROWSER_AUTO (spec §8a starting posture — not the safety floor)."""
+    _seed_queued_lever(conn, company="acmeco", source_job_id="strat-1")
+    seen: dict = {}
+    worker = ApplyWorker(
+        settings=_with_profile(settings, StrategyProfile.CAUTIOUS),
+        conn=conn, fact_bank=_bank(), resume_path="/tmp/r.pdf", new_page=_new_page,
+        applicant=Applicant("Pat", "Doe", "pat@example.com", "555"),
+        mode=ApplyMode.BROWSER_AUTO, dry_run=False, sleep=_noop_sleep,
+        drivers={"lever": _mode_recording_driver(seen)},
+    )
+
+    asyncio.run(worker.run_once())
+
+    assert seen["mode"] is ApplyMode.BROWSER_ASSISTED
+
+
+def test_balanced_profile_honours_requested_auto_mode(settings, conn):
+    _seed_queued_lever(conn, company="acmeco", source_job_id="strat-2")
+    seen: dict = {}
+    worker = ApplyWorker(
+        settings=_with_profile(settings, StrategyProfile.BALANCED),
+        conn=conn, fact_bank=_bank(), resume_path="/tmp/r.pdf", new_page=_new_page,
+        applicant=Applicant("Pat", "Doe", "pat@example.com", "555"),
+        mode=ApplyMode.BROWSER_AUTO, dry_run=False, sleep=_noop_sleep,
+        drivers={"lever": _mode_recording_driver(seen)},
+    )
+
+    asyncio.run(worker.run_once())
+
+    assert seen["mode"] is ApplyMode.BROWSER_AUTO
+
+
+def test_soft_daily_target_defers_remaining_jobs(settings, conn):
+    """Once the day's APPLIED count reaches the profile's daily_target, the worker stops
+    INITIATING new applies this run and leaves the rest in QUEUED_APPLY (soft — no error,
+    no state change). Custom profile with daily_target=2 over 3 queued jobs."""
+    for sid in ("dt-1", "dt-2", "dt-3"):
+        _seed_queued_lever(conn, company=f"co-{sid}", source_job_id=sid)
+
+    custom = settings.model_copy(update={
+        "strategy": StrategyConfig(profile=StrategyProfile.CUSTOM),
+        "pacing": PacingConfig(min_delay_s=0.0, max_delay_s=0.0, daily_target=2,
+                               max_per_company_per_day=2, risk_bias=RiskBias.BALANCED),
+    })
+    worker = _build_worker(custom, conn,
+                           driver=_fake_driver(_make_outcome(status=ApplicationStatus.APPLIED)))
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.applied == 2
+    assert summary.deferred_daily_target == 1
+    # The deferred job is untouched — still QUEUED_APPLY for next day.
+    assert len(JobRepo(conn).list_by_state(JobState.QUEUED_APPLY)) == 1
+    assert any("daily target reached" in n for n in summary.notes)
+
+
+def test_dry_run_ignores_daily_target(settings, conn):
+    """Dry runs produce no APPLIED rows, so the daily target never trips — a dev dry-run
+    must drain the whole queue regardless of target."""
+    for sid in ("dt-4", "dt-5", "dt-6"):
+        _seed_queued_lever(conn, company=f"co-{sid}", source_job_id=sid)
+
+    custom = settings.model_copy(update={
+        "strategy": StrategyConfig(profile=StrategyProfile.CUSTOM),
+        "pacing": PacingConfig(min_delay_s=0.0, max_delay_s=0.0, daily_target=1,
+                               max_per_company_per_day=2, risk_bias=RiskBias.BALANCED),
+    })
+    worker = _build_worker(custom, conn,
+                           driver=_fake_driver(_make_outcome(status=None)), dry_run=True)
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.attempted == 3
+    assert summary.deferred_daily_target == 0
+
+
+def test_aggressive_profile_widens_per_company_cap(settings, conn):
+    """Aggressive's per-company cap (3) lets a 3rd same-company apply through where the
+    Balanced cap (2) would skip it."""
+    _seed_applied_lever(conn, company="acmeco", source_job_id="agg-past-1")
+    _seed_applied_lever(conn, company="acmeco", source_job_id="agg-past-2")
+    _seed_queued_lever(conn, company="acmeco", source_job_id="agg-3")
+
+    worker = _build_worker(
+        _with_profile(settings, StrategyProfile.AGGRESSIVE), conn,
+        driver=_fake_driver(_make_outcome(status=ApplicationStatus.APPLIED)),
+    )
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.applied == 1  # 3rd apply allowed under Aggressive (cap 3)
+    assert summary.skipped == 0
 
 
 # --------------------------------------------------------------- helpers

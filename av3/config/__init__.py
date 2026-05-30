@@ -13,10 +13,18 @@ from av3.config.settings import (
     ScoringConfig,
     ScoringWeights,
     Settings,
+    StrategyConfig,
     TargetingConfig,
     TelemetryConfig,
     WebConfig,
     load_settings,
+)
+from av3.config.strategy import (
+    EffectivePacing,
+    PROFILE_PRESETS,
+    RiskBias,
+    StrategyProfile,
+    resolve_strategy,
 )
 
 __all__ = [
@@ -27,8 +35,15 @@ __all__ = [
     "ScoringConfig",
     "ScoringWeights",
     "Settings",
+    "StrategyConfig",
     "TargetingConfig",
     "TelemetryConfig",
     "WebConfig",
     "load_settings",
+    # strategy profiles (§8a)
+    "EffectivePacing",
+    "PROFILE_PRESETS",
+    "RiskBias",
+    "StrategyProfile",
+    "resolve_strategy",
 ]
