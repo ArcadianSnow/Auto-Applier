@@ -490,3 +490,80 @@ full v3 suite **592 green** (11 deselected by design).
 * **Integrated async drain tick** in the scheduler — deferred (decision #1 above).
 * **Bundled installer + auto-update feed.** (5/M).
 * **Fresh CLAUDE.md for v3.** (6/M).
+
+---
+
+## Phase 5 (5/M) — bundled installer + auto-update feed landed
+
+The distribution half of §11a: a PyInstaller build of the lean app, a first-run
+Chromium fetch, and a GitHub-Releases update check that prompts (not
+auto-replaces). 20 new tests; full v3 suite **612 green** (11 deselected).
+
+### New surface
+
+| Surface | Purpose |
+|---|---|
+| `av3/update.py` | `check_for_update()` / `parse_release_feed()` / `compare_versions()` — PEP 440 compare vs GitHub Releases, injectable fetch |
+| `av3 update [--repo R] [--exit-code]` | Check + prompt; exit 10 w/ `--exit-code` when newer exists; exit 0 on offline |
+| `av3 install-browser [--backend ...]` | First-run/installer Chromium fetch (patchright→playwright fallback) |
+| `build_v3.py` + `run_v3.py` | PyInstaller build script + frozen entry (no-arg → `av3 launch`) |
+
+### Load-bearing design decisions to remember
+
+1. **Chromium is NOT bundled — fetched on first run (the "lean installer"
+   decision; the (5/M) open question resolved).** Playwright/patchright resolve
+   browser binaries through their own cache, NOT PyInstaller's `_MEIPASS` temp
+   dir, so bundling a ~150 MB Chromium into the onefile is fragile and against
+   §11a "lean." The installer ships only the Python app; first launch (or the
+   installer post-step) runs `av3 install-browser`. **And most applies use the
+   user's REAL Chrome via `channel` (spec §8c)** — this Chromium is only the
+   stealth driver + the busy-Chrome fallback (`session.py` falls back to a
+   `_chromium` profile when real Chrome is busy), so many users barely touch it.
+   Two-step install: `AutoApplierV3.exe`, then `AutoApplierV3.exe install-browser`.
+
+2. **Frozen-exe launcher bug fixed.** `launch_cmd` spawned
+   `[sys.executable, "-m", "av3.cli.main", "serve", …]` — which is correct from
+   source but **broken in a PyInstaller onefile** (there `sys.executable` is the
+   bundled app and `-m av3.cli.main` is meaningless; the bootloader runs
+   `run_v3.py`). Now `getattr(sys, "frozen", False)` switches to
+   `[sys.executable, "serve", …]`, and `run_v3.py` forwards argv to the Click
+   group so `<exe> serve` works. The single binary is BOTH the one-click
+   launcher (no args → `av3 launch`) AND the full CLI (`<exe> doctor`, etc.).
+
+3. **Update is check + prompt, never auto-replace (v3.0).** Replacing a running,
+   browser-driving service in place is its own risk surface; a human running the
+   installer is the safe path. `av3 update` prints where to get the build.
+   Auto-download/replace is a later refinement if it ever earns its keep.
+
+4. **`allow_prerelease=True` by default.** Current version is `3.0.0a0` and the
+   group runs alpha builds; skipping prereleases would hide alpha updates from
+   exactly the testers. The flag exists for a future stable channel. The feed
+   parser accepts BOTH the `/releases` list shape (pick newest non-draft) and the
+   `/releases/latest` dict shape.
+
+5. **An update check NEVER raises.** `check_for_update` returns `None` on offline
+   / HTTP-error / malformed-feed, and the CLI treats that as "couldn't check,
+   carry on" (exit 0). A launcher or doctor run must never die on a missed check.
+
+6. **`packaging` added to v3 deps** (was transitively present; now explicit since
+   `update.py` imports `packaging.version` directly).
+
+### Edge cases covered (`tests_v3/test_update.py`)
+
+| Concern | Test |
+|---|---|
+| PEP 440 compare incl. alpha + leading-v + unparseable→safe | `test_compare_versions` |
+| feed dict / list-newest-nondraft / prerelease-gate / empty→None | `test_parse_feed_*` |
+| `check_for_update` newer / HTTP-error→None / exception→None | `test_check_for_update_*` |
+| `av3 update` reports / `--exit-code`=10 / offline exit 0 | `test_update_cmd_*` |
+| `install-browser` success / playwright fallback / all-fail exit 1 | `test_install_browser_*` |
+
+### What's NOT in this sub-phase / not unit-tested
+
+* **The PyInstaller build itself** (`build_v3.py`) — shells out to a multi-minute
+  native build; PyInstaller is a build-host tool, not a runtime dep. Not run in
+  CI. The logic it leans on (update check, install-browser) IS unit-tested.
+* **Auto-download/replace of updates** — deferred (decision #3).
+* **A dashboard update-available badge** — the `av3 update` check is the v3.0
+  surface; wiring it into the web UI is a nicety, not required for §11a.
+* **Fresh CLAUDE.md for v3.** (6/M).

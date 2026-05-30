@@ -1128,11 +1128,20 @@ def launch_cmd(host: str | None, port: int | None,
     # in a fresh checkout where ``pip install -e .`` hasn't run yet — the
     # console script may be missing, but the module path is always
     # importable from the repo root.
-    child_args = [
-        sys.executable, "-m", "av3.cli.main", "serve",
-        "--host", str(effective_host),
-        "--port", str(effective_port),
-    ]
+    # In a PyInstaller-frozen exe, ``sys.executable`` IS the bundled app and the
+    # ``-m av3.cli.main`` form does NOT work (the bootloader runs run_v3.py, which
+    # forwards argv straight to the Click group). So the frozen launcher spawns
+    # ``<exe> serve ...`` and the source launcher spawns ``python -m av3.cli.main
+    # serve ...``. (Phase 5 5/M — bundled-installer correctness.)
+    if getattr(sys, "frozen", False):
+        child_args = [sys.executable, "serve",
+                      "--host", str(effective_host), "--port", str(effective_port)]
+    else:
+        child_args = [
+            sys.executable, "-m", "av3.cli.main", "serve",
+            "--host", str(effective_host),
+            "--port", str(effective_port),
+        ]
     click.echo(f"Launching av3 server at {dashboard_url} ...")
 
     # On Windows we don't want a separate console window for the child —
@@ -1623,6 +1632,88 @@ def mirror_drain_cmd(limit: int, timeout_s: float) -> None:
     # network blip), not a local error, and the backoff ladder retries it. Failing
     # here would flap a user's cron alert on every brief relay outage. A genuine
     # config problem (no relay_url) already exited 2 above.
+
+
+@cli.command("update")
+@click.option("--repo", type=str, default=None,
+              help="GitHub slug to check (default the project repo).")
+@click.option("--timeout-s", type=float, default=5.0, show_default=True,
+              help="HTTP timeout for the release-feed fetch.")
+@click.option("--exit-code", is_flag=True, default=False,
+              help="Exit 10 when an update is available (for scripting / a "
+                   "launch-time check). Default always exits 0.")
+def update_cmd(repo: str | None, timeout_s: float, exit_code: bool) -> None:
+    """Check the release feed and prompt if a newer version exists (spec §11a).
+
+    v3.0 is check + prompt only — it tells you where to get the new installer;
+    it does NOT auto-replace a running service (that's its own risk surface).
+    Never fails the command on a network problem — a missed check is not an error.
+    """
+    from av3.update import DEFAULT_REPO, check_for_update
+
+    effective_repo = repo or DEFAULT_REPO
+    info = check_for_update(__version__, repo=effective_repo, timeout_s=timeout_s)
+
+    if info is None:
+        click.echo(
+            f"Could not reach the release feed for {effective_repo} "
+            f"(offline / rate-limited?). Current version {__version__}."
+        )
+        return  # exit 0 — a missed check is not an error
+    if info.is_newer:
+        click.echo(
+            f"Update available: {info.current} -> {info.latest}\n"
+            f"  {info.url}\n"
+            "  Download and run the new installer to update."
+        )
+        if exit_code:
+            sys.exit(10)
+    else:
+        click.echo(f"Up to date (current {info.current}, latest {info.latest}).")
+
+
+@cli.command("install-browser")
+@click.option("--backend", type=click.Choice(["auto", "patchright", "playwright"]),
+              default="auto", show_default=True,
+              help="Which package's `install chromium` to run. 'auto' prefers "
+                   "patchright (the stealth backend) and falls back to playwright.")
+def install_browser_cmd(backend: str) -> None:
+    """Download the Chromium browser binary (first-run / installer step, spec §11a).
+
+    The bundled installer ships the Python app lean; the browser is fetched here
+    on first launch. Real Chrome (via channel) is the primary apply path (spec
+    §8c) — this Chromium is the stealth driver + the busy-Chrome fallback the
+    BrowserSession uses. Idempotent: re-running just re-verifies the download.
+    """
+    import subprocess
+
+    order = (
+        ["patchright", "playwright"] if backend == "auto" else [backend]
+    )
+    last_err = ""
+    for pkg in order:
+        click.echo(f"Installing Chromium via {pkg} ...")
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", pkg, "install", "chromium"],
+                capture_output=True, text=True,
+            )
+        except FileNotFoundError as exc:
+            last_err = f"{pkg}: {exc}"
+            continue
+        if proc.returncode == 0:
+            click.echo(f"+ Chromium installed via {pkg}.")
+            return
+        last_err = (proc.stderr or proc.stdout or "").strip()[:300]
+        click.echo(f"! {pkg} install failed (rc={proc.returncode}); trying next backend.",
+                   err=True)
+    click.echo(f"  x FAIL could not install Chromium: {last_err}", err=True)
+    click.echo(
+        "        fix -> ensure the v3 extras are installed "
+        "(`pip install -e \".[v3]\"`) then re-run `av3 install-browser`.",
+        err=True,
+    )
+    sys.exit(1)
 
 
 @cli.command("backup")

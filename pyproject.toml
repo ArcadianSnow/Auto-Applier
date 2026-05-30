@@ -54,6 +54,7 @@ v3 = [
     "httpx>=0.27",
     "rapidfuzz>=3.0",        # fabrication-guard L1 fuzzy entity match (spec §6b)
     "python-dateutil>=2.8",  # fabrication-guard L1 date-range checks
+    "packaging>=23.0",       # PEP 440 version compare for the auto-update check (spec §11a)
     # Phase 4 (1/M): web UI + worker service (spec §3, §10). FastAPI runs the
     # local dashboard + JSON API; uvicorn hosts it; jinja2 renders templates.
     # All three are pure-Python wheels; no native build deps. Pinned loosely so
