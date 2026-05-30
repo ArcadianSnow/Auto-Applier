@@ -546,6 +546,7 @@ def apply(once: bool, limit: int | None, source: str | None,
         f"applied={summary.applied} review={summary.review} "
         f"skipped={summary.skipped} paused={summary.paused} "
         f"errors={summary.errors} recovered={summary.recovered} "
+        f"deferred={summary.deferred_daily_target} rotated={summary.rotated} "
         f"dry_run={summary.dry_run_count} elapsed={summary.elapsed_s:.1f}s"
     )
     if summary.notes:

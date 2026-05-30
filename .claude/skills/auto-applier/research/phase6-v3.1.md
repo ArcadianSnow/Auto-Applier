@@ -205,11 +205,11 @@ agree on "today".
 sub-phase — profile is config-driven (a `--profile` override + the onboarding selector are a later nicety;
 spec §11a notes profile selection appears in onboarding only in v3.1).
 
-**Scope deferred (documented in `strategy.py`).** Two of the five §8a knobs are NOT wired: **concurrency**
-(sources in parallel) and **session rotation** (time-box per source then rotate). The v3.0 scheduler drains
-stages sequentially and rotation needs per-source session bookkeeping that doesn't exist yet. `EffectivePacing`
-deliberately omits fields for them so a half-wired knob can't masquerade as live. They land in a later
-sub-phase (needs scheduler-architecture work).
+**Scope deferred (RESOLVED in 8/M — see the (8/M) section at the end of this doc).** 2/M left two of the
+five §8a knobs unwired: **concurrency** (sources in parallel) and **session rotation** (time-box per source
+then rotate). 8/M added both: `EffectivePacing` now carries `concurrency` (declared ceiling, worker still
+sequential) and `session_rotation_min` (enforced by `SessionRotationPolicy`). Balanced stays inert
+(`1, 0.0`).
 
 **Backward-compat.** Default profile = Balanced = the old PacingConfig defaults, so a fresh install behaves
 byte-for-byte as v3.0. `ApplyWorker.__init__` signature unchanged (`mode=` still the requested posture). All
@@ -224,3 +224,43 @@ dry-run-ignores-target, aggressive widens per-company cap). Full v3 suite **631 
 total; that proxy ignores parametrization/class methods. Resolution was *provenance* not arithmetic: `git
 status` confirmed only the two intended test files changed, so no existing test could be lost — the green
 suite is authoritative. Don't reconcile test counts by subtraction; check which files changed.
+
+---
+
+## (8/M) strategy concurrency + session-rotation knobs §8a — DONE (2026-05-30, full suite 734 green)
+
+The deferred half of §8a from 2/M. Two commits: **fce893f** (code+tests), doc/CLI follow-up after.
+
+**Config (`av3/config/strategy.py` + `settings.py`).** `EffectivePacing` (frozen) gained two fields:
+- `concurrency: int = 1` — declared parallel-apply ceiling (Cautious 1, Balanced 1, Aggressive 3).
+  **DECLARED ONLY** — `ApplyWorker` still drains sequentially; the scheduler/dashboard read this, a future
+  parallel drainer acts on it. No behaviour change today.
+- `session_rotation_min: float = 0.0` — per-source time-box in minutes (Cautious 15, Balanced 0=OFF,
+  Aggressive 30). **Balanced MUST stay 0.0** = v3.0 invariant.
+`PROFILE_PRESETS` set both per profile; `resolve_strategy` CUSTOM branch passes them through from
+`settings.pacing` (PacingConfig gained the two carrier fields after `risk_bias`).
+
+**`SessionRotationPolicy(rotation_min, *, now=time.monotonic)`** (new, in `strategy.py`; pure +
+clock-injectable): `.enabled` (budget>0), `.on_source(src)` (starts/restarts the timer ONLY on source
+CHANGE — same source must NOT reset, else the budget never elapses), `.should_rotate()`
+(`(now-started)>=budget_s`).
+
+**Worker (`av3/pipeline/apply_worker.py`).** New `__init__` param `rotation_clock: Callable[[],float]|None`
+(stored, passed as the policy's `now=`). `ApplyRunSummary` gained `rotated: int`. `run_once` builds the
+policy after pulling the queue; at the TOP of the per-job loop calls `on_source(job.source)` then
+`should_rotate()` — on trip sets `summary.rotated = len(queued)-queued.index(job)`, appends a
+"session rotation" note, and `break`s. **SOFT** defer (like the daily-target break): deferred jobs stay
+QUEUED_APPLY, no error, no state change. Fires in dry-run too (it paces sources, not real submits).
+
+**CLI.** The `av3 apply` summary line in **`av3/cli/main.py`** (~L545 — *there is NO `worker_cmds.py`*; the
+apply command lives in `main.py`) gained `deferred={...} rotated={...}` (`deferred_daily_target` was
+previously only surfaced via the notes list).
+
+**Tests (+8).** `test_strategy.py` +6 (presets-carry-knobs, custom-passthrough, rotation
+disabled/fires-after-budget/resets-on-source-change/same-source-no-reset — via a `_Clock` helper);
+`test_apply_worker.py` +2 (rotation defers remaining via a `_counting_clock`; no-rotation-when-disabled even
+with an instant clock). Suite 726 → **734 passed**, 11 deselected.
+
+**GOTCHAS.** (1) `Edit` on `cli/main.py` requires a Read-tool open first (Grep is not enough). (2) The §8a CLI
+line is in `cli/main.py`, not a worker_cmds file. (3) `.gitignore` ignores only `.claude/unstuck/` — this
+research dir IS git-tracked.

@@ -702,9 +702,17 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
     `SkillGapRepo`; `build_proposals` ranks; `apply_proposals` additively inserts) + `SkillGapRepo.set_status`
     + `JobRepo.list_all_with_description` + `av3 reconcile [--scan] [--min-count] [--apply]`. Preview is
     read-only; fact-bank insert gated behind `--apply` (Rule 2.6). +22 tests (full suite 714 green).
-  - **Remaining:** story bank + company research (on-demand) + rich analytics / what-to-learn trends
-    (§ skill-gap trends); branded UI polish (incl. the interactive reconciliation conversation); strategy
-    concurrency + session-rotation knobs.
+  - **(6/M) what-to-learn trends §10/§7b. ✅ DONE (2026-05-30).** `SkillGapTrend` + `compute_skill_gap_trends`
+    + `ScoreRepo.totals_by_job` + `av3 learn`. Folded into the same commit as 5/M (e7a5546). Full suite 726 green.
+  - **(8/M) strategy concurrency + session-rotation knobs §8a. ✅ DONE (2026-05-30).** `EffectivePacing`/
+    `PacingConfig`/`PROFILE_PRESETS` gained `concurrency` (declared parallel ceiling — Cautious 1 / Balanced
+    1 / Aggressive 3; worker still sequential, read-not-acted) and `session_rotation_min` (per-source
+    time-box; Balanced 0.0 = v3.0 invariant). New `SessionRotationPolicy` (pure, clock-injectable);
+    `ApplyWorker` gained a `rotation_clock` ctor param + `ApplyRunSummary.rotated`; `run_once` softly defers
+    once a source's budget elapses. `av3 apply` line gained `deferred=`/`rotated=`. +8 tests (full suite
+    **734 green**). **Phase 6 core complete.**
+  - **Remaining (optional extras only, spec §11 deferrable):** story bank + on-demand company research;
+    branded UI polish (incl. the interactive reconciliation conversation).
 
 ---
 
