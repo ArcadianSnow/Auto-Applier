@@ -361,13 +361,17 @@ Thresholds/flags live in typed config so behavior is tunable without code edits.
 > **Scope:** **v3.1.** v3.0 ships sensible *fixed* pacing (basic rate-limit + per-source rotation); the
 > configurable Cautious/Balanced/Aggressive profile system below lands in v3.1.
 >
-> **Status (Phase 6 2/M, 2026-05-30):** the profile system is LIVE for the knobs with consumption points —
+> **Status (Phase 6 2/M + 8/M, 2026-05-30):** the profile system is LIVE for ALL §8a knobs. 2/M wired
 > **inter-apply delay, soft daily target, per-company/day cap, and risk-router bias** (→ auto-vs-assisted
-> *starting* mode). Selector is `strategy.profile` in `user_config.json` (default `balanced`, whose preset ==
-> the v3.0 fixed defaults, so the default is inert). Profiles + presets live in `av3/config/strategy.py`;
-> `ApplyWorker` resolves them once via `resolve_strategy()`. **Still deferred:** the **concurrency** and
-> **session-rotation** knobs (need scheduler-architecture work — the v3.0 scheduler drains stages
-> sequentially). See `research/phase6-v3.1.md` §(2/M).
+> *starting* mode). 8/M added **concurrency** (declared parallel-apply ceiling — Cautious 1 / Balanced 1 /
+> Aggressive 3; the worker still drains sequentially, so it's read by the scheduler/dashboard, not yet
+> acted on) and **session rotation** (`session_rotation_min`; enforced by `SessionRotationPolicy`, which
+> the apply loop consults at the top of each job — once the budget on the current source elapses the worker
+> softly defers the rest, `summary.rotated`, surfaced as `rotated=` on the CLI line, like the daily-target
+> break). Selector is `strategy.profile` in `user_config.json` (default `balanced`, whose preset == the v3.0
+> fixed defaults incl. `concurrency=1, session_rotation_min=0.0`, so the default is inert). Profiles +
+> presets live in `av3/config/strategy.py`; `ApplyWorker` resolves them once via `resolve_strategy()`. See
+> `research/phase6-v3.1.md` §(2/M)+(8/M).
 
 Retire v2's rigid "10 apps/day, 60–180s between." A fixed cap is annoying to maintain *and* paternalistic
 toward a user who wants volume. The real tradeoff is a frontier — **throughput ↔ detection-risk ↔ user
@@ -668,7 +672,7 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
   **612 green**, 11 deselected by design). Per-sub-phase rationale:
   `research/observability-and-distribution.md`.
 - **→ Ship v3.0.** ✅ All v3.0-core phases (0–5) complete. Remaining work is v3.1 (Phase 6).
-- **Phase 6 — v3.1 (after core proves out). IN PROGRESS (2026-05-30).** Independent sub-phases, no mandated
+- **Phase 6 — v3.1 (after core proves out). CORE COMPLETE (2026-05-30).** Independent sub-phases, no mandated
   order; per-sub-phase rationale in `research/phase6-v3.1.md`.
   - **(1/M) per-job résumé-path rewire. ✅ DONE (2026-05-30).** The apply worker now reads the optimize-
     generated per-job résumé + cover letter (derived from `job.id` via `av3.resume.generate`'s path helpers;
@@ -680,7 +684,7 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
     on Settings + `PacingConfig.risk_bias`. `ApplyWorker` resolves the active profile once and drives
     inter-apply delay, per-company cap, **soft daily target** (defers, never blocks), and **risk-router
     bias** (Cautious → assisted starting mode; safety-floor downgrade still fires on top). Balanced preset ==
-    v3.0 defaults (backward-compat). Concurrency + session-rotation knobs deferred (scheduler work). +15
+    v3.0 defaults (backward-compat). Concurrency + session-rotation knobs landed in (8/M). +15
     tests (full suite 631 green).
   - **(3/M) salary intelligence §8d. ✅ DONE (2026-05-30).** `av3/resume/salary.py` (SalaryRange,
     SalaryRecommendation, `recommend_ask` posted→market→user, `parse_posted_range`, `is_below_floor`,
