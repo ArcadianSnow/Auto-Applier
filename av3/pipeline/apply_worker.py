@@ -64,8 +64,17 @@ Pacing & strategy (spec §8a — Pareto profiles, Phase 6 / v3.1):
     (left in QUEUED_APPLY); a *goal*, never a hard wall, and dry-runs never trip it.
   * **Risk-router bias** from ``pacing.risk_bias`` — a ``leans_assisted`` profile starts
     every job assisted (the *starting* posture; the driver's detection-signal downgrade,
-    the safety floor, still fires on top). Concurrency + session-rotation knobs from the
-    §8a table are NOT wired yet (scheduler-architecture work) — see ``strategy.py``.
+    the safety floor, still fires on top).
+  * **Session rotation** from ``pacing.session_rotation_min`` (spec §8a 8/M) — a
+    :class:`av3.config.strategy.SessionRotationPolicy` time-boxes how long the run keeps
+    applying to one source before rotating off it. Consulted at the top of the per-job
+    loop; when the budget on the current source elapses the worker *softly* defers the
+    remaining jobs (left in QUEUED_APPLY), the same shape as the daily-target break. The
+    clock is injectable (``rotation_clock``) so tests drive it deterministically; default
+    profile (Balanced, ``session_rotation_min=0.0``) disables it = v3.0 behaviour.
+  * **Concurrency** (``pacing.concurrency``) is a declared parallel ceiling the profile
+    carries for a future parallel drainer / the dashboard; this worker still drains
+    sequentially, so it reads but doesn't act on it yet — see ``strategy.py``.
 """
 
 from __future__ import annotations
@@ -78,7 +87,12 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from av3.config.settings import Settings
-from av3.config.strategy import EffectivePacing, RiskBias, resolve_strategy
+from av3.config.strategy import (
+    EffectivePacing,
+    RiskBias,
+    SessionRotationPolicy,
+    resolve_strategy,
+)
 from av3.db.repositories import AnswerRepo, ApplicationRepo, JobRepo
 from av3.domain.models import Application, Job, utcnow_iso
 from av3.domain.state import ApplicationStatus, ApplyMode, JobState
@@ -226,6 +240,7 @@ class ApplyRunSummary:
     errors: int = 0       # exception during _process_one
     recovered: int = 0    # crash-sweep: APPLYING leftovers re-queued (spec §5)
     deferred_daily_target: int = 0  # jobs left in QUEUED_APPLY because the soft daily target was hit (§8a)
+    rotated: int = 0      # jobs left in QUEUED_APPLY because the session-rotation budget elapsed (§8a 8/M)
     dry_run_count: int = 0
     elapsed_s: float = 0.0
     notes: list[str] = field(default_factory=list)
@@ -259,6 +274,7 @@ class ApplyWorker:
         sleep: Callable[[float], Awaitable[None]] | None = None,
         rng: random.Random | None = None,
         drivers: dict[str, DriverEntry] | None = None,
+        rotation_clock: Callable[[], float] | None = None,
     ):
         self._settings = settings
         self._conn = conn
@@ -270,6 +286,9 @@ class ApplyWorker:
         self._sleep = sleep or asyncio.sleep
         self._rng = rng or random.Random()
         self._drivers = drivers if drivers is not None else default_drivers()
+        # Session-rotation clock (spec §8a 8/M) — injectable so tests advance it
+        # deterministically; None → SessionRotationPolicy falls back to time.monotonic.
+        self._rotation_clock = rotation_clock
 
         # Strategy profile (spec §8a, Phase 6) — resolve the active pacing knobs ONCE.
         # The profile→knobs mapping lives in av3.config.strategy; the worker reads the
@@ -364,7 +383,31 @@ class ApplyWorker:
         queued = self._job_repo.list_by_state(JobState.QUEUED_APPLY, limit=limit)
         prior_was_apply = False
 
+        # Session-rotation policy (spec §8a 8/M) — time-box the run on one source, then
+        # rotate. Disabled (no-op) when the active profile's session_rotation_min is 0
+        # (Balanced / v3.0). Clock is injectable for deterministic tests.
+        rotation = SessionRotationPolicy(
+            self._pacing.session_rotation_min, now=self._rotation_clock
+        )
+
         for job in queued:
+            # Session rotation (spec §8a 8/M) — consult BEFORE any per-job work so the
+            # budget is measured against the source we're about to apply to. on_source
+            # (re)starts the timer when the source changes; should_rotate fires once the
+            # budget on the current source elapses. A *soft* stop like the daily target:
+            # the remaining jobs stay in QUEUED_APPLY for the next cycle, no error, no
+            # state change. Applies in dry-run too (it paces sources, not real submits).
+            rotation.on_source(job.source)
+            if rotation.should_rotate():
+                remaining = len(queued) - queued.index(job)
+                summary.rotated = remaining
+                summary.notes.append(
+                    f"session rotation: {self._pacing.session_rotation_min:g} min on "
+                    f"{job.source!r} elapsed (profile={self._pacing.profile.value}); "
+                    f"deferring {remaining} job(s)"
+                )
+                break
+
             # Soft daily target (spec §8a) — a *goal*, never a hard wall. In a real
             # (non-dry) run, once the day's APPLIED count reaches the profile's target we
             # stop INITIATING new applies this run and leave the rest in QUEUED_APPLY for

@@ -855,6 +855,77 @@ def test_aggressive_profile_widens_per_company_cap(settings, conn):
     assert summary.skipped == 0
 
 
+# --------------------------------------------------------------- session rotation (Phase 6 8/M)
+
+def _counting_clock(step: float):
+    """A monotonic clock that advances by ``step`` seconds on every read. Lets a single
+    run_once() cross the rotation budget deterministically without real sleeps."""
+    state = {"n": -1}
+
+    def clock() -> float:
+        state["n"] += 1
+        return state["n"] * step
+
+    return clock
+
+
+def test_session_rotation_defers_remaining_jobs(settings, conn):
+    """Custom profile with a session-rotation budget: once the budget on the current
+    source elapses mid-run, the worker softly defers the remaining jobs (summary.rotated)
+    and stops INITIATING new applies — the same shape as the daily-target break. Works in
+    dry-run because rotation paces sources, not real submits."""
+    for sid in ("rot-1", "rot-2", "rot-3"):
+        _seed_queued_lever(conn, company=f"co-{sid}", source_job_id=sid)
+
+    custom = settings.model_copy(update={
+        "strategy": StrategyConfig(profile=StrategyProfile.CUSTOM),
+        "pacing": PacingConfig(
+            min_delay_s=0.0, max_delay_s=0.0, daily_target=100,
+            max_per_company_per_day=100, risk_bias=RiskBias.BALANCED,
+            session_rotation_min=10.0,  # 600s budget
+        ),
+    })
+    # step=400s/read: job1 should_rotate sees 400 (<600, processes), job2 sees 800 (>=600,
+    # rotates) — so exactly one job runs, the other two defer.
+    worker = ApplyWorker(
+        settings=custom, conn=conn, fact_bank=_bank(), resume_path="/tmp/r.pdf",
+        new_page=_new_page, applicant=Applicant("Pat", "Doe", "pat@example.com", "555"),
+        dry_run=True, sleep=_noop_sleep,
+        drivers={"lever": _fake_driver(_make_outcome(status=None))},
+        rotation_clock=_counting_clock(400.0),
+    )
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.rotated >= 1
+    assert summary.attempted < 3
+    # Every queued job is accounted for: either attempted or deferred by rotation.
+    assert summary.attempted + summary.rotated == 3
+    assert any("session rotation" in n for n in summary.notes)
+
+
+def test_no_rotation_when_disabled(settings, conn):
+    """Default profile (Balanced → session_rotation_min=0.0) never rotates, even with a
+    clock that would trip an *enabled* policy instantly — proving it's the disabled flag,
+    not a slow clock, keeping rotation off. The whole queue drains."""
+    for sid in ("rot-d1", "rot-d2", "rot-d3"):
+        _seed_queued_lever(conn, company=f"co-{sid}", source_job_id=sid)
+
+    worker = ApplyWorker(
+        settings=settings,  # default = Balanced = rotation disabled
+        conn=conn, fact_bank=_bank(), resume_path="/tmp/r.pdf", new_page=_new_page,
+        applicant=Applicant("Pat", "Doe", "pat@example.com", "555"),
+        dry_run=True, sleep=_noop_sleep,
+        drivers={"lever": _fake_driver(_make_outcome(status=None))},
+        rotation_clock=_counting_clock(10_000.0),  # would rotate instantly IF enabled
+    )
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.rotated == 0
+    assert summary.attempted == 3
+
+
 # --------------------------------------------------------------- helpers
 
 def test_gh_token_extracted_from_canonical_url():

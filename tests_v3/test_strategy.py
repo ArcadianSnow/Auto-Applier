@@ -21,9 +21,25 @@ from av3.config.strategy import (
     PROFILE_PRESETS,
     EffectivePacing,
     RiskBias,
+    SessionRotationPolicy,
     StrategyProfile,
     resolve_strategy,
 )
+
+
+class _Clock:
+    """Deterministic injectable monotonic clock — reads return the current time WITHOUT
+    advancing; the test moves time forward explicitly with :meth:`advance`. Matches how
+    SessionRotationPolicy reads ``now()`` (idempotent reads within one decision)."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, dt: float) -> None:
+        self.t += dt
 
 
 # --------------------------------------------------------------- defaults / backward-compat
@@ -131,3 +147,78 @@ def test_custom_risk_bias_round_trips_through_user_config(data_dir, monkeypatch)
     )
     s = load_settings()
     assert resolve_strategy(s).risk_bias is RiskBias.LEANS_ASSISTED
+
+
+# --------------------------------------------------------------- concurrency + rotation knobs (8/M)
+
+def test_presets_carry_concurrency_and_rotation_knobs():
+    """8/M: each named preset carries a concurrency ceiling + a session-rotation budget.
+    Balanced MUST stay (1, 0.0) — the v3.0 backward-compat invariant for the new knobs."""
+    cau = PROFILE_PRESETS[StrategyProfile.CAUTIOUS]
+    bal = PROFILE_PRESETS[StrategyProfile.BALANCED]
+    agg = PROFILE_PRESETS[StrategyProfile.AGGRESSIVE]
+    assert (bal.concurrency, bal.session_rotation_min) == (1, 0.0)  # v3.0 invariant
+    assert cau.concurrency == 1 and cau.session_rotation_min > 0.0
+    assert agg.concurrency == 3 and agg.session_rotation_min > cau.session_rotation_min
+
+
+def test_custom_profile_passes_through_concurrency_and_rotation():
+    """CUSTOM resolves the new knobs from the hand-set settings.pacing, like every other
+    custom-carried knob."""
+    s = Settings(
+        strategy=StrategyConfig(profile=StrategyProfile.CUSTOM),
+        pacing=PacingConfig(concurrency=4, session_rotation_min=12.5),
+    )
+    ep = resolve_strategy(s)
+    assert ep.concurrency == 4
+    assert ep.session_rotation_min == 12.5
+
+
+def test_session_rotation_disabled_when_zero():
+    """rotation_min <= 0 → policy is inert: never rotates no matter how much time passes
+    (the Balanced / v3.0 default)."""
+    clk = _Clock()
+    rot = SessionRotationPolicy(0.0, now=clk)
+    assert rot.enabled is False
+    rot.on_source("lever")
+    clk.advance(10_000.0)
+    assert rot.should_rotate() is False
+
+
+def test_session_rotation_fires_after_budget_elapses():
+    """With a 10-min budget, should_rotate flips True once 600s have elapsed on the
+    source — and not a moment before."""
+    clk = _Clock()
+    rot = SessionRotationPolicy(10.0, now=clk)  # 600s
+    assert rot.enabled is True
+    rot.on_source("lever")  # started at t=0
+    assert rot.should_rotate() is False
+    clk.advance(599.0)
+    assert rot.should_rotate() is False
+    clk.advance(1.0)  # exactly at budget
+    assert rot.should_rotate() is True
+
+
+def test_session_rotation_resets_timer_on_source_change():
+    """Switching to a NEW source restarts the per-source budget — rotation is per source,
+    not a global wall clock."""
+    clk = _Clock()
+    rot = SessionRotationPolicy(10.0, now=clk)  # 600s
+    rot.on_source("lever")  # started t=0
+    clk.advance(600.0)
+    assert rot.should_rotate() is True
+    rot.on_source("greenhouse")  # source changed → timer restarts at t=600
+    assert rot.should_rotate() is False
+    clk.advance(600.0)  # t=1200, 600s on greenhouse
+    assert rot.should_rotate() is True
+
+
+def test_session_rotation_same_source_does_not_reset_timer():
+    """Processing more jobs of the SAME source must NOT reset the timer — otherwise the
+    budget could never elapse on a single-source queue."""
+    clk = _Clock()
+    rot = SessionRotationPolicy(10.0, now=clk)  # 600s
+    rot.on_source("lever")  # started t=0
+    clk.advance(600.0)
+    rot.on_source("lever")  # same source → timer NOT reset
+    assert rot.should_rotate() is True

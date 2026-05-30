@@ -100,6 +100,8 @@ class PacingConfig(BaseModel):
     daily_target: int = 30  # soft goal, never a hard wall
     max_per_company_per_day: int = 2  # re-apply rate limit (spec §7)
     risk_bias: RiskBias = RiskBias.BALANCED  # custom-profile starting posture (§8a)
+    concurrency: int = 1  # custom-profile parallel-apply ceiling (§8a 8/M)
+    session_rotation_min: float = 0.0  # custom-profile per-source time-box, min (§8a 8/M)
 
     @model_validator(mode="after")
     def _delays_ordered(self) -> "PacingConfig":
