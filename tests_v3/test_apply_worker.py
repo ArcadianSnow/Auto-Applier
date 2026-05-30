@@ -48,6 +48,10 @@ from av3.resume.answer_resolver import (
     SensitiveClass,
 )
 from av3.resume.factbank import Contact, FactBank
+from av3.resume.generate import (
+    generated_cover_letter_path,
+    generated_resume_path,
+)
 from av3.sources.browser.apply_base import (
     Applicant,
     ApplyOutcome,
@@ -589,6 +593,97 @@ def test_applicant_built_from_fact_bank_when_not_provided(settings, conn):
     assert worker._applicant.first_name == "Sam"
     assert worker._applicant.last_name == "Lee"
     assert worker._applicant.email == "sam@x.io"
+
+
+# --------------------------------------------------------------- per-job artifacts (Phase 6 1/M)
+
+def _recording_resume_driver(seen: dict, *, status=ApplicationStatus.APPLIED) -> DriverEntry:
+    """A fake driver that records the résumé path it was handed (4th positional arg of
+    ``prepare`` — ``page, listing, applicant, resume_path``)."""
+
+    async def prepare(*a, **_kw):
+        seen["resume_path"] = a[3]
+        return _make_outcome(status=status)
+
+    return DriverEntry(listing_from_job=lambda j: j, prepare=prepare)
+
+
+def test_uses_per_job_generated_resume_when_present(settings, conn):
+    """When the optimize worker has written a per-job résumé PDF (keyed by job.id), the
+    apply worker uploads THAT — not the global fallback — and records it on the row."""
+    job = _seed_queued_lever(conn, company="acmeco", source_job_id="art-1")
+
+    # Simulate the optimize worker's output: a per-job résumé keyed by job.id.
+    pdf = generated_resume_path(settings, job.id)
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    pdf.write_bytes(b"%PDF per-job\n")
+
+    seen: dict = {}
+    worker = _build_worker(settings, conn, driver=_recording_resume_driver(seen))
+
+    asyncio.run(worker.run_once())
+
+    assert seen["resume_path"] == str(pdf)
+    apps = ApplicationRepo(conn).list_by_job(job.id)
+    assert apps[0].generated_resume_path == str(pdf)
+
+
+def test_falls_back_to_global_resume_when_no_per_job_pdf(settings, conn):
+    """No per-job PDF on disk → the worker hands the driver the single global
+    ``resume.pdf`` it was constructed with, and records that on the row."""
+    job = _seed_queued_lever(conn, company="acmeco", source_job_id="art-2")
+
+    seen: dict = {}
+    worker = _build_worker(settings, conn, driver=_recording_resume_driver(seen))
+
+    asyncio.run(worker.run_once())
+
+    assert seen["resume_path"] == "/tmp/resume.pdf"  # the _build_worker fallback
+    apps = ApplicationRepo(conn).list_by_job(job.id)
+    assert apps[0].generated_resume_path == "/tmp/resume.pdf"
+    assert apps[0].cover_letter_path == ""  # no per-job cover letter generated
+
+
+def test_records_per_job_cover_letter_path_when_present(settings, conn):
+    """The per-job cover letter (.txt) the optimize worker wrote is recorded on the
+    Application row alongside the per-job résumé."""
+    job = _seed_queued_lever(conn, company="acmeco", source_job_id="art-3")
+
+    pdf = generated_resume_path(settings, job.id)
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    pdf.write_bytes(b"%PDF\n")
+    cover = generated_cover_letter_path(settings, job.id)
+    cover.write_text("Dear hiring team, ...", encoding="utf-8")
+
+    worker = _build_worker(
+        settings, conn,
+        driver=_fake_driver(_make_outcome(status=ApplicationStatus.APPLIED)),
+    )
+
+    asyncio.run(worker.run_once())
+
+    apps = ApplicationRepo(conn).list_by_job(job.id)
+    assert apps[0].generated_resume_path == str(pdf)
+    assert apps[0].cover_letter_path == str(cover)
+
+
+def test_failed_recovery_records_per_job_resume_path(settings, conn):
+    """A driver crash routes the job to REVIEW with a FAILED Application row carrying the
+    per-job résumé path, so dashboard triage shows which résumé it would have used."""
+    job = _seed_queued_lever(conn, company="acmeco", source_job_id="art-4")
+    pdf = generated_resume_path(settings, job.id)
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    pdf.write_bytes(b"%PDF\n")
+
+    worker = _build_worker(settings, conn, driver=_fake_driver(RuntimeError))
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.errors == 1
+    assert JobRepo(conn).get(job.id).state is JobState.REVIEW
+    apps = ApplicationRepo(conn).list_by_job(job.id)
+    assert apps[0].status is ApplicationStatus.FAILED
+    assert apps[0].generated_resume_path == str(pdf)
 
 
 # --------------------------------------------------------------- helpers

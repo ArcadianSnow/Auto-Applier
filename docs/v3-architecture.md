@@ -642,10 +642,16 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
   **612 green**, 11 deselected by design). Per-sub-phase rationale:
   `research/observability-and-distribution.md`.
 - **→ Ship v3.0.** ✅ All v3.0-core phases (0–5) complete. Remaining work is v3.1 (Phase 6).
-- **Phase 6 — v3.1 (after core proves out).** Configurable strategy profiles (§8a); salary intelligence +
-  BLS OES market data (§8d); outcome feedback loop (§8e); interactive batch skill-reconciliation (§7b);
-  story bank + company research (on-demand) + rich analytics / what-to-learn trends (§ skill-gap trends);
-  branded UI polish.
+- **Phase 6 — v3.1 (after core proves out). IN PROGRESS (2026-05-30).** Independent sub-phases, no mandated
+  order; per-sub-phase rationale in `research/phase6-v3.1.md`.
+  - **(1/M) per-job résumé-path rewire. ✅ DONE (2026-05-30).** The apply worker now reads the optimize-
+    generated per-job résumé + cover letter (derived from `job.id` via `av3.resume.generate`'s path helpers;
+    file existence is the durable contract — no DB column) and records both on the `Application` row; the
+    single global `artifacts/resume.pdf` is demoted to a fallback for jobs queued before optimize ran. Closes
+    the oldest carry-over (auto-apply was uploading a generic résumé). +4 tests (full suite 616 green).
+  - **Remaining:** configurable strategy profiles (§8a); salary intelligence + BLS OES market data (§8d);
+    outcome feedback loop (§8e); interactive batch skill-reconciliation (§7b); story bank + company research
+    (on-demand) + rich analytics / what-to-learn trends (§ skill-gap trends); branded UI polish.
 
 ---
 

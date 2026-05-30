@@ -32,8 +32,14 @@ Responsibilities:
       ASSISTED_PENDING   -> ``APPLYING -> REVIEW``  (deliberate human handoff)
       UNCONFIRMED/FAILED -> ``APPLYING -> FAILED -> REVIEW`` (spec §5 wording)
       dry_run            -> no transition at all (no APPLYING in the first place)
-6. Writes an :class:`Application` row with mode + status + submitted_at, so the dashboard
-   can show "what attempt produced what outcome" even when the job stays in REVIEW.
+6. **Reads the per-job optimize-generated artifacts** (spec §6b / §7 #6): the tailored
+   résumé PDF + cover letter the optimize worker wrote, keyed by ``job.id`` via the same
+   ``av3.resume.generate`` path helpers (file existence is the durable contract — no DB
+   hand-off). Falls back to the single global ``resume.pdf`` only when no per-job PDF
+   exists (a job that reached QUEUED_APPLY before optimize ran, or a manual re-queue).
+   Writes an :class:`Application` row with mode + status + the resolved résumé/cover
+   paths + submitted_at, so the dashboard can show "what attempt produced what outcome"
+   even when the job stays in REVIEW.
 7. Emits §8b iteration-feedback events for every INFERRED resolution into the local event
    spine — **metadata only (question label, category, confidence, outcome). The answer
    value never leaves the box** and EEO rows are dropped entirely (§8d, §9 telemetry policy).
@@ -74,6 +80,10 @@ from av3.resume.answer_resolver import (
     SensitiveClass,
 )
 from av3.resume.factbank import FactBank
+from av3.resume.generate import (
+    generated_cover_letter_path,
+    generated_resume_path,
+)
 from av3.sources.ashby import AshbyListing
 from av3.sources.browser import ashby_apply, greenhouse_apply, lever_apply
 from av3.sources.browser.apply_base import Applicant, ApplyOutcome
@@ -395,11 +405,17 @@ class ApplyWorker:
         listing = driver.listing_from_job(job)
         page = await self._new_page()
 
+        # Per-job optimize-generated artifacts (spec §6b / §7 #6). The optimize
+        # worker wrote a tailored résumé PDF + cover letter keyed by job.id; read
+        # them by the same derivation (file existence is the durable contract).
+        # The global resume.pdf the worker was built with is only a fallback.
+        resume_used, cover_used = self._artifacts_for(job)
+
         outcome = await driver.prepare(
             page,
             listing,
             self._applicant,
-            self._resume_path,
+            resume_used,
             dry_run=self._dry_run,
             mode=self._mode,
             resolver=self._resolver,
@@ -422,7 +438,8 @@ class ApplyWorker:
                 job_id=job.id,
                 mode=outcome.mode,
                 status=attempted_status,
-                generated_resume_path=self._resume_path,
+                generated_resume_path=resume_used,
+                cover_letter_path=cover_used,
                 submitted_at=utcnow_iso() if outcome.submitted else "",
             )
         )
@@ -441,6 +458,30 @@ class ApplyWorker:
 
         return outcome.status
 
+    # -- artifacts ---------------------------------------------------------
+
+    def _artifacts_for(self, job: Job) -> tuple[str, str]:
+        """Resolve the per-job résumé PDF + cover letter the optimize worker generated.
+
+        The optimize+Strict gate (spec §7 #6) writes a tailored résumé PDF and a cover
+        letter keyed by ``job.id`` via the same ``av3.resume.generate`` path helpers we
+        read here — file existence is the durable "this job was optimized" contract, so
+        no DB column carries the path (see the ``optimize_worker`` docstring). Returns
+        ``(resume_path, cover_letter_path)`` as strings for the driver upload + the
+        :class:`Application` row:
+
+          * **résumé**: the per-job PDF when it exists, else the single global
+            ``resume.pdf`` the worker was constructed with — covers a job that reached
+            QUEUED_APPLY before optimize ran, or a manual re-queue.
+          * **cover letter**: the per-job ``.txt`` when it exists, else ``""`` (an empty
+            path means "no generated cover letter to record").
+        """
+        pdf = generated_resume_path(self._settings, job.id)
+        cover = generated_cover_letter_path(self._settings, job.id)
+        resume_used = str(pdf) if pdf.exists() else self._resume_path
+        cover_used = str(cover) if cover.exists() else ""
+        return resume_used, cover_used
+
     # -- recovery + telemetry ----------------------------------------------
 
     def _recover_job_to_review(self, job: Job, exc: BaseException) -> None:
@@ -458,12 +499,16 @@ class ApplyWorker:
             return
 
         # Record the failed attempt so the human triage in REVIEW has the error visible.
+        # Use the same per-job artifact resolution as the success path so the dashboard
+        # shows which résumé the failed attempt would have used.
+        resume_used, cover_used = self._artifacts_for(job)
         self._app_repo.add(
             Application(
                 job_id=job.id,
                 mode=self._mode,
                 status=ApplicationStatus.FAILED,
-                generated_resume_path=self._resume_path,
+                generated_resume_path=resume_used,
+                cover_letter_path=cover_used,
             )
         )
         self._job_repo.set_state(job.id, JobState.FAILED)

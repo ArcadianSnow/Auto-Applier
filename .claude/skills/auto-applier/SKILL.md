@@ -35,6 +35,7 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
 | Phase 3 pipeline staging (embedding pre-filter, score/optimize workers, scheduler) | `research/pipeline-staging.md` |
 | Phase 4 web UI + worker service (FastAPI, SchedulerService, dashboard, onboarding) | `research/web-ui-and-service.md` |
 | Phase 5 observability CLI (errors/stats) + telemetry mirror + relay + installer | `research/observability-and-distribution.md` |
+| Phase 6 / v3.1 sub-phases — per-job résumé rewire, strategy profiles, salary intel, feedback loop, analytics | `research/phase6-v3.1.md` |
 | Prior art — other auto-apply tools/repos, methodologies, what we adopt + smoketests (reCAPTCHA v3 score, JobSpy) | `research/prior-art-and-methodology.md` |
 | ATS market share by segment + what tier v3 can reach + source prioritization | `research/ats-market-landscape.md` |
 | How to stop résumé fabrication (the guard) | `research/fabrication-guard.md` |
@@ -73,8 +74,9 @@ When a session learns something durable, record it before calling the task done:
 3. Fabrication-guard technique/result → `research/fabrication-guard.md`
 4. Phase 4 sub-phase / web UI design decision → `research/web-ui-and-service.md`
 5. Phase 5 sub-phase / observability CLI / telemetry mirror / relay / installer decision → `research/observability-and-distribution.md`
-6. A changed design decision → `docs/v3-architecture.md` **and** [[project_v3_rewrite]]
-7. A completed phase / new known-unknown → note in `docs/v3-architecture.md` §11b and memory
+6. Phase 6 / v3.1 sub-phase decision (strategy profiles, salary intel, feedback loop, per-job résumé rewire, analytics) → `research/phase6-v3.1.md`
+7. A changed design decision → `docs/v3-architecture.md` **and** [[project_v3_rewrite]]
+8. A completed phase / new known-unknown → note in `docs/v3-architecture.md` §11b and memory
 
 ## When this skill doesn't know something
 
