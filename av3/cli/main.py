@@ -1386,6 +1386,191 @@ def stats_cmd(since: str | None, platform: str | None,
         )
 
 
+# --------------------------------------------------------------- telemetry
+#
+# ``av3 telemetry on|off|status`` (Phase 5 3/M, spec §9).
+#
+# The opt-in manager for the remote mirror. ``on`` is the ONLY place a CLI user
+# flips the single network-egress switch in the product, so it explains exactly
+# what leaves the machine before enabling. The mirror plumbing (queue + scrubbers)
+# shipped in 2/M; the relay client that drains the queue lands in 4/M — so until
+# then ``on`` just starts *enqueueing* scrubbed rows locally.
+
+
+def _prompt_for_handle() -> str:
+    """Interactive handle prompt shared by ``telemetry on`` (and reused by any
+    future first-run path). We send ``user_id = sha256(handle)[:10]`` (§9); the
+    raw handle stays local in user_config. Loops until non-empty so we never
+    store a blank handle that would hash to a useless ``anonymous`` pseudonym.
+    """
+    while True:
+        handle = click.prompt(
+            "Enter a handle/first name (stored locally; we send only its hash)",
+            type=str,
+            default="",
+            show_default=False,
+        ).strip()
+        if handle:
+            return handle
+        click.echo("  (a handle is required to attribute your reports — try again)")
+
+
+@cli.group("telemetry")
+def telemetry_group() -> None:
+    """Manage the opt-in remote error mirror (spec §9). Default OFF."""
+
+
+@telemetry_group.command("on")
+@click.option("--handle", "handle", type=str, default=None,
+              help="Set the attribution handle non-interactively (sha256[:10] is "
+                   "sent; the raw handle stays local). Prompts if omitted and none "
+                   "is stored yet.")
+@click.option("--relay-url", "relay_url", type=str, default=None,
+              help="Set the owner-hosted relay endpoint the drainer POSTs to "
+                   "(Phase 5 4/M). Optional now; required before `av3 mirror drain` "
+                   "can send.")
+def telemetry_on(handle: str | None, relay_url: str | None) -> None:
+    """Opt IN to the remote error mirror (spec §9).
+
+    Explains exactly what leaves the machine, captures/keeps a local handle, and
+    flips ``telemetry.enabled = True`` in user_config. From the next worker run,
+    error + inferred-answer events are scrubbed and enqueued for the relay client.
+    """
+    from av3.telemetry import user_id_from_handle
+    from av3.web.onboarding import load_user_config, save_user_config
+
+    settings = load_settings()
+    cfg = load_user_config(settings.data_dir)
+    telemetry = dict(cfg.get("telemetry") or {})
+
+    effective_handle = handle or telemetry.get("handle")
+    if not effective_handle:
+        # The §9 disclosure, shown BEFORE we ask for anything.
+        click.echo(
+            "Telemetry opt-in (spec §9) — what leaves your machine when enabled:\n"
+            "  * errors/critical: stage, platform, error_type, a SCRUBBED error "
+            "message (no paths/emails/phones), app version, timestamp.\n"
+            "  * inferred-answer events: the question text (scrubbed), its category, "
+            "the model's confidence, and whether it answered or bailed —\n"
+            "    NEVER the answer value itself, and EEO questions are never sent.\n"
+            "  * an attribution id = sha256(handle)[:10]; your raw handle stays local.\n"
+            "Everything is stored locally in events.db regardless; this only controls "
+            "the scrubbed REMOTE copy.\n"
+        )
+        effective_handle = _prompt_for_handle()
+
+    telemetry["handle"] = effective_handle
+    telemetry["enabled"] = True
+    if relay_url is not None:
+        telemetry["relay_url"] = relay_url
+    cfg["telemetry"] = telemetry
+    save_user_config(settings.data_dir, cfg)
+
+    user_id = user_id_from_handle(effective_handle)
+    click.echo(f"+ telemetry ENABLED. You'll send as user_id={user_id}")
+    if not telemetry.get("relay_url"):
+        click.echo(
+            "  note: no relay_url set yet — scrubbed rows queue locally until you "
+            "set one (`av3 telemetry on --relay-url ...`) and the relay client "
+            "(Phase 5 4/M) drains them."
+        )
+
+
+@telemetry_group.command("off")
+def telemetry_off() -> None:
+    """Opt OUT. Flips ``telemetry.enabled = False``; the local events.db is
+    untouched. Already-queued scrubbed rows STAY (they're harmless and already
+    scrubbed) — drain or prune them via the mirror tooling if you want them gone.
+    """
+    from av3.web.onboarding import load_user_config, save_user_config
+
+    settings = load_settings()
+    cfg = load_user_config(settings.data_dir)
+    telemetry = dict(cfg.get("telemetry") or {})
+    telemetry["enabled"] = False
+    cfg["telemetry"] = telemetry
+    save_user_config(settings.data_dir, cfg)
+
+    # Surface any rows that were enqueued while enabled so "off" isn't silently
+    # leaving a backlog the user forgot about.
+    sink = EventSink(settings.events_db_path)
+    try:
+        pending = sink.mirror_queue.pending_count()
+    finally:
+        sink.close()
+    click.echo("+ telemetry DISABLED. Local events.db is unchanged.")
+    if pending:
+        click.echo(
+            f"  note: {pending} scrubbed row(s) remain queued. They won't be sent "
+            "while disabled; `av3 mirror drain` (after re-enabling) or a prune clears them."
+        )
+
+
+@telemetry_group.command("status")
+def telemetry_status() -> None:
+    """Show telemetry state: enabled?, your user_id, relay_url, and the mirror
+    queue depth / last enqueue / last failure (spec §9)."""
+    from av3.telemetry import MirrorPolicy
+
+    settings = load_settings()
+    policy = MirrorPolicy.from_settings(settings.telemetry, __version__)
+
+    click.echo(f"enabled:    {settings.telemetry.enabled}")
+    click.echo(f"user_id:    {policy.user_id}"
+               + ("  (no handle set — would send as 'anonymous')"
+                  if policy.user_id == "anonymous" else ""))
+    click.echo(f"relay_url:  {settings.telemetry.relay_url or '(unset)'}")
+
+    sink = EventSink(settings.events_db_path)
+    try:
+        s = sink.mirror_queue.summary()
+    finally:
+        sink.close()
+    click.echo("mirror queue:")
+    click.echo(f"  pending:        {s['pending']}")
+    click.echo(f"  delivered:      {s['delivered']}")
+    click.echo(f"  last enqueued:  {s['last_enqueued_at'] or '-'}")
+    if s["last_error"]:
+        click.echo(
+            f"  last failure:   {s['last_error']} "
+            f"(attempt {s['last_error_attempts']}, next retry {s['next_retry_at']})"
+        )
+
+
+@cli.command("export-diagnostics")
+@click.option("--raw", is_flag=True, default=False,
+              help="Include a verbatim events.db copy + un-scrubbed error messages. "
+                   "PII-BEARING — only for in-group debugging where the owner is the "
+                   "recipient. Default is the scrubbed bundle, safe to email anywhere.")
+@click.option("--error-limit", type=int, default=200, show_default=True,
+              help="Max recent error/inferred rows to include in the JSON exports.")
+def export_diagnostics_cmd(raw: bool, error_limit: int) -> None:
+    """Bundle local diagnostics into a single tarball for support (spec §9).
+
+    "Send me a tarball" instead of "send me your logs." Contents: settings
+    (secrets always stripped), doctor results, recent error + inferred-answer
+    events, per-stage stats, mirror-queue status, and a manifest. Default is
+    SCRUBBED (safe to share); --raw adds the full events.db (PII-bearing).
+    """
+    from av3.telemetry.diagnostics import build_diagnostics
+
+    settings = load_settings()
+
+    if raw:
+        click.echo(
+            "! --raw: this bundle includes your full events.db and un-scrubbed "
+            "error messages (paths/emails/phones may appear). Share only with the "
+            "owner.",
+        )
+
+    result = build_diagnostics(settings, raw=raw, error_limit=error_limit)
+    kb = result.bytes_written / 1024
+    click.echo(
+        f"Wrote {result.path} ({kb:.1f} KB, {result.error_rows} error row(s), "
+        f"mode={'raw' if result.raw else 'scrubbed'})"
+    )
+
+
 @cli.command("backup")
 def backup_cmd() -> None:
     """Snapshot app.db + events.db; rotate older snapshots (spec section 4).

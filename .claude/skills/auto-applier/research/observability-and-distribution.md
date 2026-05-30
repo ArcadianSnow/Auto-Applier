@@ -315,3 +315,93 @@ just remember it.
   column yet — no point until (4/M) makes "pending" meaningful.
 * **Owner-hosted Cloudflare Worker relay + Turso write token.** (4/M).
 * **Doctor relay-reachability check.** (4/M).
+
+---
+
+## Phase 5 (3/M) — `av3 telemetry on|off|status` + `av3 export-diagnostics` landed
+
+The user-facing opt-in manager for the §9 mirror, plus the support-bundle
+surface. The mirror plumbing (queue + scrubbers) shipped in (2/M); this turns
+the single network-egress switch into a CLI the user actually flips, and gives
+the owner a "send me a tarball" workflow. 18 new tests; full v3 suite **579
+green** (11 deselected by design).
+
+### New surface
+
+| Surface | Purpose |
+|---|---|
+| `av3 telemetry on [--handle X] [--relay-url U]` | Opt IN. Shows the §9 disclosure, captures/keeps a local handle, flips `telemetry.enabled=True` |
+| `av3 telemetry off` | Opt OUT. Flips the flag; keeps the handle + any queued rows |
+| `av3 telemetry status` | enabled?, `user_id` (sha256[:10]), relay_url, mirror queue depth / last enqueue / last failure |
+| `av3 export-diagnostics [--raw] [--error-limit N]` | Single tarball for support: settings (secrets stripped), doctor, scrubbed error+inferred rows, stats, mirror status, manifest |
+| `MirrorQueue.summary()` (`av3/telemetry/mirror.py`) | One-shot {pending, delivered, last_enqueued_at, last_error, …} read for status + diagnostics |
+| `av3/telemetry/diagnostics.py` | `build_diagnostics()` / `collect_diagnostics()` — the tarball builder, split so tests assert on contents without untarring |
+| `_prompt_for_handle()` (`av3/cli/main.py`) | Interactive handle prompt; loops until non-empty so we never store a blank that hashes to `anonymous` |
+
+### Load-bearing design decisions to remember
+
+1. **Config R/W reuses the web onboarding helpers.** `telemetry on|off` read/write
+   `user_config.json` via `av3.web.onboarding.load_user_config` /
+   `save_user_config` — the SAME atomic dict-merge helpers the web onboarding
+   `POST /onboarding/telemetry` route uses, writing the SAME
+   `{enabled, handle, relay_url}` shape. The open question "keep both opt-in
+   paths in sync" is resolved structurally: there is one config writer, two
+   front-ends. No second persistence path to drift.
+
+2. **Diagnostics PII strategy = SCRUB by default, `--raw` escape hatch** (the
+   (3/M) open question, resolved). Default routes error rows through
+   `scrub_error_event` and inferred rows through `scrub_inferred_answer_event`
+   — the bundle is safe to email anywhere. `--raw` adds a verbatim `events.db`
+   copy + un-scrubbed error messages for in-group deep debug, and the CLI warns
+   loudly. **The one asymmetry: the inferred-answer *value* is scrubbed even in
+   `--raw` mode** — §9's "the answer never leaves" is a hard line that `--raw`
+   does NOT relax (it lives in `context_json`; `_inferred_rows` always routes
+   through the category scrubber regardless of mode). Test:
+   `test_export_diagnostics_raw_includes_db_and_unscrubbed` asserts the DB is
+   present AND the answer value still absent.
+
+3. **Settings are ALWAYS secret-stripped, both modes.** `_strip_secrets` drops
+   `llm.gemini_api_key` and `telemetry.handle` from the settings dump. A raw
+   handle or an API key in a support bundle is never acceptable — the manifest
+   carries the hashed `user_id` instead, which is exactly what would be mirrored
+   anyway.
+
+4. **The §9 disclosure prints BEFORE the prompt, only when needed.** If
+   `--handle` is given or a handle is already stored, `telemetry on` is silent
+   and non-interactive (scriptable). Only a first-time opt-in with no stored
+   handle shows the full "what leaves your machine" text and prompts. So
+   re-enabling after an `off` never re-nags.
+
+5. **`off` keeps queued rows + warns.** Already-enqueued rows are already
+   scrubbed and harmless; deleting them on opt-out would be surprising. `off`
+   reports the pending count so the backlog isn't silently forgotten; the user
+   drains (after re-enabling) or prunes.
+
+6. **`build_diagnostics` vs `collect_diagnostics` split.** `collect_*` returns
+   the in-memory `{filename: content}` dict (pure read, own short-lived
+   connections); `build_*` tars it. Tests assert on the dict / on extracted
+   members without needing a real tar round-trip for the content checks.
+
+### Edge cases covered (see `tests_v3/test_cli_telemetry.py`)
+
+| Concern | Test |
+|---|---|
+| `on --handle` persists enabled + handle; prints hashed id not raw name | `test_telemetry_on_with_handle_flag_persists_enabled` |
+| `on` with no handle shows §9 disclosure incl. "NEVER the answer value" + prompts | `test_telemetry_on_prompts_when_no_handle` |
+| `on` after a prior `on/off` reuses stored handle, no re-prompt | `test_telemetry_on_reuses_stored_handle_without_prompt` |
+| `on --relay-url` persists the endpoint | `test_telemetry_on_sets_relay_url` |
+| `off` disables but keeps handle | `test_telemetry_off_disables_but_keeps_handle` |
+| `off` warns about pending queued rows | `test_telemetry_off_warns_about_pending_rows` |
+| `status` default = disabled / anonymous / empty queue | `test_telemetry_status_default_disabled` |
+| `status` shows user_id + pending count | `test_telemetry_status_shows_user_id_and_pending` |
+| diagnostics scrubbed: no email/path in errors; answer value & EEO row absent | `test_export_diagnostics_scrubbed_default` |
+| diagnostics strips GEMINI_API_KEY + raw handle from settings; manifest has hashed id | `test_export_diagnostics_strips_secrets` |
+| `--raw` includes events.db + un-scrubbed errors BUT still no answer value | `test_export_diagnostics_raw_includes_db_and_unscrubbed` |
+
+### What's NOT in this sub-phase
+
+* **HTTP relay client / `av3 mirror drain`.** The queue still only fills; nothing
+  drains it yet. `telemetry on --relay-url` stores the endpoint but no POST
+  happens until (4/M).
+* **Owner-hosted Cloudflare Worker relay + Turso write token.** (4/M).
+* **Doctor relay-reachability check.** (4/M).

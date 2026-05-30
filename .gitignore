@@ -58,3 +58,4 @@ installer/icon.ico
 # OS
 .DS_Store
 Thumbs.db
+.claude/unstuck/

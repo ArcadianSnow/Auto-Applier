@@ -269,6 +269,34 @@ class MirrorQueue:
             "SELECT COUNT(*) AS n FROM mirror_queue WHERE delivered_at IS NOT NULL"
         ).fetchone()["n"]
 
+    def summary(self) -> dict[str, Any]:
+        """One-shot snapshot for ``cli telemetry status`` and the diagnostics
+        bundle: pending / delivered counts plus the most recent enqueue and the
+        most recent failure (with its reason). All read-only; no PII (the
+        ``last_error`` reason is already truncated by :meth:`mark_failed`).
+        """
+        pending = self.pending_count()
+        delivered = self.delivered_count()
+        last_enq = self.conn.execute(
+            "SELECT MAX(enqueued_at) AS ts FROM mirror_queue"
+        ).fetchone()["ts"]
+        # Most recent still-pending failure: the relay client surfaces this so the
+        # user knows *why* the queue isn't draining.
+        fail = self.conn.execute(
+            """SELECT last_error, next_retry_at, attempts
+               FROM mirror_queue
+               WHERE last_error IS NOT NULL AND delivered_at IS NULL
+               ORDER BY id DESC LIMIT 1"""
+        ).fetchone()
+        return {
+            "pending": pending,
+            "delivered": delivered,
+            "last_enqueued_at": last_enq,
+            "last_error": fail["last_error"] if fail else None,
+            "last_error_attempts": fail["attempts"] if fail else None,
+            "next_retry_at": fail["next_retry_at"] if fail else None,
+        }
+
     def prune_delivered(self, keep_days: int) -> int:
         """Drop delivered rows older than ``keep_days``. Pending rows are NEVER
         pruned by this method — they're retried indefinitely (the backoff
