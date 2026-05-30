@@ -567,3 +567,56 @@ auto-replaces). 20 new tests; full v3 suite **612 green** (11 deselected).
 * **A dashboard update-available badge** — the `av3 update` check is the v3.0
   surface; wiring it into the web UI is a nicety, not required for §11a.
 * **Fresh CLAUDE.md for v3.** (6/M).
+
+---
+
+## Phase 5 (6/M) — fresh v3 CLAUDE.md + Phase 5 wrap-up
+
+The documentation close-out. No new code surface; the deliverables are docs the
+next session reads.
+
+### What landed
+
+* **`CLAUDE.md` rewritten v3-first.** The working-discipline preamble (invoke
+  `auto-applier` + `unstuck`, document research before "done") is preserved
+  verbatim — it's the most load-bearing part. The body now describes the `av3/`
+  package: module layout, the job state machine, the staged pipeline, the
+  reliability invariants, the telemetry exception, distribution, and the data
+  layout. v2 is demoted to a one-paragraph "reference only, do not extend"
+  footer. The old "sections below describe v2" note is gone.
+* **Spec §11b Phase 5 → ✅ DONE**, with a one-line summary of all six sub-phases
+  and the final 612-green count. The "→ Ship v3.0" line is marked complete
+  (phases 0–5 done; remaining work is v3.1 / Phase 6).
+* **This research doc** now carries a per-sub-phase section (1/M…6/M) — the
+  authoritative decision record for everything Phase 5.
+
+### Phase 5 — complete picture (the whole arc, for fast recall)
+
+| Sub-phase | Shipped | Key invariant locked in |
+|---|---|---|
+| 1/M | `cli errors` / `cli stats` (local triage from events.db) | both always exit 0; CLI owns `--since` parsing |
+| 2/M | mirror queue + category scrubbers | answer value & EEO can't be mirrored — schema has no field for them |
+| 3/M | `cli telemetry on/off/status` + `export-diagnostics` | one config writer (web+CLI share it); diagnostics scrub-by-default, `--raw` never relaxes the answer-value line |
+| 4/M | relay template + `MirrorClient` + `av3 mirror drain` + doctor relay check | drainer is standalone (can't block the loop); Turso token only in the relay |
+| 5/M | PyInstaller installer + `av3 update` + `av3 install-browser` | Chromium fetched not bundled; frozen-launcher spawns `<exe> serve` |
+| 6/M | v3-first CLAUDE.md + wrap-up | — |
+
+**Net for Phase 5:** 90 new tests; full v3 suite went 495 → 612 green (the 117
+delta spans 1/M…5/M). 11 deselected by design (live smoke/eval/integration).
+v3.0-core (phases 0–5) is complete; Phase 6 = v3.1.
+
+### Carry-over / not done in Phase 5 (for the v3.1 or next-session backlog)
+
+* **Live relay deploy + a real opted-in mirror round-trip.** `relay/` is a
+  deployable template; nobody has run `wrangler deploy` + a live `av3 mirror
+  drain` against it yet. First real opt-in is the smoke test.
+* **Integrated async drain tick** (vs the standalone `av3 mirror drain` cron).
+* **Dashboard surfaces** for telemetry status / update-available / mirror
+  pending — all have CLI/programmatic surfaces; the web badges are niceties.
+* **The PyInstaller build is unverified in CI** (PyInstaller isn't a runtime
+  dep / wasn't installed in the build session). `build_v3.py` is written to the
+  documented flags; first real `python build_v3.py` on a build host is pending.
+* **Carry-overs from earlier phases still open:** per-job résumé-path rewire
+  (apply worker still reads a single `artifacts/resume.pdf` fallback — Phase 3
+  carry-over); live Greenhouse auto-pass-rate gated submit (Phase 1 decision
+  gate). Neither is Phase 5 scope.

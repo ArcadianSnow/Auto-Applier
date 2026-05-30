@@ -10,247 +10,205 @@ lives only in chat is one the next session wastes time re-deriving. Writing it d
 done," like passing tests.
 
 - **Invoke the `auto-applier` skill at the start of any session** — it's the single-source-of-truth router +
-  working discipline for the v3 rebuild. For long iterative/debug work, also invoke the `unstuck` skill.
+  working discipline for v3. For long iterative/debug work, also invoke the `unstuck` skill.
 - **Research / investigation findings →** `.claude/skills/auto-applier/research/<topic>.md`.
 - **Architecture & design decisions →** `docs/v3-architecture.md` (the v3 spec), and mirror the rationale in
   the project memory ([[project_v3_rewrite]]).
 - When a session learns something durable, record it in the right place **before** calling the task done —
   see the `auto-applier` skill's "How to extend this skill" section.
 
-> Note: the app is mid-rewrite to **v3** (ground-up). The sections below describe the **v2** codebase, kept
-> as reference/lessons. For v3 architecture and current decisions, the spec in `docs/v3-architecture.md` and
-> the `auto-applier` skill are authoritative.
+> **The active codebase is v3, in the `av3/` package.** The ground-up rewrite (decided 2026-05-26) reached
+> v3.0 scope at the end of Phase 5 (2026-05-29). The legacy v2 package (`auto_applier/`) is kept alongside as
+> a porting reference and is documented briefly at the bottom — **do not extend v2.** For any design question,
+> `docs/v3-architecture.md` and the `auto-applier` skill are authoritative.
 
 ## Project Overview
 
-**Auto Applier v2** is a Python desktop app that automates job applications across multiple platforms (LinkedIn, Indeed, Dice, ZipRecruiter, and more). It uses AI (local Ollama or free Gemini API) to score jobs against multiple resumes, pick the best resume per job, fill application forms intelligently, generate tailored cover letters, and evolve resumes over time based on skill gap patterns.
+**Auto Applier v3** is a local-first desktop service that automates job applications. It discovers jobs (ATS
+APIs + browser boards), scores each JD against a single **master fact bank**, generates a tailored résumé +
+cover letter per job under a **fabrication guard**, and applies — fully automatic on clean ATS forms,
+**assisted** (bot pre-fills, human submits) on hostile ones. It runs as an always-on background **worker**
+controlled from a **local web dashboard**.
 
-This is a personal/small-group project (3-4 people). **Everything must run locally and cost nothing.** No paid APIs, no cloud services, no external databases. Requires **Python 3.11+**.
+Personal/small-group project (3–4 people). **The core pipeline runs fully locally and costs nothing.** The
+*one* scoped exception is opt-in, scrubbed error telemetry (§9, default OFF). Requires **Python 3.11+**.
+Install the v3 extras: `pip install -e ".[v3]"`.
+
+### Why v3 exists (what v2 fought against)
+
+CSV-as-database (schema drift, no atomic writes), browser-apply as the spine (anti-detect arms race),
+inferred-not-stored state (dedup hacks), a synchronous per-platform pipeline, and no observability. v3 fixes
+the **root causes**: SQLite system-of-record, API-for-discovery + browser-for-apply, an explicit job state
+machine, staged async workers over a status queue, and an automatic event spine. See spec §1.
 
 ## Build & Run Commands
 
 ```bash
-# Install dependencies
-pip install -e .
+pip install -e ".[v3]"            # core v3 deps (FastAPI, pydantic, httpx, packaging, …)
+av3 install-browser               # fetch Chromium (first run; real Chrome via channel is the primary path)
 
-# Install Playwright browsers (required first time)
-playwright install chromium
+# One-click launcher (non-technical entry): starts the worker+server, opens the dashboard tab
+av3 launch
 
-# Launch the GUI wizard (default)
-python run.py
-python -m auto_applier
+# Web UI + background worker service (power-user entry)
+av3 serve [--host H] [--port P] [--no-scheduler] [--dry-run/--no-dry-run] [--mode auto|assisted]
 
-# CLI mode — core
-python -m auto_applier --cli run
-python -m auto_applier --cli run --dry-run
-python -m auto_applier --cli run --platform linkedin
-python -m auto_applier --cli run --limit 5
-python -m auto_applier --cli run --continuous --active-hours 09:00-22:00  # loop indefinitely
-python -m auto_applier --cli run --continuous --max-cycles 5              # bounded loop
-python -m auto_applier --cli doctor     # preflight checks
-python -m auto_applier --cli status
-python -m auto_applier --cli gaps
-python -m auto_applier --cli resumes
-python -m auto_applier --cli migrations # CSV schema migration history
+# Always-on staged loop, headless (no web UI) — THE production loop
+av3 run [--max-cycles N] [--quiet-hours HH:MM-HH:MM] [--dry-run/--no-dry-run]
 
-# CLI mode — data tools
-python -m auto_applier --cli show <job_id>       # full job detail view
-python -m auto_applier --cli export -o jobs.csv   # export data
-python -m auto_applier --cli fsck                 # data integrity check
-python -m auto_applier --cli normalize            # fix data issues
-python -m auto_applier --cli patterns             # conversion analytics
-python -m auto_applier --cli reset-history --yes  # clear application history
+# Per-stage workers (testing / doctor) — each drains one state, --once
+av3 filter | score | optimize | apply   [--once] [--limit N] [--no-llm]
 
-# CLI mode — interview prep
-python -m auto_applier --cli research <company>   # company briefing
-python -m auto_applier --cli tailor <job_id> --resume <label>  # tailored resume PDF
-python -m auto_applier --cli outreach <job_id> --resume <label>  # LinkedIn message
-python -m auto_applier --cli story list           # STAR interview stories
-python -m auto_applier --cli followup list --due  # pending follow-ups
-python -m auto_applier --cli followup draft <job_id>  # draft follow-up email
-python -m auto_applier --cli archetype list       # archetype routing config
+# Setup / health
+av3 init-db                       # create data dir + app.db + events.db
+av3 doctor                        # preflight (config, DBs, LLM, backups, relay); exits non-zero on FAIL
+av3 status                        # job counts by state
 
-# CLI mode — novice differentiation features (Phases 1-7)
-python -m auto_applier --cli almost               # high-score jobs needing manual apply
-python -m auto_applier --cli almost --cover       # also generate cover letters
-python -m auto_applier --cli cover <job_id>       # on-demand cover letter for any job
-python -m auto_applier --cli respond <job_id> interview --note "..."  # record outcome
-python -m auto_applier --cli auto-ghost --days 30 # auto-mark stale pending apps
-python -m auto_applier --cli expand "Data Analyst" --add  # title expansion w/ approve+save
-python -m auto_applier --cli trends               # what-to-learn-next ranked list
-python -m auto_applier --cli gaps --by-resume --by-title  # grouped gap breakdown
-python -m auto_applier --cli learn add Tableau    # mark skill as learning
-python -m auto_applier --cli learn done Python    # mark skill as certified
-python -m auto_applier --cli learn dismiss Rust   # never suggest again
-python -m auto_applier --cli learn list           # all tracked skills
-python -m auto_applier --cli refine               # interactive resume improvement chat
+# Observability (read straight from events.db — no log files; spec §9)
+av3 errors [--stage X] [--platform X] [--since 30m|2h|7d] [--run-id ID] [--limit N] [--json]
+av3 stats  [--platform X] [--since ...] [--run-id ID] [--json]
 
-# Tests (pytest-asyncio installed via [dev])
-pip install -e ".[dev]"
-pytest
-pytest tests/test_scoring.py
-pytest -k test_name
+# Telemetry — opt-in remote error mirror (default OFF; only network egress in the product)
+av3 telemetry on [--handle NAME] [--relay-url URL]   # shows the §9 disclosure, opts in
+av3 telemetry off
+av3 telemetry status
+av3 mirror drain [--limit N]      # out-of-band drainer: POST queued scrubbed rows to the relay
+av3 export-diagnostics [--raw]    # support tarball (scrubbed by default; --raw is PII-bearing)
 
-# Build standalone Windows .exe (PyInstaller, outputs to dist/)
-python build.py
+# Data lifecycle + distribution
+av3 backup                        # snapshot app.db + events.db, rotate
+av3 prune [--ephemeral-days N] [--events-days N]
+av3 update [--exit-code]          # check the GitHub release feed; prompt if newer (no auto-replace)
+av3 survey                        # multi-ATS CAPTCHA-presence survey (dry-run, never submits)
+
+# Tests
+pip install -e ".[v3,dev]"
+pytest tests_v3/                  # 612 green / 11 deselected (live smoke/eval/integration markers)
+pytest tests_v3/test_apply_worker.py -k name
+
+# Build the standalone executable (PyInstaller; build-host tool, not a runtime dep)
+pip install pyinstaller && python build_v3.py     # → dist/AutoApplierV3
 ```
 
-Test suite covers `llm/` (cache, prompts, router), `scoring/` (models, scorer thresholds), `storage/` (models, repository, migrations, integrity), `resume/` (manager, skills, evolution, cover letter, parser, tailor, outreach, story bank), `browser/` (anti-detect, captcha detection, form filler, budget counting), and `orchestrator/` (events, stop flag, ghost check, discover). Browser interactions and GUI require manual testing with `--dry-run`.
+`--dry-run` is the dev default everywhere an apply could fire; `--no-dry-run` is the gated path that submits
+real applications. Live ATS smoke tests are marked `smoke` and excluded by default (run via cron to catch
+selector drift — the #1 v2 bug source).
 
 ## Architecture
 
-### Module Boundaries
+> Package root is **`av3/`** (separate from the v2 `auto_applier/` so v2 stays runnable as reference).
+> Rename to `auto_applier/` once v3 fully supersedes v2. Full spec: `docs/v3-architecture.md`.
 
-- **`llm/`** — LLM abstraction layer. Fallback chain: Ollama (local) -> Gemini (free API) -> Rule-based (answers.json). Knows nothing about browsers or GUI.
-- **`resume/`** — Multi-resume management, parsing, skill extraction, cover letter generation, evolution. Uses LLM for intelligence.
-- **`scoring/`** — Job scoring pipeline. Scores every resume against each JD, picks the best match, decides auto-apply vs review vs skip.
-- **`browser/`** — Browser automation with platform adapters. Uses FormFiller for AI-powered form filling.
-- **`orchestrator/`** — Pipeline engine with event system. Ties everything together. Decoupled from GUI via EventEmitter.
-- **`storage/`** — CSV-backed persistence (Excel-compatible). Dataclass models.
-- **`analysis/`** — Gap tracking and reporting.
-- **`gui/`** — Tkinter wizard + dashboard + panels. Knows about tkinter, nothing else.
-- **`doctor.py`** — Preflight runner (`cli doctor`). Each check is a small function returning a `CheckResult(PASS|WARN|FAIL)`. Runs read-only, fast (<5 s), fails closed. Every FAIL/WARN carries a `fix` hint. Exits non-zero on any FAIL so CI / scripts can gate on it.
+### Module layout
 
-### LLM Fallback Chain (`llm/router.py`)
+- **`config/`** — Pydantic Settings (`load_settings()` reads `user_config.json` + `.env`, validates on
+  construction so `doctor` fails fast). Derived paths (`app_db_path`, `events_db_path`, `artifacts_dir`, …).
+- **`db/`** — SQLite engine + `schema.sql` + repositories. `app.db` holds jobs / job_scores / applications /
+  skill_gaps / answers. **SQLite is the system of record; CSV is an export format.**
+- **`domain/`** — pure dataclasses + the **job state machine** (`state.py`, one allowed-transitions table).
+- **`llm/`** — router (Ollama→Gemini→rule, ported from v2), `complete`, `embed` (nomic-embed-text), prompts.
+- **`scoring`** lives across `llm/` + `pipeline/score_worker.py` — 7 weighted axes, JD vs the master profile.
+- **`resume/`** — `factbank` (the single master fact bank), `generate` (per-job résumé), `guard` (fabrication
+  guard, fail-closed to REVIEW), `render` (ATS-safe single-column PDF), `answer_resolver` (two-tier: semantic
+  match → bail-to-REVIEW → confidence-gated backup), `seed_answers`.
+- **`sources/`** — capability-based adapters. `greenhouse` / `lever` / `ashby` / `jobspy` discover via API or
+  browser; `browser/` has the apply drivers (`greenhouse_apply`, `lever_apply`, `ashby_apply`), the stealthy
+  `session` (patchright + real Chrome via channel, persistent profile), CAPTCHA/confirmation `detect`, and the
+  CAPTCHA-presence `survey`. **LinkedIn is CUT from v3.**
+- **`pipeline/`** — the staged workers (`filter` → `score` → `optimize` → `apply`), the `scheduler`
+  (always-on loop), `quiet_hours`, `retention` (prune + backup), and the **`@stage` wrapper** (`stage.py`)
+  that auto-emits start/ok/error/skip events — the entire observability story, no scattered logging.
+- **`telemetry/`** — the always-local `EventSink` (`events.db`), the PII `scrub`ber, the opt-in `mirror`
+  queue + `MirrorPolicy`, the relay `client` (drainer), and the `diagnostics` tarball builder.
+- **`web/`** — FastAPI app + Alpine.js dashboard (live pipeline, review queue, login-needed badges, history),
+  SSE event feed, `ControlState` (manual / F6 hotkey / idle-detect), headed-browser launcher for
+  login-on-demand + assisted submit, the onboarding wizard, and the one-click `launch`.
+- **`doctor.py`** — preflight checks (config, app.db, events.db, LLM reachable, backups recent, relay
+  reachable). Each returns a `CheckResult(PASS|WARN|FAIL)` with a `fix` hint; exits non-zero on any FAIL.
+- **`update.py`** — GitHub Releases version check (check + prompt, never auto-replace).
 
-1. **Ollama** (localhost:11434) — local inference, zero cost. Default model `gemma4:e4b` (~4.5B effective, ~9.6 GB download, multimodal text+image+audio, 128k context). Requires **Ollama ≥ 0.8.0** for Gemma 4 architecture support. Alternative presets in `config.OLLAMA_MODEL_PRESETS`: `gemma4:e2b` (smaller/CPU), `gemma4:31b` (dev machines), plus legacy `gemma3:4b` and `llama3.1:8b` fallbacks.
-2. **Gemini** (free API) — 1,000 req/day free tier, no credit card needed
-3. **Rule-based** — fuzzy match against `data/answers.json`, always available
+### Job state machine (`domain/state.py`)
 
-All LLM calls go through `LLMRouter.complete()` or `complete_json()`. Cache layer (72h TTL, SHA-256 keyed) sits in front. Seven prompt templates in `llm/prompts.py` — all JSON prompts declare their schema inline and demand JSON-only output with no thinking preamble or code fences, to keep Gemma 4's instruction-following reliable across backends.
+```
+DISCOVERED → (dedup/ghost) → SKIPPED
+           → (embedding pre-filter) → FILTERED | DESCRIBED
+DESCRIBED → SCORED → DECIDED → { QUEUED_APPLY | REVIEW | SKIPPED }
+QUEUED_APPLY → APPLYING → APPLIED (terminal, requires positive confirmation)
+                       → FAILED → REVIEW (mid-form break: fail fast, no retry)
+```
 
-### Multi-Resume System (`resume/manager.py`)
+The queue **is** the `state` column; workers drain by status. Only `APPLIED` counts for dedup, so an
+unconfirmed apply is safely retryable and never inflates success. Transitions live in one allowed-transitions
+table.
 
-Users load multiple resumes (e.g., "Data Analyst", "Data Engineer"). Each gets a profile in `data/profiles/<label>.json` with LLM-extracted skills. For each job, `ResumeManager.score_all()` scores EVERY resume against the JD and picks the best match — based on skills/experience, not job title. The best resume is used for form filling, file upload, and cover letter generation.
+### Staged pipeline (`pipeline/`, spec §7)
 
-### Job Scoring Pipeline (`scoring/scorer.py`)
+`filter` (embedding cosine pre-filter, fail-open) → `score` (LLM 7-axis vs master profile, fail-closed) →
+`optimize` (**Strict gate**: generate résumé + cover letter + fabrication guard; ALL must pass or → REVIEW) →
+`apply` (detection-risk router picks auto vs assisted; two-tier answer resolver fills the form; positive
+confirmation → APPLIED). The `scheduler` runs these in pipeline order each cycle, 24/7, with optional quiet
+hours that pause **only** the apply stage (gather stages keep running — being wrong in gather doesn't
+compound).
 
-- Score >= `auto_apply_min` (default 7) -> AUTO_APPLY
-- Score >= `review_min` (default 4) -> USER_REVIEW (GUI shows review panel; CLI uses `cli_auto_apply_min`)
-- Score < `review_min` -> SKIP
+### Reliability invariants (NEVER compromise for throughput)
 
-### Multi-Platform Adapter Pattern (`browser/`)
+- **Manual login only; headed browser only; never retry through CAPTCHA** → downgrade to assisted.
+- **Mid-form break → fail fast to REVIEW, no retry** (retries risk duplicate/garbled submissions).
+- **`APPLIED` only on a positive submit confirmation** (Greenhouse `/confirmation`, Lever `/thanks`, Ashby
+  in-place panel + `success:true` XHR) — never off a confirmation email alone.
+- **Fabrication guard:** a generated résumé may use ONLY facts in the bank; any unsupported company / title /
+  date / credential / skill drops the job to REVIEW. The bank is the single source of truth.
 
-- **`base_platform.py`** — `JobPlatform` ABC: `ensure_logged_in()`, `search_jobs()`, `get_job_description()`, `apply_to_job()`. Shared helpers: `safe_query()`, `safe_click()`, `detect_captcha()`, `wait_for_manual_login()`.
-- **`platforms/`** — One module per site, each subclassing `JobPlatform`.
-- **`platforms/__init__.py`** — `PLATFORM_REGISTRY` dict.
-- **`form_filler.py`** — Shared AI form filling: personal info -> answers.json -> LLM -> record gap. Handles cover letters and resume uploads.
-- **`anti_detect.py`** — Bezier mouse paths, typing jitter, randomized delays.
-- **`session.py`** — Browser context lifecycle (patchright -> Playwright fallback, persistent profile, headed mode).
-- **`liveness.py`** — Health checks for the browser context across long-running continuous cycles.
-- **`selector_utils.py`** — Multi-fallback `safe_query`/`safe_click` helpers shared across platform adapters.
+### Telemetry (the one scoped cloud exception, spec §9)
 
-Adding a new job site: create `browser/platforms/newsite.py` subclassing `JobPlatform`, register in `PLATFORM_REGISTRY`.
+Every `@stage` writes to local `events.db` always. The **opt-in** remote mirror (default OFF) sends a
+**scrubbed subset** of two event classes — errors and inferred-answer metadata — keyed by
+`user_id = sha256(handle)[:10]`. **The answer value and EEO data NEVER leave the machine** (enforced
+structurally: the scrubber schema has no field for them). Flow: worker enqueues a category-scrubbed row into
+`mirror_queue` (in `events.db`) → `av3 mirror drain` POSTs it to an **owner-hosted relay** (Cloudflare Worker
+in `relay/`) → the relay re-scrubs, rate-limits, and inserts into a shared Turso DB. **The Turso write token
+lives only in the relay, never in the app.** Toggle with `av3 telemetry on|off|status`.
 
-### Orchestrator (`orchestrator/engine.py`)
+### Distribution (spec §11a)
 
-`ApplicationEngine` runs the full pipeline with **per-platform error isolation** (one platform crashing doesn't stop others). Event-driven via `EventEmitter` pub/sub — GUI subscribes to events, CLI uses print handlers.
+`build_v3.py` produces a lean PyInstaller executable (`run_v3.py` entry: no-arg → `av3 launch`, args → full
+CLI). **Chromium is fetched on first run** (`av3 install-browser`), not bundled — Playwright resolves browsers
+via its own cache, and most applies use the user's real Chrome via channel anyway. `av3 update` checks the
+GitHub release feed and prompts (no in-place auto-replace in v3.0).
 
-Pipeline: discover -> fetch description -> score (all resumes) -> decide -> fill (AI) -> apply -> track gaps -> evolve resume.
+## Data storage (spec §4)
 
-**Event names** (defined in `orchestrator/events.py`): `run_started`, `resume_parsed`, `platform_started`, `platform_login_needed`, `platform_login_failed`, `search_started`, `jobs_found`, `job_scored`, `user_review_needed`, `application_started`, `application_complete`, `platform_error`, `platform_finished`, `evolution_triggers`, `run_finished`, `captcha_detected`. Most are fire-and-forget via `emit()`. User-blocking events (e.g. `user_review_needed`) use `emit_and_wait()` — the GUI handler must call `resolve_event(name, result)` to unblock the pipeline (5-minute default timeout).
+`data/v3/` (relocatable via `AV3_DATA_DIR`):
+- `app.db` — jobs, job_scores, applications, skill_gaps, answers (SQLite, the system of record).
+- `events.db` — the observability spine + the `mirror_queue` table (higher write rate, pruned on a shorter
+  window).
+- `profile/master.json` — the master fact bank (contact, work history, skills, work-auth, optional EEO).
+- `user_config.json` — typed settings (targeting, telemetry, scheduler, web, scoring weights). `.env` holds
+  secrets (`GEMINI_API_KEY`) — never in the JSON.
+- `artifacts/` — generated résumés / cover letters (files; the DB stores paths).
+- `browser_profile/` — one persistent shared Chrome profile across all sites.
+- `.backups/` — rotated SQLite snapshots. `diagnostics-<ts>.tar.gz` — support bundles.
 
-**Registered platforms** (`browser/platforms/__init__.py`): `linkedin`, `indeed`, `dice`, `ziprecruiter`.
+Generated artifacts stay as files; the DB stores their paths. `APPLIED` history is kept indefinitely (dedup
+source of truth); ephemera (SKIPPED/FILTERED) and events prune on configurable windows.
 
-**LinkedIn is discovery-only.** `linkedin.py` scans + scores listings but never submits. LinkedIn defeats patchright via TLS fingerprinting; treat any apply path as broken and route real applications to other platforms. Re-evaluate when Camoufox/Nodriver are tried.
+## Important constraints
 
-### Continuous Run Mode (`orchestrator/engine.py:run_continuous`, `orchestrator/active_hours.py`)
+- **Zero cost for the core.** No paid APIs / cloud / external DBs for the pipeline. The *only* egress is the
+  opt-in, scrubbed, default-OFF telemetry mirror.
+- **SQLite is the source of truth.** Inspect via DB Browser for SQLite or `av3 export`/CSV.
+- **`--dry-run` for development.** Never submit real applications while building.
+- **Selectors drift.** Use multi-fallback selectors; live `smoke` tests catch drift between releases.
+- **Add scrollbars / good contrast** to any web UI panel that can overflow; the dashboard is keyboard-navigable.
+- **Original résumé files are never modified.** Generation writes to `artifacts/`; evolution proposes
+  fact-bank additions the user approves.
+- **Tests live in `tests_v3/`.** Keep them green; document durable findings in the `auto-applier` skill's
+  `research/` before calling a task done.
 
-`--continuous` (or `continuous_mode: true` in `user_config.json`) loops `run()` cycles with a randomized delay (`continuous_cycle_delay_min/max`). Each cycle re-discovers jobs, so dedup must key off PROCESSED state (see `dedup.py` notes) — otherwise cycle 2 sees zero "new" jobs.
+## Legacy v2 (`auto_applier/`) — reference only, do not extend
 
-`--active-hours HH:MM-HH:MM` (parsed by `active_hours.py`) gates the apply loop to a local-time window. Outside the window the engine flips into **refinement-only mode**: it still fires resume-refinement prompts and follow-up reminders, but skips browser sessions until the window reopens. Browser is kept warm across cycles via `_keep_browser_alive` for fingerprint stability; `request_continuous_stop()` finishes the current cycle cleanly before exiting.
-
-### Cross-Source Deduplication (`storage/dedup.py`)
-
-Canonical hashing: `normalize_title(title) + normalize_company(company)` -> SHA-256. Before scoring, the engine checks `job_seen_canonically(hash)` to skip cross-posted duplicates (same job on LinkedIn and Indeed). Per-source dedup via `job_already_processed(job_id, source)` catches re-runs.
-
-**Dedup keys off PROCESSED state, not scraped state.** A Job that was scraped but never scored (budget ran out mid-batch, stop flag fired, platform crashed) does NOT dedupe — continuous-run mode relies on this so cycle 2 can reach jobs cycle 1 ran out of budget on. Both helpers join applications → jobs: only canonical_hashes / (job_id, source) pairs with at least one Application row dedup. Use `repository.processed_pairs()` and `repository.processed_canonical_hashes()` for batch-friendly one-shot loads.
-
-### Ghost Job Detection (`browser/ghost_check.py`)
-
-LLM-powered analysis of job descriptions to detect likely ghost/stale postings. Jobs scoring >= `GHOST_SKIP_THRESHOLD` (default 8, configurable via env var) are skipped before the apply step to avoid wasting time. Uses the `GHOST_JOB_CHECK` prompt template. Dry runs skip this check.
-
-### Follow-Up Cadence (`storage/repository.py`, `main.py followup group`)
-
-After each successful application, `schedule_followups()` creates pending follow-up records at configurable intervals (default 7/14/21 days). `cli followup list --due` shows actionable items. `cli followup draft` generates personalized follow-up emails via the `FOLLOWUP_EMAIL` prompt, with tone progression across attempts.
-
-### Multi-Dimensional Scoring (`scoring/models.py`)
-
-Seven weighted axes: skills (0.35), experience (0.20), seniority (0.15), location (0.10), culture (0.08), growth (0.07), compensation (0.05). LLM scores each axis 0-10 via `SCORE_DIMENSIONS` prompt. Python computes the weighted total — users can re-tune weights in `user_config.json:scoring_weights` without re-running the LLM. Falls back to legacy single-score prompt on parse failure.
-
-### Archetype Classification (`resume/archetypes.py`)
-
-Opt-in feature. When `data/archetypes.json` exists and multiple resumes are loaded, classifies each JD into an archetype (e.g., "data_analyst", "data_engineer") and routes scoring to matching resumes only. Falls back to scoring all resumes if no archetype matches confidently.
-
-### Interview Prep Extensions
-
-- **Story Bank** (`resume/story_bank.py`, `cli story`) — STAR+Reflection interview stories generated from resume + JD via `STAR_STORIES` prompt. Persisted in `data/stories/`. Subcommands: `list`, `show`, `export`, `prune`.
-- **Outreach** (`main.py`, `cli outreach`) — LinkedIn connection-request messages (<280 chars) via `OUTREACH_MESSAGE` prompt.
-- **Tailor** (`resume/tailor.py`, `cli tailor`) — Per-JD resume rewrite via `TAILOR_RESUME` prompt, rendered to PDF via Playwright.
-- **Research** (`main.py`, `cli research`) — Company briefing via `COMPANY_RESEARCH` prompt. Cached in `data/research/`.
-
-### Data Integrity (`storage/integrity.py`)
-
-- `cli fsck` — Validates referential integrity (orphan applications, missing jobs, score range), reports issues.
-- `cli normalize` — Fixes common data issues (empty fields, duplicate rows, date format normalization).
-- `cli patterns` — Conversion analytics: success rates by platform, score distribution, resume performance.
-
-### Resume Evolution (`resume/evolution.py`)
-
-Tracks skill gap frequency. When a skill appears >= 3 times, triggers a user prompt. User confirms skill level -> LLM generates resume bullet points -> user approves -> saved to that resume's profile. Original resume files are never modified.
-
-### Data Storage
-
-CSV files in `data/` (openable in Excel):
-- `jobs.csv`, `applications.csv`, `skill_gaps.csv`
-
-**Schema migrations** (`storage/migrations.py`): CSV schemas drift as dataclass models gain/lose fields between versions. The migration layer runs transparently before every `load_all()` / `save()`. On header drift it backs up the old file to `data/.backups/<name>.<timestamp>.csv`, rewrites the live file with the current canonical header, preserves overlapping columns, backfills new columns with dataclass defaults, and drops removed columns (archived only in the backup). All migrations are recorded in `data/.schema_version.json`. Inspect history with `cli migrations`. Forward-only — no down-migrations. When adding a field to any model in `storage/models.py`, you don't need to write a migration by hand.
-
-JSON files in `data/`:
-- `user_config.json` — personal info and preferences
-- `answers.json` — pre-configured Q&A (starts blank, populated in wizard, grows from encounters)
-- `unanswered.json` — new questions from runs, queued for next wizard open
-- `profiles/<label>.json` — per-resume enhanced profiles
-- `prompted_skills.json` — skills already prompted for evolution
-
-Path constants in `config.py`.
-
-### Browser & Anti-Detection (Critical)
-
-- **patchright** first, standard Playwright fallback
-- **Real Chrome** via `channel` param
-- **Manual login ONLY** — never automate credentials for any platform
-- **Headed mode always**
-- **Bezier mouse paths** + typing jitter + organic noise + distraction pauses
-- **Rate limiting:** configurable, default 10 apps/day, 60-180s between apps
-- **Hard stop on CAPTCHA** — never retry through detection
-
-### Credential Flow
-
-- Passwords in `.env` only (pattern: `{PLATFORM}_EMAIL`, `{PLATFORM}_PASSWORD`)
-- `GEMINI_API_KEY` also in `.env`
-- `orchestrator/engine.py:_load_credentials()` merges `.env` into config at runtime
-
-## Entry Points
-
-- `python -m auto_applier` -> `__main__.py` -> GUI by default, CLI with `--cli`
-- `python run.py` -> convenience wrapper
-- `auto-applier` CLI (via pip install) -> `main.py:cli()` (Click group)
-
-## Important Constraints
-
-- **Zero cost:** No paid APIs, no cloud, no external services. Everything local.
-- **CSV over databases.** Users can inspect/edit their data in Excel.
-- **`--dry-run` for testing.** Never submit real applications during development.
-- **Selectors break frequently.** Use multiple fallback selectors via `safe_query()` and fail gracefully.
-- **Add scrollbars** to any GUI panel that might overflow.
-- **Original resume files are never modified.** Evolution writes to `data/profiles/`.
-
-## Important Files (gitignored)
-
-- `.env` — credentials and API keys (see `.env.example`)
-- `data/*.csv`, `data/*.json` — personal data
-- `data/browser_profile/` — persistent browser context
-- `data/resumes/` — uploaded resume files
-- `data/profiles/` — enhanced resume profiles
-- `data/cache/` — LLM response cache
+v2 is a Tkinter + CSV desktop app (multi-résumé score-all-pick-best, synchronous per-platform pipeline,
+browser-apply spine, LinkedIn discovery). It still runs (`python run.py`, `python -m auto_applier --cli ...`)
+and is kept purely as a porting reference and a record of lessons. Its design is documented in the project
+git history and the spec's "v2 root cause" table (§1). **Port logic from it when useful; never build new
+features on it.**

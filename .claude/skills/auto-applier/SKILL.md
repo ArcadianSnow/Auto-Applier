@@ -12,6 +12,10 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
 ## Context
 
 - **v3 is a ground-up rewrite** (decided 2026-05-26). v2 code = lessons, **not** a base to extend.
+- **v3.0-core (phases 0–5) is COMPLETE (2026-05-29).** 612 tests green. Remaining work is v3.1 (Phase 6):
+  strategy profiles, salary intelligence, outcome feedback loop, interactive skill-reconciliation, rich
+  analytics, branded UI polish. See spec §11b Phase 6 + the "scope split" table.
+- **`CLAUDE.md` is now v3-first** (rewritten in Phase 5 6/M); it describes the `av3/` package directly.
 - Repo: `C:\Users\jar85\AI Projects\Auto Applier\`.
 - **The spec** (authoritative): `docs/v3-architecture.md`. Every design decision and its rationale lives there.
 - Working memory: `~/.claude/projects/C--Users-jar85-AI-Projects-Auto-Applier/memory/` — start with [[project_v3_rewrite]].

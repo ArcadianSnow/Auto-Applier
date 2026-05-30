@@ -630,10 +630,18 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
   (full v3 suite 495 green, 11 deselected by design). Live-config reload + LLM résumé-extract +
   NL-intent targeting + branded polish → v3.1. See `research/web-ui-and-service.md` for the
   per-sub-phase decision rationale.
-- **Phase 5 — Observability & distribution (KEPT pain points).** Scrubber; owner-hosted relay + shared Turso
-  opt-in mirror; `cli errors|stats|telemetry|export-diagnostics`; doctor suite; bundled installer +
-  **auto-update** feed; fresh CLAUDE.md for v3.
-- **→ Ship v3.0.**
+- **Phase 5 — Observability & distribution (KEPT pain points). ✅ DONE (2026-05-29, six sub-phases).**
+  (1/M) `cli errors|stats` local triage from `events.db`. (2/M) telemetry mirror queue + categorized
+  scrubbers (answer value / EEO never mirror — enforced structurally). (3/M) `cli telemetry on|off|status` +
+  `cli export-diagnostics` (scrubbed by default, `--raw` PII-bearing escape hatch). (4/M) owner-hosted
+  Cloudflare Worker relay template (`relay/`, Turso write token in env) + `MirrorClient` drainer +
+  `av3 mirror drain` (out-of-band, never blocks the loop) + `doctor.check_relay_reachable`. (5/M) lean
+  PyInstaller installer (`build_v3.py`/`run_v3.py`, Chromium fetched on first run via `av3 install-browser`,
+  frozen-launcher fix) + GitHub-Releases auto-update check (`av3 update`, check+prompt, no auto-replace).
+  (6/M) fresh v3-first `CLAUDE.md` + this wrap-up. 90 new tests across the six sub-phases (full v3 suite
+  **612 green**, 11 deselected by design). Per-sub-phase rationale:
+  `research/observability-and-distribution.md`.
+- **→ Ship v3.0.** ✅ All v3.0-core phases (0–5) complete. Remaining work is v3.1 (Phase 6).
 - **Phase 6 — v3.1 (after core proves out).** Configurable strategy profiles (§8a); salary intelligence +
   BLS OES market data (§8d); outcome feedback loop (§8e); interactive batch skill-reconciliation (§7b);
   story bank + company research (on-demand) + rich analytics / what-to-learn trends (§ skill-gap trends);
