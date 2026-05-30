@@ -16,6 +16,7 @@ from av3.domain.models import (
     Application,
     Job,
     JobScore,
+    Outcome,
     SkillGap,
     utcnow_iso,
 )
@@ -23,6 +24,7 @@ from av3.domain.state import (
     ApplicationStatus,
     ApplyMode,
     JobState,
+    OutcomeKind,
     transition,
 )
 
@@ -278,6 +280,68 @@ class ApplicationRepo:
                 "UPDATE applications SET status = ? WHERE id = ?",
                 (status.value, app_id),
             )
+
+
+# --------------------------------------------------------------------- outcomes
+class OutcomeRepo:
+    """Records + queries post-apply outcomes (spec §8e). Append-only: each recorded
+    outcome is a row; analytics derives a job's furthest-reached stage from them."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    @staticmethod
+    def _row(row: sqlite3.Row) -> Outcome:
+        return Outcome(
+            id=row["id"],
+            job_id=row["job_id"],
+            kind=OutcomeKind(row["kind"]),
+            noted_at=row["noted_at"],
+            note=row["note"] or "",
+        )
+
+    def add(self, outcome: Outcome) -> Outcome:
+        self.conn.execute(
+            "INSERT INTO outcomes (id, job_id, kind, noted_at, note) VALUES (?,?,?,?,?)",
+            (outcome.id, outcome.job_id, outcome.kind.value, outcome.noted_at, outcome.note),
+        )
+        return outcome
+
+    def list_by_job(self, job_id: str) -> list[Outcome]:
+        rows = self.conn.execute(
+            "SELECT * FROM outcomes WHERE job_id = ? ORDER BY noted_at", (job_id,)
+        ).fetchall()
+        return [self._row(r) for r in rows]
+
+    def list_all(self) -> list[Outcome]:
+        rows = self.conn.execute("SELECT * FROM outcomes ORDER BY noted_at").fetchall()
+        return [self._row(r) for r in rows]
+
+    def count_by_kind(self) -> dict[str, int]:
+        rows = self.conn.execute(
+            "SELECT kind, COUNT(*) AS n FROM outcomes GROUP BY kind"
+        ).fetchall()
+        return {r["kind"]: r["n"] for r in rows}
+
+    def applied_with_outcomes(self) -> list[dict]:
+        """One row per (APPLIED job × its recorded outcomes), joined with source / title /
+        score — the raw feed §8e analytics aggregates. A job with no recorded outcome still
+        appears once (``kind=None``) so "applied but silent" is countable (the implicit-ghost
+        denominator). Only APPLIED jobs: an outcome is meaningless for a job never submitted."""
+        rows = self.conn.execute(
+            """
+            SELECT j.id AS job_id, j.source AS source, j.title AS title,
+                   j.company AS company, s.total AS score, o.kind AS kind,
+                   o.noted_at AS noted_at
+            FROM jobs j
+            LEFT JOIN job_scores s ON s.job_id = j.id
+            LEFT JOIN outcomes  o ON o.job_id = j.id
+            WHERE j.state = ?
+            ORDER BY j.id
+            """,
+            (JobState.APPLIED.value,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 # -------------------------------------------------------------------- skill gaps

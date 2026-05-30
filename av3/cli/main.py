@@ -170,6 +170,128 @@ def status() -> None:
         click.echo(f"  {state:14} {n}")
 
 
+@cli.command("outcome")
+@click.argument("job_id")
+@click.argument("kind", type=click.Choice(
+    ["response", "interview", "offer", "rejection", "ghost"]))
+@click.option("--note", default="", help="Optional free-text note (no PII needed).")
+def outcome_cmd(job_id: str, kind: str, note: str) -> None:
+    """Record a post-apply outcome for a job (spec section 8e outcome feedback loop).
+
+    KIND is one of response | interview | offer | rejection | ghost. A job can accrue
+    several outcomes over time; analytics derives the furthest-reached stage. Only
+    meaningful for APPLIED jobs (the command warns otherwise but still records).
+    """
+    from av3.db import OutcomeRepo
+    from av3.domain.models import Outcome
+    from av3.domain.state import JobState, OutcomeKind
+
+    settings = load_settings()
+    conn = init_app_db(settings.app_db_path)
+    try:
+        job = JobRepo(conn).get(job_id)
+        if job is None:
+            click.echo(f"  x FAIL no job with id {job_id}", err=True)
+            sys.exit(2)
+        if job.state is not JobState.APPLIED:
+            click.echo(
+                f"  ! warning: job {job_id} is {job.state.value}, not APPLIED — "
+                f"outcome recorded but it won't appear in conversion analytics "
+                f"(which only counts APPLIED jobs)."
+            )
+        rec = OutcomeRepo(conn).add(Outcome(job_id=job_id, kind=OutcomeKind(kind), note=note))
+        conn.commit()
+    finally:
+        conn.close()
+    click.echo(f"recorded outcome={rec.kind.value} job={job_id} at={rec.noted_at}")
+
+
+@cli.command("analytics")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Emit the conversion report as JSON instead of the ASCII tables.")
+@click.option("--min-samples", type=int, default=None,
+              help="Override the minimum APPLIED-job count before weight nudges are "
+                   "suggested (default 20). Below it, no nudge — don't tune on noise.")
+def analytics_cmd(as_json: bool, min_samples: int | None) -> None:
+    """Show outcome-feedback analytics (spec section 8e): conversion rates by source,
+    title, and score-band, plus any *suggested* scoring-weight nudges.
+
+    Read-only. Weight nudges are RECOMMENDATIONS — applying them is a deliberate user
+    edit to user_config.json, never an auto-mutation (tuning live scoring off sparse
+    early data is the anti-pattern this avoids).
+    """
+    import json as _json
+
+    from av3.analytics import (
+        MIN_SAMPLES_FOR_NUDGE,
+        compute_conversion_report,
+        recommend_weight_nudges,
+    )
+    from av3.db import OutcomeRepo
+
+    settings = load_settings()
+    conn = init_app_db(settings.app_db_path)
+    try:
+        feed = OutcomeRepo(conn).applied_with_outcomes()
+    finally:
+        conn.close()
+
+    report = compute_conversion_report(feed)
+    nudges = recommend_weight_nudges(
+        report,
+        min_samples=min_samples if min_samples is not None else MIN_SAMPLES_FOR_NUDGE,
+    )
+
+    if as_json:
+        click.echo(_json.dumps({
+            "total_applied": report.total_applied,
+            "total_converted": report.total_converted,
+            "overall_rate": round(report.overall_rate, 4),
+            "outcome_counts": report.outcome_counts,
+            "by_source": [vars(s) | {"rate": round(s.rate, 4)} for s in report.by_source],
+            "by_title": [vars(s) | {"rate": round(s.rate, 4)} for s in report.by_title],
+            "by_band": [vars(s) | {"rate": round(s.rate, 4)} for s in report.by_band],
+            "nudges": [vars(n) for n in nudges],
+        }, indent=2, default=str))
+        return
+
+    if report.total_applied == 0:
+        click.echo("No APPLIED jobs yet — nothing to analyze. Record outcomes with "
+                   "`av3 outcome <job_id> <kind>` after you apply.")
+        return
+
+    click.echo(
+        f"Applied={report.total_applied} converted={report.total_converted} "
+        f"rate={report.overall_rate:.0%}"
+    )
+    if report.outcome_counts:
+        parts = " ".join(f"{k}={v}" for k, v in sorted(report.outcome_counts.items()))
+        click.echo(f"Outcomes: {parts}")
+
+    def _table(title: str, stats) -> None:
+        click.echo(f"\n{title}:")
+        if not stats:
+            click.echo("  (none)")
+            return
+        for s in stats[:15]:
+            click.echo(
+                f"  {s.key[:32]:32} applied={s.applied:4} conv={s.converted:4} "
+                f"ghost={s.ghosted:4} rate={s.rate:.0%}"
+            )
+
+    _table("By source", report.by_source)
+    _table("By score-band", report.by_band)
+    _table("By title", report.by_title)
+
+    click.echo("\nSuggested weight nudges (advisory — edit user_config.json to apply):")
+    if not nudges:
+        click.echo("  (none — need more data or no material signal yet)")
+    else:
+        for n in nudges:
+            arrow = "+" if n.direction > 0 else "-"
+            click.echo(f"  {arrow}{n.axis}: {n.rationale}")
+
+
 @cli.command()
 @click.option("--once", is_flag=True, default=True,
               help="Run one cycle and exit. The only mode v3.0 ships (staged scheduler is Phase 3).")

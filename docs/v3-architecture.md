@@ -472,6 +472,13 @@ Answer-resolver (§8b) policy for the fields that appear on nearly every form:
 ### 8e. Outcome feedback loop (gets smarter over time)
 
 > **Scope:** **v3.1.** v3.0 records outcomes; the feedback/auto-tuning loop below comes after the core proves out.
+>
+> **Status (Phase 6 4/M, 2026-05-30):** LIVE as a **read-only insights + advisory** loop. `outcomes` table +
+> `OutcomeRepo` + `av3 outcome <job_id> <kind>` record; `av3/analytics.py` (`compute_conversion_report`,
+> `recommend_weight_nudges`) + `av3 analytics` surface conversion-by-source/title/score-band and *suggest*
+> weight nudges. **Auto-tuning is deliberately NOT auto-applied** — a nudge is a recommendation the user
+> applies by editing `user_config.json` (mutating live scoring off sparse early data is the §8e anti-pattern;
+> Rule 2.6 "gate the act"). See `research/phase6-v3.1.md` §(4/M).
 
 Recorded outcomes (response / interview / rejection / ghost) feed a **lightweight, local, zero-cost** loop:
 surface which **sources, titles, and score-bands actually convert**; gently auto-tune scoring nudges and
@@ -674,9 +681,14 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
     market_source}` on Settings. Apply worker computes a per-job ask (config + posted comp + market) and sets
     it on the resolver's SALARY branch; score worker runs the comp-filter pre-LLM (`comp_skipped`). BLS OES =
     opt-in future adapter (no default egress). +37 tests (full suite 668 green).
-  - **Remaining:** outcome feedback loop (§8e); interactive batch skill-reconciliation (§7b); story bank +
-    company research (on-demand) + rich analytics / what-to-learn trends (§ skill-gap trends); branded UI
-    polish; strategy concurrency + session-rotation knobs.
+  - **(4/M) outcome feedback loop §8e. ✅ DONE (2026-05-30).** `outcomes` table + `OutcomeKind` (funnel-ranked)
+    + `Outcome` model + `OutcomeRepo` (record + `applied_with_outcomes` join feed). `av3/analytics.py`:
+    `compute_conversion_report` (conversion by source/title/score-band; silent-applied = implicit ghost) +
+    `recommend_weight_nudges` (advisory only, gated behind `MIN_SAMPLES_FOR_NUDGE=20`). CLI `av3 outcome` +
+    `av3 analytics` (`--json`). Auto-tuning is surfaced-not-applied (Rule 2.6). +24 tests (full suite 692 green).
+  - **Remaining:** interactive batch skill-reconciliation (§7b); story bank + company research (on-demand) +
+    rich analytics / what-to-learn trends (§ skill-gap trends); branded UI polish; strategy concurrency +
+    session-rotation knobs.
 
 ---
 

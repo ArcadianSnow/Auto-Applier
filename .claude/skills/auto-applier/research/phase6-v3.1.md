@@ -73,6 +73,46 @@ cover-letter is recorded on the row for the dashboard.
 
 ---
 
+## (4/M) — Outcome feedback loop §8e (2026-05-30)
+
+**What.** The "gets smarter over time" loop, shipped as **record + read-only insights + advisory nudges** —
+NOT auto-tuning. Greenfield (no outcome recording existed).
+
+- **Domain:** `OutcomeKind` enum in `domain/state.py` (ghost/rejection/response/interview/offer), funnel-
+  ranked (`.rank`, `.is_positive`); `Outcome` dataclass in `domain/models.py`.
+- **Storage:** `outcomes` table (job_id FK, kind, noted_at, note) + `OutcomeRepo` (add, list_by_job, list_all,
+  count_by_kind, `applied_with_outcomes` = the APPLIED-jobs ⟕ scores ⟕ outcomes join feed). Schema is
+  `CREATE TABLE IF NOT EXISTS` so `init_app_db` picks it up idempotently — no migration needed.
+- **`av3/analytics.py`** (pure, no I/O): `compute_conversion_report(feed)` collapses to one record per job
+  (furthest-reached outcome wins), buckets conversion by source / title / score-band; a silent APPLIED job
+  (no outcome) counts as applied-not-converted + implicit-ghost (honest denominator).
+  `recommend_weight_nudges(report)` is **advisory only** — gated behind `MIN_SAMPLES_FOR_NUDGE=20`, fires on a
+  ≥10pp high-vs-low band conversion gap, returns a `WeightNudge` suggestion (never mutates config).
+- **CLI:** `av3 outcome <job_id> <kind>` records (warns if job isn't APPLIED but still records); `av3 analytics
+  [--json]` renders the report + nudges.
+
+**Decision: surface, don't auto-apply (Rule 2.6).** Recording outcomes + computing analytics is *gather*
+(read-only, safe). Auto-mutating `settings.scoring.weights` from early sparse data is an *act* that compounds
+(bad weights → worse applies → worse data). So the loop stops at a **recommendation**; the user applies it by
+editing `user_config.json`. This matches §8e "bounded auto-tuning" honestly for v3.1 data volumes. A real
+per-axis regression (which of the 7 axes predicts conversion) needs far more data — explicitly out of scope.
+
+**Backward-compat.** New table + new commands only; no existing code path changed. All prior tests untouched.
+
+**Tests.** `test_analytics.py` (OutcomeKind ranking, OutcomeRepo on a real tmp DB incl. silent-job feed +
+non-applied exclusion, pure report aggregation: furthest-wins / silent-counts / by-source / by-band /
+outcome-counts, nudge thresholds + min-samples gate). `test_cli_outcome.py` (record / unknown-job exit 2 /
+non-applied warning / bad-kind reject / analytics empty + conversion + json). Full suite **692 green**.
+
+**Anti-stuck note.** Two edits silently failed (comment dash-count + `db/__init__.py` shape differed from
+the guessed `old_string`) — the `OutcomeRepo` class and its export never landed on the first pass, surfacing
+as an ImportError at collection (not the stale exit-0 notification). Fix per Rule 1: re-Read exact anchors,
+re-edit; then a quick `python -c "import …"` smoke + grep-for-duplicate-defs BEFORE the test run caught that
+both were now singular. Verify imports structurally before running the suite when an edit batch touches
+`__init__` exports.
+
+---
+
 ## (3/M) — Salary intelligence §8d (2026-05-30)
 
 **What.** `av3/resume/salary.py` (pure logic, no I/O): `SalaryRange`, `SalaryRecommendation`,

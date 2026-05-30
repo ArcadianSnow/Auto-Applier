@@ -11,6 +11,7 @@ from av3.db.repositories import (
     AnswerRepo,
     ApplicationRepo,
     JobRepo,
+    OutcomeRepo,
     ScoreRepo,
     SkillGapRepo,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "AnswerRepo",
     "ApplicationRepo",
     "JobRepo",
+    "OutcomeRepo",
     "ScoreRepo",
     "SkillGapRepo",
     "backup_db",

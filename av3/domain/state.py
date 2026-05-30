@@ -110,3 +110,41 @@ class ApplicationStatus(str, Enum):
     UNCONFIRMED = "UNCONFIRMED"    # submitted but no positive signal → REVIEW, retry-safe
     FAILED = "FAILED"             # mid-form break / validation error → REVIEW
     ASSISTED_PENDING = "ASSISTED_PENDING"  # pre-filled, awaiting human submit click
+
+
+class OutcomeKind(str, Enum):
+    """A recorded post-apply outcome (spec §8e outcome feedback loop).
+
+    Ordered by funnel depth (``rank``) so analytics can derive a job's *furthest-reached*
+    stage from several recorded outcomes. ``GHOST`` and ``REJECTION`` are terminal-negative;
+    ``RESPONSE`` < ``INTERVIEW`` < ``OFFER`` is the positive ladder. A ``GHOST`` (employer
+    never responded) ranks below ``RESPONSE`` — it's the "applied, heard nothing" signal the
+    ghost-job detector wants.
+    """
+
+    GHOST = "ghost"             # no response after a long wait (the §8e ghost signal)
+    REJECTION = "rejection"     # explicit no
+    RESPONSE = "response"       # any human reply / acknowledgement
+    INTERVIEW = "interview"     # advanced to an interview
+    OFFER = "offer"             # received an offer
+
+    @property
+    def rank(self) -> int:
+        """Funnel depth for "furthest reached" comparisons. Higher = deeper."""
+        return _OUTCOME_RANK[self]
+
+    @property
+    def is_positive(self) -> bool:
+        """A conversion signal (got a real human response or better)."""
+        return self in (OutcomeKind.RESPONSE, OutcomeKind.INTERVIEW, OutcomeKind.OFFER)
+
+
+#: Funnel depth ranking. GHOST is the floor (worse than an explicit rejection for the
+#: ghost detector's purposes — "the posting may not be real"); the positive ladder climbs.
+_OUTCOME_RANK: dict["OutcomeKind", int] = {
+    OutcomeKind.GHOST: 0,
+    OutcomeKind.REJECTION: 1,
+    OutcomeKind.RESPONSE: 2,
+    OutcomeKind.INTERVIEW: 3,
+    OutcomeKind.OFFER: 4,
+}

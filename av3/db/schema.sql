@@ -59,6 +59,21 @@ CREATE TABLE IF NOT EXISTS skill_gaps (
     status      TEXT NOT NULL DEFAULT 'open'    -- open | learning | certified | dismissed
 );
 
+-- Recorded application outcomes (spec §8e outcome feedback loop). One job can accrue
+-- several outcomes over time (response → interview → offer/rejection); we keep them all
+-- and let analytics derive the furthest-reached stage. ``kind`` is an OutcomeKind value.
+CREATE TABLE IF NOT EXISTS outcomes (
+    id        TEXT PRIMARY KEY,
+    job_id    TEXT NOT NULL,
+    kind      TEXT NOT NULL,                  -- response | interview | offer | rejection | ghost
+    noted_at  TEXT NOT NULL,
+    note      TEXT,
+    FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS ix_outcomes_job_id ON outcomes (job_id);
+CREATE INDEX IF NOT EXISTS ix_outcomes_kind   ON outcomes (kind);
+
 -- Known form-question answers; UPSERT-keyed by question. embedding for semantic match (§8b).
 CREATE TABLE IF NOT EXISTS answers (
     question    TEXT PRIMARY KEY,

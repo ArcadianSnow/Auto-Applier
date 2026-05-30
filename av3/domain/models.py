@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from av3.domain.state import ApplicationStatus, ApplyMode, JobState
+from av3.domain.state import ApplicationStatus, ApplyMode, JobState, OutcomeKind
 
 
 def new_id() -> str:
@@ -67,6 +67,23 @@ class Application:
     cover_letter_path: str = ""
     generated_resume_path: str = ""    # per-job résumé generated from the fact bank (§6b)
     submitted_at: str = ""
+
+
+@dataclass
+class Outcome:
+    """A recorded post-apply outcome for a job (spec §8e ``outcomes`` table).
+
+    Several outcomes can accrue per job over time (response → interview → offer); the
+    feedback analytics derives the furthest-reached stage. ``kind`` is an
+    :class:`OutcomeKind`. Region/identity-neutral; carries no PII beyond a free-text note
+    the user types.
+    """
+
+    job_id: str
+    kind: OutcomeKind
+    id: str = field(default_factory=new_id)
+    noted_at: str = field(default_factory=utcnow_iso)
+    note: str = ""
 
 
 @dataclass
