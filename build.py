@@ -1,8 +1,8 @@
 """Build Auto Applier v3 into a standalone executable using PyInstaller (spec §11a).
 
-The v3 counterpart to v2's ``build.py``. Bundles the ``av3`` package + the
-FastAPI web UI (templates/static) + the SQLite schema into a single executable
-whose no-arg launch is the one-click dashboard (``run_v3.py`` → ``av3 launch``).
+Bundles the ``auto_applier`` package + the FastAPI web UI (templates/static) +
+the SQLite schema into a single executable whose no-arg launch is the one-click
+dashboard (``run.py`` → ``av3 launch``).
 
 ## Chromium is NOT bundled — fetched on first run (the lean-installer decision)
 
@@ -22,12 +22,12 @@ So the install story is two steps, both scriptable by the installer:
 ## Requires PyInstaller (not a default dep)
 
     pip install -e ".[v3]" pyinstaller
-    python build_v3.py
+    python build.py
 
 PyInstaller is intentionally absent from the runtime deps; it's a build-host
 tool. This script is NOT exercised by the test suite (it shells out to a
 multi-minute native build); the update-check + first-run-browser logic it relies
-on (``av3/update.py``, ``av3 install-browser``) ARE unit-tested.
+on (``auto_applier/update.py``, ``av3 install-browser``) ARE unit-tested.
 """
 
 from __future__ import annotations
@@ -55,9 +55,9 @@ def build(onefile: bool = True) -> None:
         # the Windows shortcut/.cmd wrapper hides the window for the non-technical
         # UX (see av3-launcher.cmd). A windowed build would swallow startup errors.
         # ---- bundled data: the web UI assets + the SQLite schema ----
-        *_add_data("av3/web/templates", "av3/web/templates"),
-        *_add_data("av3/web/static", "av3/web/static"),
-        *_add_data("av3/db", "av3/db"),
+        *_add_data("auto_applier/web/templates", "auto_applier/web/templates"),
+        *_add_data("auto_applier/web/static", "auto_applier/web/static"),
+        *_add_data("auto_applier/db", "auto_applier/db"),
         *_add_data(".env.example", "."),
         # ---- FastAPI/uvicorn need their submodules collected (dynamic imports) ----
         "--collect-submodules", "uvicorn",
@@ -66,7 +66,7 @@ def build(onefile: bool = True) -> None:
         "--hidden-import", "uvicorn.loops.auto",
         "--hidden-import", "uvicorn.protocols.http.auto",
         "--hidden-import", "uvicorn.protocols.websockets.auto",
-        str(ROOT / "run_v3.py"),
+        str(ROOT / "run.py"),
     ]
     print("Building AutoApplierV3 ...")
     print("Command:\n  " + " ".join(cmd) + "\n")
