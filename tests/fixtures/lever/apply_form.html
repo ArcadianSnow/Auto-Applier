@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Senior Engineer - acmeco | Lever</title>
+  <script src="https://hcaptcha.com/1/api.js" async defer></script>
+</head>
+<body>
+<div class="application">
+  <div class="posting-headline">
+    <h2>Senior Engineer</h2>
+    <p class="posting-categories">
+      <span class="location">Remote</span>
+      <span class="commitment">Full-time</span>
+    </p>
+  </div>
+
+  <form method="POST" enctype="multipart/form-data" action="/acmeco/abc-123/apply">
+
+    <div class="application-page-form-content">
+
+      <ul class="application-fields">
+        <li class="application-label">
+          <label>Full name<span class="required">✱</span></label>
+          <input type="text" name="name" required>
+        </li>
+
+        <li class="application-label">
+          <label>Email<span class="required">✱</span></label>
+          <input type="email" name="email" required>
+        </li>
+
+        <li class="application-label">
+          <label>Phone</label>
+          <input type="tel" name="phone">
+        </li>
+
+        <li class="application-label">
+          <label>Current company</label>
+          <input type="text" name="org">
+        </li>
+      </ul>
+
+      <div class="application-question">
+        <label class="application-label">Resume / CV<span class="required">✱</span></label>
+        <input type="file" id="resume-upload-input" name="resume"
+               accept=".pdf,.doc,.docx" required>
+        <input type="hidden" name="resumeStorageId" value="">
+      </div>
+
+      <div class="application-question">
+        <label class="application-label" for="card-uuid-1-q0">
+          Why are you interested in working at acmeco?<span class="required">✱</span>
+        </label>
+        <textarea id="card-uuid-1-q0" name="cards[abc1-uuid-q1][field0]"
+                  aria-required="true" required></textarea>
+      </div>
+
+      <div class="application-question">
+        <label class="application-label" for="card-uuid-2-q0">Pronouns</label>
+        <input type="text" id="card-uuid-2-q0" name="cards[abc1-uuid-q2][field0]">
+      </div>
+
+      <ul class="application-additional">
+        <li>
+          <label>Gender</label>
+          <select name="eeo[gender]">
+            <option value="">Select</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+            <option value="decline">Decline to state</option>
+          </select>
+        </li>
+        <li>
+          <label>Pronouns (optional)</label>
+          <input type="text" name="pronouns">
+        </li>
+      </ul>
+    </div>
+
+    <div class="h-captcha" data-sitekey="..."></div>
+    <textarea name="h-captcha-response" id="h-captcha-response" style="display:none"></textarea>
+
+    <button type="submit" id="btn-submit">Submit application</button>
+  </form>
+</div>
+</body>
+</html>

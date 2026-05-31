@@ -67,9 +67,7 @@ def compute_version() -> str:
         f"--since={today_iso} 00:00:00",
         f"--until={today_iso} 23:59:59",
     )
-    count_today = sum(
-        1 for ln in log_today.splitlines() if ln.strip() == today_iso
-    )
+    count_today = sum(1 for ln in log_today.splitlines() if ln.strip())
 
     if count_today > 0:
         human = f"{today_dot}-{count_today}"

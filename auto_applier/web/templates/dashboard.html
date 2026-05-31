@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% block title %}Auto Applier v3 &mdash; dashboard{% endblock %}
+{% block content %}
+  <div x-data="dashboard()" x-init="init()" class="dashboard">
+
+    {# ------- onboarding banner (5/M) ------- #}
+    <div class="onboarding-banner" x-show="onboarding && !onboarding.is_complete">
+      <span>
+        Finish onboarding to start the scheduler &mdash;
+        <a href="/onboarding">open the wizard</a>.
+      </span>
+    </div>
+
+    {# ------- header / scheduler status ------- #}
+    <section class="card status-bar" :class="status.scheduler.paused ? 'is-paused' : ''">
+      <div class="status-line">
+        <span class="status-dot"
+              :class="status.scheduler.running ? 'dot-running' : 'dot-stopped'"
+              :title="status.scheduler.running ? 'Scheduler running' : 'Scheduler stopped'"></span>
+        <span class="status-text">
+          <strong x-text="status.scheduler.running
+            ? (status.scheduler.paused ? 'Paused' : 'Running')
+            : 'Stopped'"></strong>
+          <span class="muted" x-show="pauseReasonsList().length > 0">
+            &middot; <span x-text="pauseReasonsList().join(' + ')"></span>
+          </span>
+          <span class="muted" x-show="status.last_cycle && pauseReasonsList().length === 0">
+            &middot; last cycle <span x-text="status.last_cycle?.status || ''"></span>
+            (<span x-text="ago(status.last_cycle?.ts)"></span>)
+          </span>
+          <span class="muted" x-show="!status.last_cycle && status.scheduler.running && pauseReasonsList().length === 0">
+            &middot; warming up...
+          </span>
+        </span>
+        <span class="status-right">
+          <button class="pause-btn"
+                  x-show="status.scheduler.running"
+                  :disabled="controlBusy"
+                  @click="togglePause()"
+                  :title="manuallyPaused() ? 'Click to resume the scheduler' : 'Click to pause the scheduler'"
+                  x-text="manuallyPaused() ? 'Resume' : 'Pause'"></button>
+          <span class="muted" x-text="connState"></span>
+        </span>
+      </div>
+    </section>
+
+    {# ------- pipeline counts ------- #}
+    <section class="card">
+      <h2>Pipeline</h2>
+      <div class="pipeline">
+        <template x-for="state in status.pipeline_order" :key="state">
+          <div class="pipeline-cell" :class="cellClass(state)">
+            <div class="pipeline-state" x-text="state"></div>
+            <div class="pipeline-count" x-text="status.jobs_by_state[state] || 0"></div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    {# ------- sources health ------- #}
+    <section class="card">
+      <h2>Sources</h2>
+      <div x-show="sources.length === 0" class="muted">
+        No sources touched yet. They appear here after the first discovery / apply cycle.
+      </div>
+      <ul class="sources" x-show="sources.length > 0">
+        <template x-for="s in sources" :key="s.source">
+          <li :class="s.paused ? 'source-paused' : 'source-healthy'">
+            <span class="source-name" x-text="s.source"></span>
+            <span class="source-state" x-text="s.state"></span>
+            <span class="source-reason muted" x-show="s.reason" x-text="s.reason"></span>
+            <span class="source-actions" x-show="s.paused">
+              <button class="link-btn"
+                      x-show="s.login_url"
+                      :disabled="sourceBusy[s.source]"
+                      @click="sourceLogin(s.source)"
+                      title="Open the login page in the bot's persistent Chrome profile">
+                Log in
+              </button>
+              <button class="link-btn"
+                      :disabled="sourceBusy[s.source]"
+                      @click="sourceMarkHealthy(s.source)"
+                      title="Mark this source healthy after you've signed back in">
+                Mark logged in
+              </button>
+            </span>
+          </li>
+        </template>
+      </ul>
+    </section>
+
+    {# ------- two-column: review queue + apply queue ------- #}
+    <div class="two-col">
+      <section class="card">
+        <h2>Review queue
+          <span class="count" x-text="queue.review.length"></span>
+        </h2>
+        <p class="muted" x-show="queue.review.length === 0">Nothing to review.</p>
+        <ul class="job-list" x-show="queue.review.length > 0">
+          <template x-for="j in queue.review" :key="j.id">
+            <li>
+              <a :href="`/jobs/${j.id}`">
+                <span class="job-title" x-text="j.title"></span>
+                <span class="job-meta">
+                  <span x-text="j.company"></span>
+                  <span class="muted" x-text="j.source"></span>
+                </span>
+              </a>
+            </li>
+          </template>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>Queued + in flight
+          <span class="count"
+                x-text="queue.queued_apply.length + queue.applying.length"></span>
+        </h2>
+        <p class="muted"
+           x-show="queue.queued_apply.length + queue.applying.length === 0">
+          Nothing queued.
+        </p>
+        <ul class="job-list">
+          <template x-for="j in queue.applying" :key="j.id">
+            <li>
+              <a :href="`/jobs/${j.id}`">
+                <span class="status-pill pill-applying">APPLYING</span>
+                <span class="job-title" x-text="j.title"></span>
+                <span class="job-meta">
+                  <span x-text="j.company"></span>
+                  <span class="muted" x-text="j.source"></span>
+                </span>
+              </a>
+            </li>
+          </template>
+          <template x-for="j in queue.queued_apply" :key="j.id">
+            <li>
+              <a :href="`/jobs/${j.id}`">
+                <span class="status-pill pill-queued">QUEUED</span>
+                <span class="job-title" x-text="j.title"></span>
+                <span class="job-meta">
+                  <span x-text="j.company"></span>
+                  <span class="muted" x-text="j.source"></span>
+                </span>
+              </a>
+            </li>
+          </template>
+        </ul>
+      </section>
+    </div>
+
+    {# ------- application history ------- #}
+    <section class="card">
+      <h2>Recent applications</h2>
+      <p class="muted" x-show="history.length === 0">No applications yet.</p>
+      <table class="history" x-show="history.length > 0">
+        <thead>
+          <tr>
+            <th>When</th><th>Status</th><th>Mode</th><th>Job</th>
+            <th class="num">Score</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="a in history" :key="a.id">
+            <tr>
+              <td x-text="a.submitted_at || 'pending'"></td>
+              <td>
+                <span class="status-pill" :class="`pill-${a.status.toLowerCase()}`"
+                      x-text="a.status"></span>
+              </td>
+              <td x-text="a.mode"></td>
+              <td>
+                <template x-if="a.job">
+                  <a :href="`/jobs/${a.job.id}`">
+                    <span x-text="a.job.title"></span>
+                    <span class="muted">&middot; <span x-text="a.job.company"></span></span>
+                  </a>
+                </template>
+                <template x-if="!a.job">
+                  <span class="muted">[pruned] <span x-text="a.job_id"></span></span>
+                </template>
+              </td>
+              <td class="num"
+                  x-text="a.score_total !== null && a.score_total !== undefined
+                          ? a.score_total.toFixed(1) : '—'"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </section>
+
+    {# ------- live activity (SSE feed) ------- #}
+    <section class="card">
+      <h2>Live activity
+        <span class="muted small">(<span x-text="events.length"></span> recent)</span>
+      </h2>
+      <p class="muted" x-show="events.length === 0">
+        Listening for scheduler activity...
+      </p>
+      <ul class="events" x-show="events.length > 0">
+        <template x-for="e in events" :key="e.id">
+          <li :class="`event-${e.status}`">
+            <span class="event-ts muted" x-text="e.ts"></span>
+            <span class="event-stage" x-text="e.stage"></span>
+            <span class="event-status" x-text="e.status"></span>
+            <span x-show="e.platform" class="event-platform muted"
+                  x-text="e.platform"></span>
+            <span x-show="e.error_type" class="event-error"
+                  x-text="`${e.error_type}: ${e.error_msg || ''}`"></span>
+            <a x-show="e.job_id" class="event-job"
+               :href="`/jobs/${e.job_id}`" x-text="'#' + (e.job_id || '').slice(0,8)"></a>
+          </li>
+        </template>
+      </ul>
+    </section>
+
+  </div>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', path='app.js') }}"></script>
+{% endblock %}

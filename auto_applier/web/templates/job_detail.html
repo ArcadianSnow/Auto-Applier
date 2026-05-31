@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}Job &mdash; av3{% endblock %}
+{% block content %}
+  <div x-data="jobDetail('{{ job_id }}')" x-init="load()" class="job-detail">
+
+    <p><a href="/">&larr; Dashboard</a></p>
+
+    <template x-if="loading">
+      <p class="muted">Loading...</p>
+    </template>
+
+    <template x-if="error">
+      <section class="card">
+        <h2>Couldn't load this job</h2>
+        <p class="muted" x-text="error"></p>
+      </section>
+    </template>
+
+    <template x-if="!loading && !error && data">
+      <div>
+        <section class="card">
+          <h1 x-text="data.job.title"></h1>
+          <p>
+            <strong x-text="data.job.company"></strong>
+            <span class="muted" x-show="data.job.location">
+              &middot; <span x-text="data.job.location"></span>
+            </span>
+            <span class="muted">&middot; <span x-text="data.job.source"></span></span>
+          </p>
+          <p>
+            <span class="status-pill" :class="`pill-${data.job.state.toLowerCase()}`"
+                  x-text="data.job.state"></span>
+            <a x-show="data.job.url" :href="data.job.url" target="_blank"
+               rel="noopener" class="muted">listing &rarr;</a>
+          </p>
+          <p class="muted" x-show="data.job.posted_at">
+            Posted <span x-text="data.job.posted_at"></span>
+          </p>
+        </section>
+
+        <section class="card" x-show="data.score">
+          <h2>Score
+            <span class="score-total" x-show="data.score"
+                  x-text="data.score?.total?.toFixed(1)"></span>
+          </h2>
+          <table class="dimensions">
+            <thead>
+              <tr><th>Dimension</th><th class="num">Value</th></tr>
+            </thead>
+            <tbody>
+              <template x-for="[k, v] in Object.entries(data.score?.dimensions || {})"
+                        :key="k">
+                <tr>
+                  <td x-text="k"></td>
+                  <td class="num"
+                      x-text="(typeof v === 'number') ? v.toFixed(1) : v"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          <p class="muted small">
+            Scored by <span x-text="data.score?.model"></span>
+            on <span x-text="data.score?.scored_at"></span>
+          </p>
+        </section>
+
+        <section class="card assisted-panel" x-show="latestAssistedPending()">
+          <h2>Assisted submit pending</h2>
+          <p>
+            The bot pre-filled this application but stopped short of
+            submitting. Open the form in the bot's browser, review the
+            answers, and click submit yourself — then come back here to
+            confirm.
+          </p>
+          <p class="action-row">
+            <button class="primary-btn"
+                    :disabled="assistedBusy"
+                    @click="assistedOpen()">
+              Open the application
+            </button>
+            <button class="primary-btn"
+                    :disabled="assistedBusy"
+                    @click="assistedConfirm()"
+                    title="Mark APPLIED after you clicked submit on the form">
+              I submitted it
+            </button>
+            <button class="secondary-btn"
+                    :disabled="assistedBusy"
+                    @click="assistedCancel()"
+                    title="Mark the attempt cancelled — the job stays in REVIEW">
+              Skip / didn't submit
+            </button>
+          </p>
+          <p class="muted small" x-show="assistedNote" x-text="assistedNote"></p>
+        </section>
+
+        <section class="card">
+          <h2>Applications
+            <span class="muted small">(<span x-text="data.applications.length"></span>)</span>
+          </h2>
+          <p class="muted" x-show="data.applications.length === 0">
+            No apply attempts yet.
+          </p>
+          <table class="history" x-show="data.applications.length > 0">
+            <thead>
+              <tr>
+                <th>Submitted</th><th>Status</th><th>Mode</th>
+                <th>Résumé</th><th>Cover letter</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="a in data.applications" :key="a.id">
+                <tr>
+                  <td x-text="a.submitted_at || 'pending'"></td>
+                  <td>
+                    <span class="status-pill"
+                          :class="`pill-${a.status.toLowerCase()}`"
+                          x-text="a.status"></span>
+                  </td>
+                  <td x-text="a.mode"></td>
+                  <td x-text="a.generated_resume_path || '—'"></td>
+                  <td x-text="a.cover_letter_path || '—'"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card" x-show="data.job.description">
+          <h2>Job description</h2>
+          <pre class="jd" x-text="data.job.description"></pre>
+        </section>
+      </div>
+    </template>
+
+  </div>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', path='app.js') }}"></script>
+{% endblock %}

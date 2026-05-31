@@ -17,6 +17,17 @@ data/logs/
 # Resumes (user uploads)
 data/resumes/
 
+# v3 data dir — SQLite DBs, artifacts, persistent Chrome profile, backups, diagnostics.
+# The entire v3 data tree (default data/v3/, relocatable via AV3_DATA_DIR) is user data
+# and must never be committed.
+data/v3/
+
+# Playwright-MCP scratch logs
+.playwright-mcp/
+
+# Scheduler lock
+.claude/scheduled_tasks.lock
+
 # CLI-generated export artifacts
 auto_applier_export.json
 
@@ -49,6 +60,13 @@ build/
 # commits don't accumulate VERSION-file noise.
 VERSION
 
+# Inno Setup installer artifacts. The compiled .exe lands here;
+# we don't want multi-MB installer binaries in git history. Build
+# them via `python installer/build_installer.py`.
+installer/Output/
+installer/icon.ico
+
 # OS
 .DS_Store
 Thumbs.db
+.claude/unstuck/

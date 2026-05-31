@@ -1,0 +1,24 @@
+# Cloudflare Worker config for the Auto Applier v3 telemetry relay (spec §9).
+# Deploy with: wrangler deploy   (see README.md for the full one-time setup).
+
+name = "auto-applier-telemetry-relay"
+main = "worker.js"
+compatibility_date = "2024-09-23"
+
+# Non-secret tunable: max accepted rows per user_id per minute (fixed window).
+[vars]
+RATE_LIMIT_PER_MIN = "120"
+
+# Per-user rate-limit counter store. Create with:
+#   wrangler kv namespace create RATE_LIMIT
+# then paste the returned id below. If you omit this binding the relay still
+# runs but rate limiting soft-fails OPEN (fine for a 3–4 person group; add it
+# before any wider exposure).
+# [[kv_namespaces]]
+# binding = "RATE_LIMIT"
+# id = "<paste-kv-namespace-id-here>"
+
+# Secrets are NOT set here — they go in via `wrangler secret put` so they never
+# land in source control:
+#   wrangler secret put TURSO_DATABASE_URL   # e.g. https://<db>-<org>.turso.io
+#   wrangler secret put TURSO_AUTH_TOKEN     # a WRITE-scoped token for this DB only

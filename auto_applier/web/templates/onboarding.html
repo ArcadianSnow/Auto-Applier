@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+{% block title %}Onboarding &mdash; av3{% endblock %}
+{% block content %}
+  <div x-data="onboarding()" x-init="load()" class="onboarding">
+
+    <section class="card">
+      <h1>Welcome to Auto Applier v3</h1>
+      <p>
+        A few steps to get the bot ready. Each step saves immediately —
+        close the tab and come back any time.
+        <a href="/" class="muted">Skip to dashboard &rarr;</a>
+      </p>
+      <ol class="onboarding-steps">
+        <template x-for="(s, i) in STEPS" :key="s.key">
+          <li :class="stepClass(s.key)">
+            <span class="step-index" x-text="i + 1"></span>
+            <button type="button" class="link-btn step-link"
+                    @click="goto(s.key)"
+                    x-text="s.title"></button>
+            <span class="step-done muted" x-show="isDone(s.key)" title="Saved">&check;</span>
+          </li>
+        </template>
+      </ol>
+    </section>
+
+    {# -------- contact -------- #}
+    <section class="card onboarding-step" x-show="step === 'contact'">
+      <h2>Step 1 &mdash; Contact</h2>
+      <p class="muted">
+        How forms should fill your name + email + phone fields.
+      </p>
+      <div class="form-grid">
+        <label>Full name
+          <input type="text" x-model="contact.name" placeholder="Pat Q. Example">
+        </label>
+        <label>Email
+          <input type="email" x-model="contact.email" placeholder="pat@example.com">
+        </label>
+        <label>Phone
+          <input type="tel" x-model="contact.phone" placeholder="+1 555 0100">
+        </label>
+        <label>Location
+          <input type="text" x-model="contact.location" placeholder="City, State">
+        </label>
+      </div>
+      <div class="action-row">
+        <button class="primary-btn" :disabled="busy" @click="saveContact()">Save &amp; continue</button>
+      </div>
+    </section>
+
+    {# -------- work history -------- #}
+    <section class="card onboarding-step" x-show="step === 'work-history'">
+      <h2>Step 2 &mdash; Work history</h2>
+      <p class="muted">
+        Every role the bot can pull from when tailoring résumés. Add
+        bullets one per line — the fabrication guard only allows facts
+        the bank knows about.
+      </p>
+      <template x-for="(w, idx) in workHistory" :key="idx">
+        <div class="work-entry">
+          <div class="form-grid">
+            <label>Company
+              <input type="text" x-model="w.company">
+            </label>
+            <label>Title
+              <input type="text" x-model="w.title">
+            </label>
+            <label>Start
+              <input type="text" x-model="w.start" placeholder="2021-03">
+            </label>
+            <label>End
+              <input type="text" x-model="w.end" placeholder="Present">
+            </label>
+          </div>
+          <label>Bullets (one per line)
+            <textarea rows="4" x-model="w.bulletsText"></textarea>
+          </label>
+          <p class="action-row">
+            <button class="secondary-btn" @click="removeWork(idx)">Remove this role</button>
+          </p>
+        </div>
+      </template>
+      <p class="action-row">
+        <button class="secondary-btn" @click="addWork()">+ Add another role</button>
+      </p>
+      <div class="action-row">
+        <button class="primary-btn" :disabled="busy" @click="saveWorkHistory()">Save &amp; continue</button>
+      </div>
+    </section>
+
+    {# -------- skills -------- #}
+    <section class="card onboarding-step" x-show="step === 'skills'">
+      <h2>Step 3 &mdash; Skills</h2>
+      <p class="muted">
+        Comma- or newline-separated. The bot uses these for the embedding
+        pre-filter and the fabrication guard — only listed skills can
+        appear on a generated résumé.
+      </p>
+      <label>Skills
+        <textarea rows="6" x-model="skillsText"
+                  placeholder="Python, SQL, AWS, ..."></textarea>
+      </label>
+      <div class="action-row">
+        <button class="primary-btn" :disabled="busy" @click="saveSkills()">Save &amp; continue</button>
+      </div>
+    </section>
+
+    {# -------- work auth -------- #}
+    <section class="card onboarding-step" x-show="step === 'work-auth'">
+      <h2>Step 4 &mdash; Work authorization</h2>
+      <p class="muted">
+        Required so the apply path doesn't have to guess. There is no
+        silent default — leave the radio on "skip" if you'd rather the
+        bot route those forms to manual review.
+      </p>
+      <label>Authorization status
+        <input type="text" x-model="workAuth.work_authorization"
+               placeholder="US citizen, H-1B, EU citizen, ...">
+      </label>
+      <fieldset class="radio-row">
+        <legend>Does this role require sponsorship?</legend>
+        <label><input type="radio" :value="false" x-model="workAuth.requires_sponsorship"> No</label>
+        <label><input type="radio" :value="true"  x-model="workAuth.requires_sponsorship"> Yes</label>
+        <label><input type="radio" :value="null"  x-model="workAuth.requires_sponsorship"> Skip / unanswered</label>
+      </fieldset>
+      <div class="action-row">
+        <button class="primary-btn" :disabled="busy" @click="saveWorkAuth()">Save &amp; continue</button>
+      </div>
+    </section>
+
+    {# -------- targeting -------- #}
+    <section class="card onboarding-step" x-show="step === 'targeting'">
+      <h2>Step 5 &mdash; Targeting</h2>
+      <p class="muted">
+        What the bot searches for. Titles + locations seed the discovery
+        producer; salary floor filters out below-floor postings before
+        scoring.
+      </p>
+      <label>Job titles (comma or newline separated)
+        <textarea rows="3" x-model="targetingTitlesText"
+                  placeholder="Senior Data Engineer, Staff ML Engineer"></textarea>
+      </label>
+      <label>Locations (comma or newline separated)
+        <textarea rows="2" x-model="targetingLocationsText"
+                  placeholder="Remote (US), Seattle"></textarea>
+      </label>
+      <div class="form-grid">
+        <label>Salary floor (USD/year)
+          <input type="number" x-model.number="targeting.salary_floor"
+                 placeholder="120000" min="0">
+        </label>
+        <label>Seniority
+          <select x-model="targeting.seniority">
+            <option value="">Any</option>
+            <option value="junior">Junior</option>
+            <option value="mid">Mid</option>
+            <option value="senior">Senior</option>
+            <option value="staff">Staff / Principal</option>
+          </select>
+        </label>
+      </div>
+      <p>
+        <label><input type="checkbox" x-model="targeting.remote_ok"> Include remote</label>
+        <label><input type="checkbox" x-model="targeting.onsite_ok"> Include on-site</label>
+      </p>
+      <div class="action-row">
+        <button class="primary-btn" :disabled="busy" @click="saveTargeting()">Save &amp; continue</button>
+      </div>
+    </section>
+
+    {# -------- telemetry -------- #}
+    <section class="card onboarding-step" x-show="step === 'telemetry'">
+      <h2>Step 6 &mdash; Telemetry (optional)</h2>
+      <p class="muted">
+        Opt-in error mirror — errors only, no PII, no résumé content. Off
+        by default. Helps the maintainers see which selectors and
+        ATS quirks break across the user group.
+      </p>
+      <fieldset class="radio-row">
+        <legend>Send anonymized errors to the relay?</legend>
+        <label><input type="radio" :value="false" x-model="telemetry.enabled"> No (default)</label>
+        <label><input type="radio" :value="true"  x-model="telemetry.enabled"> Yes, opt me in</label>
+      </fieldset>
+      <label x-show="telemetry.enabled">Handle (sha256'd before sending)
+        <input type="text" x-model="telemetry.handle" placeholder="any identifier you'll recognize">
+      </label>
+      <div class="action-row">
+        <button class="primary-btn" :disabled="busy" @click="saveTelemetry()">Save &amp; continue</button>
+      </div>
+    </section>
+
+    {# -------- web prefs -------- #}
+    <section class="card onboarding-step" x-show="step === 'web-prefs'">
+      <h2>Step 7 &mdash; Control preferences</h2>
+      <p class="muted">
+        The F6 hotkey instantly hands the keyboard back to you (the bot
+        pauses); idle-detect pauses while you're actively using the
+        machine. Changes apply after restarting <code>av3 serve</code>.
+      </p>
+      <p>
+        <label><input type="checkbox" x-model="webPrefs.hotkey_enabled"> Enable F6 control-handoff hotkey</label>
+      </p>
+      <label x-show="webPrefs.hotkey_enabled">Hotkey
+        <input type="text" x-model="webPrefs.hotkey" placeholder="F6">
+      </label>
+      <p>
+        <label><input type="checkbox" x-model="webPrefs.idle_detect_enabled"> Auto-pause while user is active</label>
+      </p>
+      <label x-show="webPrefs.idle_detect_enabled">Idle threshold (seconds)
+        <input type="number" x-model.number="webPrefs.idle_threshold_s" min="1" placeholder="60">
+      </label>
+      <div class="action-row">
+        <button class="primary-btn" :disabled="busy" @click="saveWebPrefs()">Save &amp; finish</button>
+      </div>
+    </section>
+
+    {# -------- done -------- #}
+    <section class="card onboarding-step assisted-panel" x-show="step === 'done'">
+      <h2>You're set!</h2>
+      <p>
+        The dashboard will now start the scheduler the next time you run
+        <code>av3 serve</code>. Anything you want to change later lives
+        in <code>data/user_config.json</code> + <code>data/profile/master.json</code>.
+      </p>
+      <p class="action-row">
+        <a class="primary-btn" href="/">Go to dashboard</a>
+      </p>
+    </section>
+
+    <p class="muted small" x-show="lastSavedNote" x-text="lastSavedNote"></p>
+  </div>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', path='onboarding.js') }}"></script>
+{% endblock %}

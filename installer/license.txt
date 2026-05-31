@@ -1,0 +1,25 @@
+Auto Applier — Personal-use License Notice
+==========================================
+
+This software is provided "as-is" for personal job-application use
+by you and a small group of friends and family. It is not licensed
+for commercial use, redistribution, or resale.
+
+By installing this software you acknowledge:
+
+  - It automates job applications on your behalf. You are responsible
+    for the content submitted under your name.
+  - Some job sites' Terms of Service prohibit automated submissions.
+    Use the tool only on platforms where you accept the risk.
+  - Your data (resumes, CSVs, browser profile) stays on your local
+    machine. Nothing is sent to third-party servers except the LLM
+    requests you opt into (Ollama runs locally; Gemini, when used,
+    sends prompt content to Google's API per their terms).
+  - The authors are not responsible for account suspensions, missed
+    job opportunities, or any other consequences of using this tool.
+
+If you don't accept these terms, click Cancel now and remove the
+installer.
+
+For questions, see README.md after install or visit the project's
+GitHub page (link will be in the application's About dialog).
