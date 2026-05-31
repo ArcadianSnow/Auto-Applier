@@ -48,10 +48,10 @@ The rewrite exists to remove these root causes, not to add features.
 
 ## 3. Module layout (target)
 
-> **Package root = `auto_applier/` (built as `auto_applier/` 2026-05-26–05-30, renamed at the v3→master
-> cutover on 2026-05-30 when v3 superseded and replaced v2).** The CLI command verb stays
-> `av3` — only the package/import namespace is `auto_applier`. v2 (the old Tkinter+CSV app)
-> has been deleted; its lessons live in the git history and the §1 root-cause table.
+> **Package root = `auto_applier/` (built 2026-05-26–05-30 as the `av3` package, renamed to
+> `auto_applier` at the v3→master cutover on 2026-05-30 when v3 superseded and replaced v2).** The
+> CLI command verb stays `av3` — only the package/import namespace is `auto_applier`. v2 (the old
+> Tkinter+CSV app) has been deleted; its lessons live in the git history and the §1 root-cause table.
 
 ```
 auto_applier/        # the v3 package (built as auto_applier/, renamed at the v2 cutover)
