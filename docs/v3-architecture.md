@@ -54,7 +54,7 @@ The rewrite exists to remove these root causes, not to add features.
 > Tkinter+CSV app) has been deleted; its lessons live in the git history and the §1 root-cause table.
 
 ```
-auto_applier/        # the v3 package (built as auto_applier/, renamed at the v2 cutover)
+auto_applier/        # the v3 package (built as the av3 package, renamed at the v2 cutover)
   config/          # Pydantic settings models, .env merge, validation
   db/              # SQLite engine, schema, migrations, repositories, CSV export/import
   domain/          # Pure dataclasses + the job/application state machine (no I/O)
