@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import sys
 
-from av3.cli.main import cli
+from auto_applier.cli.main import cli
 
 if __name__ == "__main__":
     # No subcommand → behave like the one-click launcher. The launcher then

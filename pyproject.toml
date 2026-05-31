@@ -46,8 +46,8 @@ camoufox = [
     "camoufox[geoip]>=0.4",
 ]
 
-# --- v3 rewrite (separate `av3` package; v2 above stays runnable as a porting
-#     reference — see docs/v3-architecture.md §3). Install with: pip install -e ".[v3]"
+# --- v3 extras (the `auto_applier` package; v2 retired 2026-05-30, av3/ renamed to
+#     auto_applier/). Install with: pip install -e ".[v3]"
 v3 = [
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
@@ -72,20 +72,18 @@ jobspy = [
 ]
 
 [project.scripts]
-auto-applier = "auto_applier.main:cli"
-av3 = "av3.cli.main:cli"
-
-[project.gui-scripts]
-auto-applier-gui = "auto_applier.gui.wizard:launch_wizard"
+# The product CLI. The command verb stays `av3`; the package is now `auto_applier`
+# (renamed from `av3/` at the v3→master cutover, 2026-05-30).
+av3 = "auto_applier.cli.main:cli"
 
 [tool.setuptools.packages.find]
-include = ["auto_applier*", "av3*"]
+include = ["auto_applier*"]
 
 [tool.setuptools.package-data]
-av3 = ["db/*.sql", "web/templates/*.html", "web/static/**/*"]
+auto_applier = ["db/*.sql", "web/templates/*.html", "web/static/**/*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "tests_v3"]
+testpaths = ["tests"]
 markers = [
     "integration: tests that hit live external services (network required)",
     "eval: scoring quality eval harness against a labeled golden set (live LLM required)",
