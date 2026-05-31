@@ -48,13 +48,13 @@ The rewrite exists to remove these root causes, not to add features.
 
 ## 3. Module layout (target)
 
-> **Package root = `av3/` (decided 2026-05-26, Phase 0).** v3 is built in a *separate*
-> top-level `av3/` package alongside the untouched v2 `auto_applier/`, so v2 stays runnable
-> as a porting reference and diffs stay clean. Rename `av3/` → `auto_applier/` once v3 reaches
-> parity. The layout below is otherwise as specced; read `auto_applier/` as `av3/`.
+> **Package root = `auto_applier/` (built as `auto_applier/` 2026-05-26–05-30, renamed at the v3→master
+> cutover on 2026-05-30 when v3 superseded and replaced v2).** The CLI command verb stays
+> `av3` — only the package/import namespace is `auto_applier`. v2 (the old Tkinter+CSV app)
+> has been deleted; its lessons live in the git history and the §1 root-cause table.
 
 ```
-av3/                 # (was illustratively `auto_applier/` — see note above)
+auto_applier/        # the v3 package (built as auto_applier/, renamed at the v2 cutover)
   config/          # Pydantic settings models, .env merge, validation
   db/              # SQLite engine, schema, migrations, repositories, CSV export/import
   domain/          # Pure dataclasses + the job/application state machine (no I/O)
@@ -315,7 +315,7 @@ operation the *default mode*, not a `--continuous` flag:
 > **Scope:** the batch flow and *passive* gap-recurrence proposals are **v3.0 core**. The **interactive
 > skill-reconciliation conversation/toggle is v3.1.**
 >
-> **Status (Phase 6 5/M, 2026-05-30):** LIVE as a CLI reconciliation loop. `av3/reconcile.py` (deterministic
+> **Status (Phase 6 5/M, 2026-05-30):** LIVE as a CLI reconciliation loop. `auto_applier/reconcile.py` (deterministic
 > JD skill extraction over a curated vocabulary — no LLM; `record_batch_gaps` wires the previously-dead
 > `SkillGapRepo`; `build_proposals` ranks gaps; `apply_proposals` additively inserts into the bank) +
 > `av3 reconcile [--scan] [--min-count N] [--apply "s1,s2"]`. Preview is read-only; **`--apply` is the only
@@ -370,7 +370,7 @@ Thresholds/flags live in typed config so behavior is tunable without code edits.
 > softly defers the rest, `summary.rotated`, surfaced as `rotated=` on the CLI line, like the daily-target
 > break). Selector is `strategy.profile` in `user_config.json` (default `balanced`, whose preset == the v3.0
 > fixed defaults incl. `concurrency=1, session_rotation_min=0.0`, so the default is inert). Profiles +
-> presets live in `av3/config/strategy.py`; `ApplyWorker` resolves them once via `resolve_strategy()`. See
+> presets live in `auto_applier/config/strategy.py`; `ApplyWorker` resolves them once via `resolve_strategy()`. See
 > `research/phase6-v3.1.md` §(2/M)+(8/M).
 
 Retire v2's rigid "10 apps/day, 60–180s between." A fixed cap is annoying to maintain *and* paternalistic
@@ -466,7 +466,7 @@ Answer-resolver (§8b) policy for the fields that appear on nearly every form:
 - **Work authorization / sponsorship:** answered from the **explicitly-captured onboarding facts** (§6b) —
   no silent "authorized = yes" default (the v2 behavior, corrected).
 - **Salary expectation = salary intelligence.** *(Status: LIVE as of Phase 6 (3/M), 2026-05-30 —
-  `av3/resume/salary.py`.)* Compute a recommended ask from three inputs: the user's configured range, the
+  `auto_applier/resume/salary.py`.)* Compute a recommended ask from three inputs: the user's configured range, the
   job's **posted range** (if any), and **market data**. Priority posted → market → user range; the floor is a
   hard lower bound and the ask never overshoots the posted ceiling. Corrects users who would low-ball or
   overshoot. Market source is **pluggable**; **v3.1 ships it defaulting to `none` (local-first, zero egress)**
@@ -485,7 +485,7 @@ Answer-resolver (§8b) policy for the fields that appear on nearly every form:
 > **Scope:** **v3.1.** v3.0 records outcomes; the feedback/auto-tuning loop below comes after the core proves out.
 >
 > **Status (Phase 6 4/M, 2026-05-30):** LIVE as a **read-only insights + advisory** loop. `outcomes` table +
-> `OutcomeRepo` + `av3 outcome <job_id> <kind>` record; `av3/analytics.py` (`compute_conversion_report`,
+> `OutcomeRepo` + `av3 outcome <job_id> <kind>` record; `auto_applier/analytics.py` (`compute_conversion_report`,
 > `recommend_weight_nudges`) + `av3 analytics` surface conversion-by-source/title/score-band and *suggest*
 > weight nudges. **Auto-tuning is deliberately NOT auto-applied** — a nudge is a recommendation the user
 > applies by editing `user_config.json` (mutating live scoring off sparse early data is the §8e anti-pattern;
@@ -623,11 +623,11 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
   confirmation, fabrication-guard techniques (and later, market-salary sources for v3.1). This establishes
   the knowledge base that keeps the build on track and produces a **go/no-go read on the auto-apply thesis**
   that feeds the Phase 1 slice. The `auto-applier` skill is the entry point for every subsequent session.
-- **Phase 0 — Foundation. ✅ DONE (2026-05-26, branch `v3`).** `av3/` package skeleton; SQLite schema +
-  repositories (`av3/db`, app.db); Pydantic typed config + validation (`av3/config`); `@stage` event spine +
-  separate local `events.db` (`av3/pipeline`, `av3/telemetry`); job state machine with allowed-transitions
-  table (`av3/domain/state.py`); minimal CLI (`av3 init-db|doctor|status`) + doctor preflight. 37 tests green;
-  CLI verified end-to-end. No UI. *Decisions logged: separate `av3/` package (§3); separate `events.db` (§4).*
+- **Phase 0 — Foundation. ✅ DONE (2026-05-26, branch `v3`).** `auto_applier/` package skeleton; SQLite schema +
+  repositories (`auto_applier/db`, app.db); Pydantic typed config + validation (`auto_applier/config`); `@stage` event spine +
+  separate local `events.db` (`auto_applier/pipeline`, `auto_applier/telemetry`); job state machine with allowed-transitions
+  table (`auto_applier/domain/state.py`); minimal CLI (`av3 init-db|doctor|status`) + doctor preflight. 37 tests green;
+  CLI verified end-to-end. No UI. *Decisions logged: separate `auto_applier/` package (§3); separate `events.db` (§4).*
 - **Phase 1 — VERTICAL SLICE (the de-risking spike): Greenhouse end-to-end.** One source, one master fact
   bank, real jobs, crudest CLI/storage: seed company list → discover → score (JD vs profile) → generate
   résumé → **fabrication guard** → `BROWSER_AUTO` on the hosted form → **positive-confirmation** detection.
@@ -666,7 +666,7 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
   `cli export-diagnostics` (scrubbed by default, `--raw` PII-bearing escape hatch). (4/M) owner-hosted
   Cloudflare Worker relay template (`relay/`, Turso write token in env) + `MirrorClient` drainer +
   `av3 mirror drain` (out-of-band, never blocks the loop) + `doctor.check_relay_reachable`. (5/M) lean
-  PyInstaller installer (`build_v3.py`/`run_v3.py`, Chromium fetched on first run via `av3 install-browser`,
+  PyInstaller installer (`build.py`/`run.py`, Chromium fetched on first run via `av3 install-browser`,
   frozen-launcher fix) + GitHub-Releases auto-update check (`av3 update`, check+prompt, no auto-replace).
   (6/M) fresh v3-first `CLAUDE.md` + this wrap-up. 90 new tests across the six sub-phases (full v3 suite
   **612 green**, 11 deselected by design). Per-sub-phase rationale:
@@ -679,25 +679,25 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
     file existence is the durable contract — no DB column) and records both on the `Application` row; the
     single global `artifacts/resume.pdf` is demoted to a fallback for jobs queued before optimize ran. Closes
     the oldest carry-over (auto-apply was uploading a generic résumé). +4 tests (full suite 616 green).
-  - **(2/M) configurable Pareto strategy profiles (§8a). ✅ DONE (2026-05-30).** `av3/config/strategy.py`
+  - **(2/M) configurable Pareto strategy profiles (§8a). ✅ DONE (2026-05-30).** `auto_applier/config/strategy.py`
     (StrategyProfile / RiskBias / EffectivePacing / PROFILE_PRESETS / `resolve_strategy`) + `StrategyConfig`
     on Settings + `PacingConfig.risk_bias`. `ApplyWorker` resolves the active profile once and drives
     inter-apply delay, per-company cap, **soft daily target** (defers, never blocks), and **risk-router
     bias** (Cautious → assisted starting mode; safety-floor downgrade still fires on top). Balanced preset ==
     v3.0 defaults (backward-compat). Concurrency + session-rotation knobs landed in (8/M). +15
     tests (full suite 631 green).
-  - **(3/M) salary intelligence §8d. ✅ DONE (2026-05-30).** `av3/resume/salary.py` (SalaryRange,
+  - **(3/M) salary intelligence §8d. ✅ DONE (2026-05-30).** `auto_applier/resume/salary.py` (SalaryRange,
     SalaryRecommendation, `recommend_ask` posted→market→user, `parse_posted_range`, `is_below_floor`,
     pluggable `MarketDataSource`/`NoMarketData` default-OFF for local-first). `SalaryConfig{floor,ceiling,
     market_source}` on Settings. Apply worker computes a per-job ask (config + posted comp + market) and sets
     it on the resolver's SALARY branch; score worker runs the comp-filter pre-LLM (`comp_skipped`). BLS OES =
     opt-in future adapter (no default egress). +37 tests (full suite 668 green).
   - **(4/M) outcome feedback loop §8e. ✅ DONE (2026-05-30).** `outcomes` table + `OutcomeKind` (funnel-ranked)
-    + `Outcome` model + `OutcomeRepo` (record + `applied_with_outcomes` join feed). `av3/analytics.py`:
+    + `Outcome` model + `OutcomeRepo` (record + `applied_with_outcomes` join feed). `auto_applier/analytics.py`:
     `compute_conversion_report` (conversion by source/title/score-band; silent-applied = implicit ghost) +
     `recommend_weight_nudges` (advisory only, gated behind `MIN_SAMPLES_FOR_NUDGE=20`). CLI `av3 outcome` +
     `av3 analytics` (`--json`). Auto-tuning is surfaced-not-applied (Rule 2.6). +24 tests (full suite 692 green).
-  - **(5/M) interactive batch skill-reconciliation §7b. ✅ DONE (2026-05-30).** `av3/reconcile.py`
+  - **(5/M) interactive batch skill-reconciliation §7b. ✅ DONE (2026-05-30).** `auto_applier/reconcile.py`
     (deterministic JD skill extraction over a curated vocab; `record_batch_gaps` wires the dead
     `SkillGapRepo`; `build_proposals` ranks; `apply_proposals` additively inserts) + `SkillGapRepo.set_status`
     + `JobRepo.list_all_with_description` + `av3 reconcile [--scan] [--min-count] [--apply]`. Preview is

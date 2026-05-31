@@ -25,7 +25,7 @@ fact bank" pipeline cosmetic at the apply step — the auto-apply path uploaded 
 real correctness defect, so it leads Phase 6 before any net-new v3.1 feature.
 
 **The contract (already established in Phase 3, now honoured).** The optimize worker writes two artifacts
-keyed by `job.id`, via helpers in `av3/resume/generate.py`:
+keyed by `job.id`, via helpers in `auto_applier/resume/generate.py`:
 
 - `generated_resume_path(settings, job_id)`   → `artifacts_dir/generated/{job_id}.pdf`
 - `generated_cover_letter_path(settings, job_id)` → `artifacts_dir/generated/{job_id}_cover.txt`
@@ -34,7 +34,7 @@ keyed by `job.id`, via helpers in `av3/resume/generate.py`:
 the path (decided in Phase 3 (3/M)). So the apply worker derives the SAME paths from `job.id` and reads them;
 no hand-off table, no migration.
 
-**Implementation** (`av3/pipeline/apply_worker.py`):
+**Implementation** (`auto_applier/pipeline/apply_worker.py`):
 
 - New `ApplyWorker._artifacts_for(job) -> (resume_path, cover_path)`:
   - résumé = the per-job PDF when it exists on disk, **else** the global `resume.pdf` the worker was
@@ -83,7 +83,7 @@ NOT auto-tuning. Greenfield (no outcome recording existed).
 - **Storage:** `outcomes` table (job_id FK, kind, noted_at, note) + `OutcomeRepo` (add, list_by_job, list_all,
   count_by_kind, `applied_with_outcomes` = the APPLIED-jobs ⟕ scores ⟕ outcomes join feed). Schema is
   `CREATE TABLE IF NOT EXISTS` so `init_app_db` picks it up idempotently — no migration needed.
-- **`av3/analytics.py`** (pure, no I/O): `compute_conversion_report(feed)` collapses to one record per job
+- **`auto_applier/analytics.py`** (pure, no I/O): `compute_conversion_report(feed)` collapses to one record per job
   (furthest-reached outcome wins), buckets conversion by source / title / score-band; a silent APPLIED job
   (no outcome) counts as applied-not-converted + implicit-ghost (honest denominator).
   `recommend_weight_nudges(report)` is **advisory only** — gated behind `MIN_SAMPLES_FOR_NUDGE=20`, fires on a
@@ -115,7 +115,7 @@ both were now singular. Verify imports structurally before running the suite whe
 
 ## (3/M) — Salary intelligence §8d (2026-05-30)
 
-**What.** `av3/resume/salary.py` (pure logic, no I/O): `SalaryRange`, `SalaryRecommendation`,
+**What.** `auto_applier/resume/salary.py` (pure logic, no I/O): `SalaryRange`, `SalaryRecommendation`,
 `recommend_ask` (priority **posted → market → user**; floor = hard lower bound; never overshoot posted
 ceiling), `parse_posted_range` (tolerant of `$`/`k`/`,`/`-`/`–`/`to`; rejects sub-1000 non-annual noise),
 `is_below_floor` (comp-filter gate), `format_ask`, plus a pluggable `MarketDataSource` Protocol +
@@ -163,7 +163,7 @@ stale foreground output.
 **throughput ↔ detection-risk ↔ user-effort** frontier and exposes named **profiles**, each a coherent
 point on it: Cautious / Balanced / Aggressive / Custom.
 
-**Module: `av3/config/strategy.py`** (new). Pure config logic, no I/O.
+**Module: `auto_applier/config/strategy.py`** (new). Pure config logic, no I/O.
 - `StrategyProfile` (str enum: cautious/balanced/aggressive/custom) + `RiskBias` (str enum:
   leans_assisted/balanced/leans_auto). Both `str`-mixin so they round-trip through `user_config.json`.
 - `EffectivePacing` (frozen dataclass): the concrete knobs a profile resolves to — `min_delay_s`,
@@ -175,12 +175,12 @@ point on it: Cautious / Balanced / Aggressive / Custom.
 - `resolve_strategy(settings) -> EffectivePacing`: named profile → its frozen preset (ignores
   `settings.pacing`); `custom` → builds from the hand-set `settings.pacing`. **One** place owns the mapping.
 
-**Config wiring (`av3/config/settings.py`).** New `StrategyConfig{profile: StrategyProfile=BALANCED}` on
+**Config wiring (`auto_applier/config/settings.py`).** New `StrategyConfig{profile: StrategyProfile=BALANCED}` on
 `Settings.strategy`. `PacingConfig` gained `risk_bias: RiskBias=BALANCED` (the custom-profile carrier). Both
 re-exported from `av3.config`. `settings.py` imports the two enums from `strategy.py` (one-way; `strategy.py`
 only imports `Settings` under `TYPE_CHECKING` to avoid a cycle).
 
-**Worker consumption (`av3/pipeline/apply_worker.py`).** `ApplyWorker` resolves `self._pacing =
+**Worker consumption (`auto_applier/pipeline/apply_worker.py`).** `ApplyWorker` resolves `self._pacing =
 resolve_strategy(settings)` ONCE at construction and reads it for every knob (no more
 `settings.pacing.*` direct reads). Four knobs now profile-driven:
 1. **Inter-apply delay** — `self._pacing.{min,max}_delay_s`.
@@ -231,7 +231,7 @@ suite is authoritative. Don't reconcile test counts by subtraction; check which 
 
 The deferred half of §8a from 2/M. Two commits: **fce893f** (code+tests), doc/CLI follow-up after.
 
-**Config (`av3/config/strategy.py` + `settings.py`).** `EffectivePacing` (frozen) gained two fields:
+**Config (`auto_applier/config/strategy.py` + `settings.py`).** `EffectivePacing` (frozen) gained two fields:
 - `concurrency: int = 1` — declared parallel-apply ceiling (Cautious 1, Balanced 1, Aggressive 3).
   **DECLARED ONLY** — `ApplyWorker` still drains sequentially; the scheduler/dashboard read this, a future
   parallel drainer acts on it. No behaviour change today.
@@ -245,14 +245,14 @@ clock-injectable): `.enabled` (budget>0), `.on_source(src)` (starts/restarts the
 CHANGE — same source must NOT reset, else the budget never elapses), `.should_rotate()`
 (`(now-started)>=budget_s`).
 
-**Worker (`av3/pipeline/apply_worker.py`).** New `__init__` param `rotation_clock: Callable[[],float]|None`
+**Worker (`auto_applier/pipeline/apply_worker.py`).** New `__init__` param `rotation_clock: Callable[[],float]|None`
 (stored, passed as the policy's `now=`). `ApplyRunSummary` gained `rotated: int`. `run_once` builds the
 policy after pulling the queue; at the TOP of the per-job loop calls `on_source(job.source)` then
 `should_rotate()` — on trip sets `summary.rotated = len(queued)-queued.index(job)`, appends a
 "session rotation" note, and `break`s. **SOFT** defer (like the daily-target break): deferred jobs stay
 QUEUED_APPLY, no error, no state change. Fires in dry-run too (it paces sources, not real submits).
 
-**CLI.** The `av3 apply` summary line in **`av3/cli/main.py`** (~L545 — *there is NO `worker_cmds.py`*; the
+**CLI.** The `av3 apply` summary line in **`auto_applier/cli/main.py`** (~L545 — *there is NO `worker_cmds.py`*; the
 apply command lives in `main.py`) gained `deferred={...} rotated={...}` (`deferred_daily_target` was
 previously only surfaced via the notes list).
 

@@ -17,9 +17,10 @@ done," like passing tests.
 - When a session learns something durable, record it in the right place **before** calling the task done —
   see the `auto-applier` skill's "How to extend this skill" section.
 
-> **The active codebase is v3, in the `av3/` package.** The ground-up rewrite (decided 2026-05-26) reached
-> v3.0 scope at the end of Phase 5 (2026-05-29). The legacy v2 package (`auto_applier/`) is kept alongside as
-> a porting reference and is documented briefly at the bottom — **do not extend v2.** For any design question,
+> **The active codebase is v3, in the `auto_applier/` package** (built as `av3/`, renamed at the
+> v3→master cutover on 2026-05-30 when v3 superseded and replaced v2). The CLI command verb stays
+> `av3`; only the package/import namespace is `auto_applier`. The legacy v2 app has been deleted —
+> its lessons live in git history and the spec's §1 root-cause table. For any design question,
 > `docs/v3-architecture.md` and the `auto-applier` skill are authoritative.
 
 ## Project Overview
@@ -96,8 +97,8 @@ selector drift — the #1 v2 bug source).
 
 ## Architecture
 
-> Package root is **`av3/`** (separate from the v2 `auto_applier/` so v2 stays runnable as reference).
-> Rename to `auto_applier/` once v3 fully supersedes v2. Full spec: `docs/v3-architecture.md`.
+> Package root is **`auto_applier/`** (built as `av3/`, renamed at the v2 cutover 2026-05-30). The CLI
+> command verb stays `av3`; only the import namespace is `auto_applier`. Full spec: `docs/v3-architecture.md`.
 
 ### Module layout
 
@@ -205,10 +206,10 @@ source of truth); ephemera (SKIPPED/FILTERED) and events prune on configurable w
 - **Tests live in `tests_v3/`.** Keep them green; document durable findings in the `auto-applier` skill's
   `research/` before calling a task done.
 
-## Legacy v2 (`auto_applier/`) — reference only, do not extend
+## Legacy v2 — deleted (history only)
 
-v2 is a Tkinter + CSV desktop app (multi-résumé score-all-pick-best, synchronous per-platform pipeline,
-browser-apply spine, LinkedIn discovery). It still runs (`python run.py`, `python -m auto_applier --cli ...`)
-and is kept purely as a porting reference and a record of lessons. Its design is documented in the project
-git history and the spec's "v2 root cause" table (§1). **Port logic from it when useful; never build new
-features on it.**
+v2 was a Tkinter + CSV desktop app (multi-résumé score-all-pick-best, synchronous per-platform pipeline,
+browser-apply spine, LinkedIn discovery). It was **deleted at the v3→master cutover (2026-05-30)** once v3
+superseded it; the `auto_applier/` name now belongs to the v3 package. v2's design and the reasons it was
+replaced live in the git history (before the "Retire v2" commit) and the spec's "v2 root cause" table (§1) —
+consult those for lessons; there is no v2 code in the tree to extend.
