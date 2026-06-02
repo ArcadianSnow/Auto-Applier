@@ -52,6 +52,18 @@ function onboarding() {
         // Jump the user to the first INCOMPLETE step so they don't
         // re-walk steps they already finished.
         this.step = this._firstIncomplete();
+        // ...EXCEPT never silently skip work-auth: it's the legally
+        // sensitive step (work authorization + sponsorship) and a value
+        // pre-seeded into master.json would otherwise satisfy its gate
+        // and auto-jump the user clean past it, so they never confirm
+        // the sponsorship answer (the bug that put requires_sponsorship
+        // out of sync with a "US citizen" auth). If the auto-jump lands
+        // anywhere AFTER work-auth, clamp back to work-auth so it's shown
+        // for explicit confirmation at least once.
+        const order = STEPS.map(s => s.key);
+        if (order.indexOf(this.step) > order.indexOf('work-auth')) {
+          this.step = 'work-auth';
+        }
       } catch (e) {
         console.error('onboarding load failed', e);
       }
