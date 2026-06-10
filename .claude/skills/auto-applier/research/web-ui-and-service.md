@@ -981,6 +981,89 @@ it without touching `serve_cmd`:
 
 ---
 
+## Onboarding UX hardening (2026-06-01) — work-auth never auto-skipped + clearer sponsorship wording
+
+Found during the **first real onboarding session** (building the
+primary user's fact bank from three résumés). Two defects in the wizard,
+both fixed in commit **26d7a72** (frontend + template only; no Python
+change; 36 onboarding-related tests still green).
+
+### Bug 1 — `load()` auto-jump silently skips a "complete-looking" step
+
+`onboarding.js load()` calls `_firstIncomplete()` and lands the user
+on the first step whose status gate is false. **`has_work_auth` is an
+OR gate** (`onboarding.py`): it's True if `work_authorization` is
+non-empty **OR** `requires_sponsorship is not None`. So a value
+pre-seeded into `master.json` (here: `work_authorization` was set
+before the wizard ran) satisfied the gate, and `_firstIncomplete()`
+jumped the user **clean past Step 4 to Targeting** — they never saw
+the sponsorship radios and never confirmed the answer. Result:
+`requires_sponsorship: true` sat alongside `work_authorization:
+"US Citizen"` (a contradiction that auto-rejects at most US employers).
+
+**Fix:** clamp the auto-jump so it can never land *after* `work-auth`
+(`order.indexOf(step) > order.indexOf('work-auth')` → force
+`work-auth`). The legally-sensitive step is now always shown for
+explicit confirmation at least once. New users still walk steps 1→N
+naturally (they land on `contact`); only the "jumped past it" case is
+corrected. Trade-off: a fully-onboarded returning user now lands on
+`work-auth` rather than `done` — acceptable, and the step-nav lets
+them click anywhere.
+
+> **Deeper smell (NOT fixed, candidate for later):** the OR gate means
+> a value can't tell "user explicitly chose" from "pre-seeded /
+> never confirmed" — `requires_sponsorship` is tri-state where `None`
+> is BOTH "skipped" and "never set". A real confirmed-this-session
+> flag would be the principled fix; the navigation clamp is the
+> pragmatic one.
+
+### Bug 2 — ambiguous sponsorship wording
+
+Legend was *"Does this role require sponsorship?"* — but there is no
+specific role during onboarding, and "this role" reads as "does the
+employer offer sponsorship". Reworded to the standard, region-neutral
+application phrasing: *"Do you require visa sponsorship for employment
+(now or in the future)?"*. (Binding itself was fine — Alpine `:value`
+x-bind preserves the boolean/null type; no string-coercion bug.)
+
+### ⚠️ BLOCKER for the first dry run — discovery producer is UNBUILT (confirmed 2026-06-01)
+
+Ran this down end-to-end. **There is no wired discovery producer.** The
+pieces exist but nothing connects them:
+
+* Source adapters have `.discover()` (`greenhouse.discover(token)`,
+  `lever.discover(site)`, `ashby.discover(slug)`, `jobspy.discover(query)`).
+* The repo has the write path `JobRepository.upsert_discovered()`
+  (`db/repositories.py:72`).
+* **But `upsert_discovered` is called ONLY in `tests/test_db.py`** — never
+  in production. And `.discover()` is called only in the apply drivers
+  (custom-question discovery) + survey, never to populate the jobs table.
+* `av3 --help` has **no `discover` verb**. The scheduler explicitly
+  excludes discovery ("Discovery still lives in the source adapters and
+  runs separately — CLI / cron / Phase 4 dashboard button"), but that
+  CLI/button **does not exist** (`routes.py` has no discover endpoint).
+
+Net: the staged pipeline (filter→score→optimize→apply) can drain jobs,
+but **nothing feeds DISCOVERED rows in**. So `av3 run` finds nothing;
+the per-stage workers have an empty queue. This is consistent with the
+memory note "v3 has never applied to a live job end-to-end."
+
+**Consequence for targeting:** the wizard's `titles`/`locations` are
+captured but currently inert (no producer reads `settings.targeting`).
+ATS discovery is **by company board token**, not by title search — titles
+drive the downstream filter/score, not the ATS query. So discovery also
+needs a **seed list of company board tokens** (see
+`research/ats-discovery-seeding.md`), not just the target titles.
+
+**Tomorrow's actual first task** (was mis-scoped as "run the dry
+pipeline"): **build a discovery bootstrap** — either a real `av3 discover`
+command or a throwaway seeding script — that (1) takes a few real
+Greenhouse/Lever/Ashby company tokens, (2) calls `source.discover()`,
+(3) writes via `job_repo.upsert_discovered()`. THEN the dry
+filter→score→optimize→apply chain can be exercised. Decide build-vs-script
+with the user first (a real `av3 discover` verb is the right long-term
+fix; a script is faster to unblock testing).
+
 ## Phase 4 retrospective (six sub-phases, 2026-05-29)
 
 The vertical slice strategy worked: each sub-phase added one

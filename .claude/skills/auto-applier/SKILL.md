@@ -16,9 +16,9 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
   strategy profiles, salary intelligence, outcome feedback loop, interactive skill-reconciliation, rich
   analytics, branded UI polish. See spec §11b Phase 6 + the "scope split" table.
 - **`CLAUDE.md` is now v3-first** (rewritten in Phase 5 6/M); it describes the `av3/` package directly.
-- Repo: `C:\Users\jar85\AI Projects\Auto Applier\`.
+- Repo: this checkout's root (the `Auto Applier` working tree).
 - **The spec** (authoritative): `docs/v3-architecture.md`. Every design decision and its rationale lives there.
-- Working memory: `~/.claude/projects/C--Users-jar85-AI-Projects-Auto-Applier/memory/` — start with [[project_v3_rewrite]].
+- Working memory: your Claude projects memory dir for this repo (`~/.claude/projects/<this-project>/memory/`) — start with [[project_v3_rewrite]].
 - For long iterative/debug sessions, **also invoke the `unstuck` skill** at session start.
 
 ## Where to look — decision tree
@@ -30,7 +30,7 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
 | The named risks + their mitigations | `docs/v3-architecture.md` §11 |
 | Build order / which phase we're in | `docs/v3-architecture.md` §11b |
 | **Phase -1 verdict / go-no-go / what Phase 1 must measure** | `research/_phase-minus-1-conclusions.md` |
-| How to seed ATS company lists (board tokens) | `research/ats-discovery-seeding.md` |
+| How to seed ATS company lists (board tokens) + **the wired discovery producer** (`av3 discover`, `DiscoverWorker`, `canonical_hash`, scheduler head) | `research/ats-discovery-seeding.md` |
 | How ATS apply forms behave / CAPTCHA / submit confirmation (+ live survey results) | `research/ats-form-automation.md` |
 | Phase 3 pipeline staging (embedding pre-filter, score/optimize workers, scheduler) | `research/pipeline-staging.md` |
 | Phase 4 web UI + worker service (FastAPI, SchedulerService, dashboard, onboarding) | `research/web-ui-and-service.md` |
@@ -40,6 +40,7 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
 | ATS market share by segment + what tier v3 can reach + source prioritization | `research/ats-market-landscape.md` |
 | How to stop résumé fabrication (the guard) | `research/fabrication-guard.md` |
 | Résumé model (fact bank → per-job generation) | `docs/v3-architecture.md` §6b |
+| Manual / human-apply mode (`av3 shortlist`/`applied`/`pass`, job-family classifier, DECIDED→APPLIED) | `research/manual-apply-mode.md` |
 | Answer resolver / sensitive fields / salary | `docs/v3-architecture.md` §8b, §8d |
 | Telemetry (relay + Turso) / observability | `docs/v3-architecture.md` §9 |
 

@@ -22,7 +22,9 @@ from auto_applier import __version__
 from auto_applier.config import load_settings
 from auto_applier.db import init_app_db
 from auto_applier.doctor import Status, fail_count, run_doctor
-from auto_applier.db.repositories import JobRepo
+from auto_applier.db.repositories import JobRepo, ScoreRepo
+from auto_applier.domain.job_family import JobFamily
+from auto_applier.domain.state import JobState
 from auto_applier.telemetry import EventSink, attach_mirror_from_settings, configure_sink
 
 # ASCII-only markers — the Windows console (cp1252) can't encode unicode glyphs and
@@ -154,6 +156,392 @@ def survey(gh_tokens: str, lever_sites: str, ashby_slugs: str, max_jobs: int) ->
 
 
 @cli.command()
+@click.option("--gh", "gh_tokens", default=None,
+              help="Greenhouse board tokens (comma-sep). Overrides settings.targeting.greenhouse_boards.")
+@click.option("--lever", "lever_sites", default=None,
+              help="Lever site names (comma-sep). Overrides settings.targeting.lever_boards.")
+@click.option("--ashby", "ashby_slugs", default=None,
+              help="Ashby board slugs (comma-sep). Overrides settings.targeting.ashby_boards.")
+@click.option("--title-contains", "title_contains", default=None,
+              help="Comma-sep title phrases to keep (substring match). "
+                   "Overrides settings.targeting.titles. Empty = no title filter.")
+@click.option("--limit", type=int, default=None,
+              help="Cap matched listings per board (keeps a sweep bounded).")
+@click.option("--no-describe", is_flag=True, default=False,
+              help="Skip the per-job Greenhouse JD fetch (faster; leaves JD empty so "
+                   "the score stage will REVIEW those jobs).")
+def discover(gh_tokens: str | None, lever_sites: str | None, ashby_slugs: str | None,
+             title_contains: str | None, limit: int | None, no_describe: bool) -> None:
+    """Discover jobs from Greenhouse/Lever/Ashby public APIs into app.db (DISCOVERED).
+
+    The HEAD of the pipeline (spec §7 #1): sweeps each configured board token, applies
+    the title filter, fills the JD (Greenhouse), dedups, and seeds DISCOVERED jobs the
+    filter/score/optimize/apply stages then drain. Read-only against the ATS — no login,
+    no browser, no submits. Idempotent: re-running never double-inserts.
+
+    Boards + title filter default from settings.targeting; the flags override per run.
+    """
+    import asyncio
+
+    from auto_applier.pipeline import BoardSpec, DiscoverWorker, boards_from_settings
+
+    settings = load_settings()
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    conn = init_app_db(settings.app_db_path)
+    _install_sink(settings)
+
+    def _split(s: str | None) -> list[str]:
+        return [x.strip() for x in s.split(",") if x.strip()] if s else []
+
+    # Build the board list: any provided flag replaces that ATS's settings list;
+    # if NO flag is given at all, fall back entirely to settings.targeting.
+    if gh_tokens is None and lever_sites is None and ashby_slugs is None:
+        boards = boards_from_settings(settings)
+    else:
+        boards = (
+            [BoardSpec("greenhouse", t) for t in _split(gh_tokens)]
+            + [BoardSpec("lever", t) for t in _split(lever_sites)]
+            + [BoardSpec("ashby", t) for t in _split(ashby_slugs)]
+        )
+
+    title_filter = (
+        _split(title_contains) if title_contains is not None
+        else list(settings.targeting.titles)
+    )
+
+    worker = DiscoverWorker(
+        settings=settings,
+        conn=conn,
+        boards=boards,
+        title_filter=title_filter,
+        per_board_limit=limit,
+        describe_greenhouse=not no_describe,
+    )
+
+    filt = f"titles={title_filter}" if title_filter else "titles=ANY"
+    click.echo(f"Discovering across {len(boards)} board(s) [{filt}]...")
+    try:
+        summary = asyncio.run(worker.run_once())
+    finally:
+        conn.close()
+
+    click.echo(
+        f"boards={summary.boards_swept} seen={summary.seen} matched={summary.matched} "
+        f"new={summary.inserted} dup={summary.duplicates} described={summary.described} "
+        f"errors={summary.board_errors} elapsed={summary.elapsed_s:.1f}s"
+    )
+    if summary.per_source:
+        for ats, n in sorted(summary.per_source.items()):
+            click.echo(f"  + {ats:11} {n} new")
+    for note in summary.notes:
+        click.echo(f"  ! {note}")
+    sys.exit(1 if summary.board_errors else 0)
+
+
+# Compact location-priority tags for the digest line (see domain/location.py).
+_LOC_TAG = {
+    0: "★EU-remote", 1: "US/remote", 2: "EU-onsite", 3: "remote-oth", 4: "onsite-oth",
+}
+
+
+@cli.command()
+@click.option("--limit", type=int, default=30, show_default=True,
+              help="How many top jobs to show (applied AFTER filtering).")
+@click.option("--min-score", type=float, default=0.0, show_default=True,
+              help="Hide jobs scoring below this (0-10 scale).")
+@click.option("--location", "location_mode",
+              type=click.Choice(["all", "targets", "remote", "eu"]), default="all",
+              show_default=True,
+              help="Location filter: all | targets (remote-US/global + target-EU) | "
+                   "remote (any remote) | eu (target-EU only).")
+@click.option("--by-location", is_flag=True, default=False,
+              help="Rank by location fit first (target-EU remote on top), then score.")
+@click.option("--dimensions", "show_dims", is_flag=True, default=False,
+              help="Also print the per-axis dimension breakdown.")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Emit JSON instead of the table.")
+def digest(limit: int, min_score: float, location_mode: str, by_location: bool,
+           show_dims: bool, as_json: bool) -> None:
+    """Ranked shortlist of scored jobs: score · location-fit · company · title · JD link.
+
+    The read-side view for a discovery + scoring workflow — turns the scored DB into an
+    actionable list. Run after discover -> filter -> score. Scores are a 0-10 first-pass
+    sorter (JD vs your master profile), not gospel; eyeball the top of the list. The
+    --location filter / --by-location sort apply a deterministic geography preference on
+    top of the LLM fit score (target-EU-remote is the jackpot; far-flung on-site sinks).
+    """
+    import json as _json
+
+    from auto_applier.domain.location import classify_location, passes_filter
+
+    settings = load_settings()
+    conn = init_app_db(settings.app_db_path)
+    try:
+        # Fetch all above min, then classify/filter/sort/limit in Python so the
+        # location filter composes cleanly with the score ranking.
+        rows = ScoreRepo(conn).list_ranked(limit=None, min_total=min_score)
+    finally:
+        conn.close()
+
+    # Attach location fit; filter by the chosen mode.
+    enriched = []
+    for r in rows:
+        fit = classify_location(r.get("location"))
+        if passes_filter(fit, location_mode):
+            r = {**r, "_loc_priority": fit.priority, "_loc_label": fit.label}
+            enriched.append(r)
+
+    # Re-rank if asked: location fit first (lower priority = better), then score desc.
+    if by_location:
+        enriched.sort(key=lambda r: (r["_loc_priority"], -r["total"]))
+
+    enriched = enriched[:limit]
+
+    if as_json:
+        click.echo(_json.dumps(enriched, indent=2))
+        return
+    if not enriched:
+        if not rows:
+            click.echo("No scored jobs yet. Run: av3 discover -> av3 filter --once -> av3 score --once")
+        else:
+            click.echo(f"No jobs match --location {location_mode}. Try --location all.")
+        return
+
+    sort_desc = "location then score" if by_location else "score"
+    click.echo(
+        f"Top {len(enriched)} jobs (sorted by {sort_desc}; "
+        f"location={location_mode}, min={min_score:g}):\n"
+    )
+    for i, r in enumerate(enriched, 1):
+        tag = _LOC_TAG.get(r["_loc_priority"], "?")
+        title = (r["title"] or "")[:42]
+        company = (r["company"] or "")[:14]
+        loc = (r["location"] or "")[:24]
+        click.echo(f"  {i:2}. {r['total']:4.1f} {tag:10} {company:14} {title:42}  {loc}")
+        click.echo(f"          {r['url']}")
+        if show_dims and r.get("dimensions_json"):
+            try:
+                dims = _json.loads(r["dimensions_json"])
+                pretty = "  ".join(f"{k}:{v:g}" for k, v in dims.items())
+                click.echo(f"          {pretty}")
+            except (ValueError, TypeError):
+                pass
+
+
+def _resolve_job_ids(settings, job_ids, shortlist_name, mark_all):
+    """Resolve the target id set for `applied`/`pass`: positional ids plus, if
+    --shortlist NAME --all, every job_id in that saved shortlist JSON. Returns
+    (ordered_unique_ids, error_message_or_None)."""
+    import json as _json
+
+    ids: list[str] = list(job_ids)
+    if shortlist_name:
+        path = settings.shortlist_dir / f"{shortlist_name}.json"
+        if not path.exists():
+            return [], f"no saved shortlist '{shortlist_name}' at {path}"
+        try:
+            items = _json.loads(path.read_text(encoding="utf-8"))
+            sl_ids = [it["job_id"] for it in items]
+        except (ValueError, KeyError, TypeError) as exc:
+            return [], f"shortlist {path} is unreadable: {exc}"
+        if mark_all:
+            ids.extend(sl_ids)
+        elif not ids:
+            return [], (f"shortlist '{shortlist_name}' has {len(sl_ids)} jobs — pass --all "
+                        f"to mark them all, or name specific job ids")
+    # de-dupe, preserve order
+    seen: set[str] = set()
+    out = [i for i in ids if not (i in seen or seen.add(i))]
+    return out, None
+
+
+@cli.command()
+@click.option("--family", type=click.Choice([f.value for f in JobFamily]), default=None,
+              help="Restrict to one role family (maps 1:1 to a résumé variant).")
+@click.option("--location", "location_mode",
+              type=click.Choice(["all", "targets", "remote", "eu"]), default="all",
+              show_default=True, help="Location filter (same modes as `av3 digest`).")
+@click.option("--limit", type=int, default=20, show_default=True,
+              help="Max jobs in the shortlist.")
+@click.option("--min-score", type=float, default=0.0, show_default=True,
+              help="Hide jobs below this score.")
+@click.option("--name", default=None,
+              help="Shortlist name (file stem). Defaults to the family, else 'shortlist'.")
+def shortlist(family, location_mode, limit, min_score, name) -> None:
+    """Save a persistent, apply-ready shortlist (.md + .json) of un-applied jobs.
+
+    The manual-mode read view: only DECIDED jobs (already-APPLIED / SKIPPED jobs are
+    excluded, so a job you mark applied stops appearing). Ranked location-fit first
+    (remote on top), then score. `av3 applied --shortlist NAME --all` then marks the
+    whole batch once you've applied.
+    """
+    import json as _json
+
+    from auto_applier.domain.job_family import FAMILY_LABELS, JobFamily as _JF, classify_family
+    from auto_applier.domain.location import classify_location, passes_filter
+
+    settings = load_settings()
+    conn = init_app_db(settings.app_db_path)
+    try:
+        rows = ScoreRepo(conn).list_ranked(limit=None, min_total=min_score)
+    finally:
+        conn.close()
+
+    # CRITICAL: list_ranked is NOT state-filtered — keep only DECIDED (un-applied) jobs,
+    # or marked-applied jobs would re-surface, defeating the whole feature.
+    rows = [r for r in rows if r.get("state") == JobState.DECIDED.value]
+
+    enriched = []
+    for r in rows:
+        fam = classify_family(r.get("title"))
+        if family and fam.value != family:
+            continue
+        fit = classify_location(r.get("location"))
+        if not passes_filter(fit, location_mode):
+            continue
+        enriched.append({
+            "job_id": r["job_id"], "score": r["total"], "title": r["title"],
+            "company": r["company"], "location": r["location"] or "", "url": r["url"] or "",
+            "fit": fit.label, "_p": fit.priority, "family": fam.value,
+        })
+    enriched.sort(key=lambda r: (r["_p"], -r["score"]))
+    enriched = enriched[: limit]
+    for rank, r in enumerate(enriched, 1):
+        r["rank"] = rank
+
+    if not enriched:
+        click.echo(f"No DECIDED jobs match (family={family or 'any'}, location={location_mode}, "
+                   f"min={min_score:g}). Try widening the filters or run discover/score first.")
+        return
+
+    fam_label = FAMILY_LABELS[_JF(family)] if family else "All families"
+    stem = name or family or "shortlist"
+    settings.shortlist_dir.mkdir(parents=True, exist_ok=True)
+    json_path = settings.shortlist_dir / f"{stem}.json"
+    md_path = settings.shortlist_dir / f"{stem}.md"
+
+    json_path.write_text(_json.dumps(
+        [{k: r[k] for k in ("rank", "job_id", "score", "title", "company", "location", "url", "fit", "family")}
+         for r in enriched], indent=1), encoding="utf-8")
+
+    md = [f"# Apply shortlist — {stem}", "",
+          f"> {fam_label} · location={location_mode} · {len(enriched)} jobs · ranked by fit then score.",
+          f"> Mark the whole batch applied with: `av3 applied --shortlist {stem} --all`", "",
+          "| # | Score | Fit | Title | Company | Apply | job_id |",
+          "|---|---|---|---|---|---|---|"]
+    for r in enriched:
+        link = f"[link]({r['url']})" if r["url"] else "—"
+        md.append(f"| {r['rank']} | {r['score']:.1f} | {r['fit']} | {r['title']} | "
+                  f"{r['company']} | {link} | `{r['job_id']}` |")
+    md.append("")
+    md_path.write_text("\n".join(md), encoding="utf-8")
+
+    click.echo(f"Wrote {len(enriched)} jobs -> {md_path}")
+    click.echo(f"             and -> {json_path}")
+    click.echo(f"Mark all applied after you apply:  av3 applied --shortlist {stem} --all")
+
+
+@cli.command()
+@click.argument("job_ids", nargs=-1)
+@click.option("--shortlist", "shortlist_name", default=None,
+              help="Name of a saved shortlist (file stem in the shortlist dir).")
+@click.option("--all", "mark_all", is_flag=True, default=False,
+              help="With --shortlist: mark EVERY job in that shortlist applied.")
+@click.option("--resume", "resume_path", default="",
+              help="Optional path to the résumé variant you applied with (recorded).")
+def applied(job_ids, shortlist_name, mark_all, resume_path) -> None:
+    """Record that you applied to one or more jobs externally (manual mode → APPLIED).
+
+    Pass job ids and/or --shortlist NAME (with --all to mark the whole saved shortlist).
+    Marked jobs leave the DECIDED pool: they won't appear in future shortlists/digests and
+    are deduped out of future discovery. Idempotent and batch-safe.
+    """
+    from auto_applier.pipeline.manual_apply import mark_manually_applied
+
+    settings = load_settings()
+    ids, err = _resolve_job_ids(settings, job_ids, shortlist_name, mark_all)
+    if err:
+        click.echo(f"  x FAIL {err}", err=True)
+        sys.exit(2)
+    if not ids:
+        click.echo("  x FAIL no job ids (pass ids or --shortlist NAME --all)", err=True)
+        sys.exit(2)
+
+    applied_n = already_n = error_n = 0
+    conn = init_app_db(settings.app_db_path)
+    try:
+        for jid in ids:
+            res = mark_manually_applied(conn, jid, resume_path=resume_path)
+            if res.status == "applied":
+                applied_n += 1
+                click.echo(f"  + applied  {jid}  {res.detail}")
+            elif res.status == "already":
+                already_n += 1
+                click.echo(f"  - already  {jid}  {res.detail}")
+            else:
+                error_n += 1
+                click.echo(f"  x error    {jid}  {res.detail}", err=True)
+    finally:
+        conn.close()
+    click.echo(f"\napplied={applied_n} already={already_n} errors={error_n}")
+    if error_n:
+        sys.exit(1)
+
+
+@cli.command("pass")
+@click.argument("job_ids", nargs=-1)
+@click.option("--shortlist", "shortlist_name", default=None,
+              help="Name of a saved shortlist (file stem in the shortlist dir).")
+@click.option("--all", "mark_all", is_flag=True, default=False,
+              help="With --shortlist: pass on EVERY job in that shortlist.")
+def pass_cmd(job_ids, shortlist_name, mark_all) -> None:
+    """Pass on jobs you looked at but won't apply to (DECIDED → SKIPPED).
+
+    Stops them surfacing in shortlists/digests. (SKIPPED is ephemeral — eligible for
+    pruning after the retention window — so a passed job may eventually re-surface if
+    re-discovered; that's intended.)
+    """
+    from auto_applier.db.engine import tx
+    from auto_applier.domain.state import InvalidTransition
+
+    settings = load_settings()
+    ids, err = _resolve_job_ids(settings, job_ids, shortlist_name, mark_all)
+    if err:
+        click.echo(f"  x FAIL {err}", err=True)
+        sys.exit(2)
+    if not ids:
+        click.echo("  x FAIL no job ids (pass ids or --shortlist NAME --all)", err=True)
+        sys.exit(2)
+
+    passed_n = error_n = 0
+    conn = init_app_db(settings.app_db_path)
+    try:
+        repo = JobRepo(conn)
+        for jid in ids:
+            job = repo.get(jid)
+            if job is None:
+                error_n += 1
+                click.echo(f"  x error  {jid}  not found", err=True)
+                continue
+            if job.state is JobState.SKIPPED:
+                click.echo(f"  - already {jid}  already SKIPPED")
+                continue
+            try:
+                with tx(conn):
+                    repo.set_state(jid, JobState.SKIPPED)
+                passed_n += 1
+                click.echo(f"  + passed  {jid}  {job.company} — {job.title}")
+            except (InvalidTransition, KeyError) as exc:
+                error_n += 1
+                click.echo(f"  x error  {jid}  {exc}", err=True)
+    finally:
+        conn.close()
+    click.echo(f"\npassed={passed_n} errors={error_n}")
+    if error_n:
+        sys.exit(1)
+
+
+@cli.command()
 def status() -> None:
     """Show job counts by state from app.db."""
     settings = load_settings()
@@ -163,7 +551,7 @@ def status() -> None:
     finally:
         conn.close()
     if not counts:
-        click.echo("No jobs yet. Run discovery (Phase 1+).")
+        click.echo("No jobs yet. Run `av3 discover` to seed jobs.")
         return
     click.echo("Jobs by state:")
     for state, n in sorted(counts.items()):
@@ -445,7 +833,7 @@ def analytics_cmd(as_json: bool, min_samples: int | None) -> None:
 @click.option("--mode", type=click.Choice(["auto", "assisted"]), default="auto",
               help="auto = bot fills + submits on clean forms; assisted = pre-fill, human submits.")
 @click.option("--no-llm", is_flag=True, default=False,
-              help="Skip Ollama/Gemini wiring. Resolver uses bank + sensitive policy only.")
+              help="Skip Ollama wiring. Resolver uses bank + sensitive policy only.")
 def apply(once: bool, limit: int | None, source: str | None,
           dry_run: bool, mode: str, no_llm: bool) -> None:
     """Drain QUEUED_APPLY jobs through the apply worker (spec section 7 #7).
@@ -646,7 +1034,7 @@ def filter_cmd(once: bool, limit: int | None, threshold: float, no_llm: bool) ->
 @click.option("--limit", type=int, default=None,
               help="Maximum DESCRIBED jobs to process this run.")
 @click.option("--no-llm", is_flag=True, default=False,
-              help="Skip Ollama/Gemini. Every DESCRIBED job will SKIP (fail-closed) "
+              help="Skip Ollama. Every DESCRIBED job will SKIP (fail-closed) "
                    "with total=0.0 - the opposite of filter --no-llm because scoring "
                    "without an LLM cannot honestly produce a merit-based pass.")
 def score_cmd(once: bool, limit: int | None, no_llm: bool) -> None:
@@ -735,7 +1123,7 @@ def score_cmd(once: bool, limit: int | None, no_llm: bool) -> None:
 @click.option("--limit", type=int, default=None,
               help="Maximum DECIDED jobs to process this run.")
 @click.option("--no-llm", is_flag=True, default=False,
-              help="Skip Ollama/Gemini. Every DECIDED job will route to REVIEW "
+              help="Skip Ollama. Every DECIDED job will route to REVIEW "
                    "(fail-closed) - the Strict gate cannot generate a tailored "
                    "resume without an LLM.")
 def optimize_cmd(once: bool, limit: int | None, no_llm: bool) -> None:
@@ -837,11 +1225,16 @@ def optimize_cmd(once: bool, limit: int | None, no_llm: bool) -> None:
 @click.option("--mode", type=click.Choice(["auto", "assisted"]), default="auto",
               help="Apply mode: auto = bot submits on clean forms; assisted = pre-fill, human submits.")
 @click.option("--no-llm", is_flag=True, default=False,
-              help="Skip Ollama/Gemini wiring. Filter fail-opens, score+optimize fail-CLOSED, "
+              help="Skip Ollama wiring. Filter fail-opens, score+optimize fail-CLOSED, "
                    "apply resolver uses bank + sensitive policy only.")
+@click.option("--no-discover", is_flag=True, default=False,
+              help="Don't run discovery in the loop (drain only what's already in app.db). "
+                   "By default the loop sweeps settings.targeting boards each cycle.")
+@click.option("--discover-limit", type=int, default=None,
+              help="Cap matched listings per board per cycle (bounds a discovery sweep).")
 def run_cmd(max_cycles: int | None, quiet_hours: str | None,
             cycle_interval_s: float | None, dry_run: bool, mode: str,
-            no_llm: bool) -> None:
+            no_llm: bool, no_discover: bool, discover_limit: int | None) -> None:
     """Always-on staged-worker loop (spec section 7a) — THE production entry.
 
     Drives filter -> score -> optimize -> apply each cycle in pipeline order
@@ -860,6 +1253,7 @@ def run_cmd(max_cycles: int | None, quiet_hours: str | None,
     from auto_applier.llm.embed import OllamaEmbeddings
     from auto_applier.pipeline import (
         ApplyWorker,
+        DiscoverWorker,
         FilterWorker,
         OptimizeWorker,
         Scheduler,
@@ -946,6 +1340,13 @@ def run_cmd(max_cycles: int | None, quiet_hours: str | None,
         _prune_events(settings.events_db_path, settings.retention.events_days)
         _run_backup_cycle(settings)
 
+    # Discovery is the head of the loop unless --no-discover. Boards + title filter
+    # come from settings.targeting; built once and reused across cycles (shared
+    # per-host throttle inside each source).
+    discover_worker = None if no_discover else DiscoverWorker(
+        settings=settings, conn=conn, per_board_limit=discover_limit,
+    )
+
     async def _run():
         session = BrowserSession(settings.browser_profile_dir)
         await session.start()
@@ -973,6 +1374,7 @@ def run_cmd(max_cycles: int | None, quiet_hours: str | None,
                 drivers=default_drivers(),
             )
             scheduler = Scheduler(
+                discover_worker=discover_worker,
                 filter_worker=filter_worker,
                 score_worker=score_worker,
                 optimize_worker=optimize_worker,
@@ -1075,7 +1477,7 @@ def prune_cmd(ephemeral_days: int | None, events_days: int | None) -> None:
 @click.option("--mode", type=click.Choice(["auto", "assisted"]), default="auto",
               help="Apply mode: auto = bot submits on clean forms; assisted = pre-fill, human submits.")
 @click.option("--no-llm", is_flag=True, default=False,
-              help="Skip Ollama/Gemini wiring. Filter fail-opens, score+optimize "
+              help="Skip Ollama wiring. Filter fail-opens, score+optimize "
                    "fail-CLOSED, apply resolver uses bank + sensitive policy only.")
 @click.option("--no-hotkey", is_flag=True, default=False,
               help="Disable the F6 control-handoff hotkey. Default is enabled "
@@ -1108,6 +1510,7 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
     from auto_applier.llm.embed import OllamaEmbeddings
     from auto_applier.pipeline import (
         ApplyWorker,
+        DiscoverWorker,
         FilterWorker,
         OptimizeWorker,
         Scheduler,
@@ -1222,6 +1625,7 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
             await session.start()
             _session_holder["session"] = session
             return Scheduler(
+                discover_worker=DiscoverWorker(settings=settings, conn=conn),
                 filter_worker=FilterWorker(
                     settings=settings, conn=conn, fact_bank=bank,
                     embed_client=embed,

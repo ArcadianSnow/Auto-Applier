@@ -44,12 +44,3 @@ def test_load_settings_reads_user_config(data_dir, monkeypatch):
     s = load_settings()
     assert s.scoring.auto_apply_min == 8.0
     assert s.scoring.review_min == 5.0
-
-
-def test_gemini_key_injected_from_env_not_json(data_dir, monkeypatch):
-    monkeypatch.setenv("AV3_DATA_DIR", str(data_dir))
-    monkeypatch.setenv("GEMINI_API_KEY", "secret-from-env")
-    s = load_settings()
-    assert s.llm.gemini_api_key == "secret-from-env"
-    # the key must NOT be persisted in the inspectable JSON config
-    assert not (data_dir / "user_config.json").exists()

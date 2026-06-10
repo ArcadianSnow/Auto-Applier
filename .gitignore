@@ -1,7 +1,10 @@
 # Credentials
 .env
 
-# Data files (contain personal info)
+# Data files (contain personal info) — ignore the ENTIRE data dir (user data / PII).
+# Catch-all first so NOTHING under data/ is ever committed (a stray .md slipped past
+# the specific rules below once); the specific entries are kept for clarity.
+/data/
 data/browser_profile/
 data/browser_profile_chromium/
 data/cover_letters/

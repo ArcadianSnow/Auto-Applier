@@ -263,9 +263,8 @@ class ScoreWorker:
             )
             raise StageSkip("comp-filter: posted pay below floor")
 
-        # The LLM call — JSON-mode by contract (Ollama format=json /
-        # Gemini responseMimeType). A backend exception propagates to run_once,
-        # which fail-closes this one job and continues.
+        # The LLM call — JSON-mode by contract (local Ollama format=json). A backend
+        # exception propagates to run_once, which fail-closes this one job and continues.
         prompt = SCORE_JD.format(profile=self._profile, job_description=job.description)
         payload = await self._llm.complete_json(prompt, system=SCORE_JD.system)
 

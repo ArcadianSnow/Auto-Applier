@@ -159,6 +159,39 @@ single-threaded ~1 req/s per host, descriptive User-Agent, aggressive caching, e
 
 ---
 
+## Wired producer (2026-06-08) — the gap is closed
+
+The seeding research above is now **implemented and wired** (was the standing
+`project_discovery_producer_gap` blocker). Discovery is the head of the pipeline:
+
+- **`auto_applier/pipeline/discover_worker.py`** — `DiscoverWorker.run_once()` sweeps
+  board tokens across Greenhouse / Lever / Ashby, applies the **title pre-filter first**
+  (free — uses the snippet title, so no JD fetch on off-target roles), fills the JD
+  (Greenhouse only — `describe()`; Lever/Ashby ship `descriptionPlain` at discovery),
+  computes `canonical_hash`, and `upsert_discovered` (idempotent). Each board is one
+  `@stage("discover")` unit, so `av3 errors --stage discover` / `av3 stats` work for free.
+- **`auto_applier/domain/dedup.py`** — `canonical_hash(title, company)` = normalize +
+  `sha256[:16]`. The shared cross-source dedup key the model always wanted but nothing
+  computed; discovered jobs now carry it so `applied_canonical_hashes()` dedups.
+- **Board source of truth** — `settings.targeting.{greenhouse,lever,ashby}_boards`
+  (seeded with the confirmed-live starter set). `settings.targeting.titles` is the
+  discovery title filter. Both `av3 discover` and the scheduler read these, so headless
+  `av3 run` and ad-hoc `av3 discover` stay in lockstep.
+- **CLI** — `av3 discover [--gh ..] [--lever ..] [--ashby ..] [--title-contains ..]
+  [--limit N] [--no-describe]`. Flags override settings per run; no flags → settings.
+- **Scheduler** — `Scheduler(discover_worker=…)` runs discovery FIRST each cycle as a
+  gather stage (never quiet-gated). `av3 run` wires it by default (`--no-discover` to
+  drain only; `--discover-limit N` to bound a sweep); `serve` wires it too.
+- **Live smoke (2026-06-08):** `av3 discover --gh anthropic --limit 3` → 373 postings
+  seen, 3 matched/seeded, 3 JDs fetched, 0 errors, ~7.5s. Read-only public API, no login.
+- **Tests:** `tests/test_discovery.py` (worker contract + scheduler wiring), 15 new,
+  full suite 749 green / 11 deselected.
+
+**Not yet done (future):** open-dataset bulk seeding (OpenJobs / ats-scrapers import),
+search-engine harvest crawler, JobSpy board-board discovery, and a persisted
+`ats_boards.csv` with `last_seen_jobs`/`last_checked` decay. The config-list approach is
+the v3.0 seam; those are the Phase-2 scaling items from the section above.
+
 ## Sources (verified)
 
 - Greenhouse Job Board API (auth-free public GET, board_token, no list-all endpoint):

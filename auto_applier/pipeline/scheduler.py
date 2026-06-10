@@ -68,6 +68,7 @@ from datetime import datetime
 from typing import Awaitable, Callable, Protocol
 
 from auto_applier.pipeline.apply_worker import ApplyRunSummary, ApplyWorker
+from auto_applier.pipeline.discover_worker import DiscoverRunSummary, DiscoverWorker
 from auto_applier.pipeline.filter_worker import FilterRunSummary, FilterWorker
 from auto_applier.pipeline.optimize_worker import OptimizeRunSummary, OptimizeWorker
 from auto_applier.pipeline.quiet_hours import QuietHours, parse_quiet_hours
@@ -113,6 +114,7 @@ class CycleSummary:
 
     cycle: int
     started_at: str
+    discover_summary: DiscoverRunSummary | None = None
     filter_summary: FilterRunSummary | None = None
     score_summary: ScoreRunSummary | None = None
     optimize_summary: OptimizeRunSummary | None = None
@@ -157,6 +159,7 @@ class Scheduler:
         score_worker: ScoreWorker,
         optimize_worker: OptimizeWorker,
         apply_worker: ApplyWorker,
+        discover_worker: DiscoverWorker | None = None,
         cycle_interval_s: float = 60.0,
         quiet_hours: QuietHours | None = None,
         pause_predicate: Callable[[], bool] | None = None,
@@ -165,6 +168,11 @@ class Scheduler:
         sleep: _Sleep | None = None,
         now: _Now | None = None,
     ):
+        # Discovery is the optional HEAD of the pipeline. When present it runs FIRST
+        # each cycle (a gather stage — never quiet-gated), so freshly discovered jobs
+        # can flow filter→score→optimize→apply within the same cycle. When None the
+        # scheduler drains whatever discovery seeded out-of-band (back-compat).
+        self._discover = discover_worker
         self._filter = filter_worker
         self._score = score_worker
         self._optimize = optimize_worker
@@ -229,6 +237,9 @@ class Scheduler:
 
         # Stages run in pipeline order. Each stage is isolated — a crash in one
         # stage logs + continues so the rest of the cycle still makes progress.
+        # Discovery (when wired) leads: it's a gather stage, never quiet-gated.
+        if self._discover is not None:
+            await self._run_stage(cs, "discover", self._discover)
         await self._run_stage(cs, "filter", self._filter)
         await self._run_stage(cs, "score", self._score)
         await self._run_stage(cs, "optimize", self._optimize)
@@ -289,7 +300,7 @@ class Scheduler:
         self,
         cycle: CycleSummary,
         stage: str,
-        worker: FilterWorker | ScoreWorker | OptimizeWorker | ApplyWorker,
+        worker: DiscoverWorker | FilterWorker | ScoreWorker | OptimizeWorker | ApplyWorker,
     ) -> None:
         """Invoke one worker's ``run_once``, isolating any exception. The
         worker's own ``@stage`` decorator already emits per-job events; we
@@ -302,7 +313,9 @@ class Scheduler:
             return
 
         # Stash the per-stage summary into the cycle for the dashboard / CLI line.
-        if stage == "filter":
+        if stage == "discover":
+            cycle.discover_summary = result  # type: ignore[assignment]
+        elif stage == "filter":
             cycle.filter_summary = result  # type: ignore[assignment]
         elif stage == "score":
             cycle.score_summary = result  # type: ignore[assignment]

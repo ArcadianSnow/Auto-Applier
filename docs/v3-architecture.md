@@ -58,7 +58,7 @@ auto_applier/        # the v3 package (built as the av3 package, renamed at the 
   config/          # Pydantic settings models, .env merge, validation
   db/              # SQLite engine, schema, migrations, repositories, CSV export/import
   domain/          # Pure dataclasses + the job/application state machine (no I/O)
-  llm/             # PORTED from v2: router (Ollama→Gemini→rule), cache, prompts, embeddings
+  llm/             # Local Ollama completion + embeddings, prompts (Gemini cloud tier removed 2026-06-09 — retired model + local-first)
   scoring/         # Embedding pre-filter → LLM dimension scoring → decision; eval harness
   resume/          # Fact bank (master profile) + per-job generation + fabrication guard + cover letter + stories (§6b)
   sources/         # Capability-based source adapters (see §6)
@@ -170,18 +170,28 @@ DISCOVERED ──dedup/ghost──▶ SKIPPED
  DESCRIBED   (full JD scraped — score on full text, never a snippet)
      │
      ▼
-   SCORED ──decision──▶ DECIDED ──▶ { QUEUED_APPLY | REVIEW | SKIPPED }
+   SCORED ──decision──▶ DECIDED ──▶ { QUEUED_APPLY | REVIEW | SKIPPED | APPLIED* }
                                           │  optimize+Strict gate: tailor résumé +
                                           │  cover letter + fabrication guard must PASS,
                                           │  else ▶ REVIEW
-                              QUEUED_APPLY ▼
+                              QUEUED_APPLY ▼            * manual mode: human applied
                                       APPLYING ──┬─ positive confirmation ──▶ APPLIED (terminal)
                                                  └─ no confirmation / mid-form break ──▶ FAILED ──▶ REVIEW
 ```
 
-`APPLIED` requires a **detected success signal** (success page/message/confirmation email) — never assumed
-from a click (§8). A mid-form break **fails fast to REVIEW, no retry** (§8). Only `APPLIED` rows count for
-dedup, so an unconfirmed apply is safely retryable and never inflates success.
+`APPLIED` requires a **positive confirmation** — either the bot's detected on-page success signal, OR an
+explicit **human attestation** in the manual operating mode (see below) — never assumed from a click (§8).
+A mid-form break **fails fast to REVIEW, no retry** (§8). Only `APPLIED` rows count for dedup, so an
+unconfirmed apply is safely retryable and never inflates success.
+
+**Manual / human-apply mode.** When the product is run discovery+scoring-only and a human applies
+externally (the primary personal-search use), the edges `DECIDED → APPLIED` and `REVIEW → APPLIED` let
+`av3 applied` record it (writing an `Application` row with `mode = MANUAL`). A human explicitly attesting
+"I applied" is a positive confirmation, not a click inference, so the invariant holds. Because `APPLIED`
+is the same terminal/dedup state, manually-applied jobs drop out of `av3 shortlist`/`digest`, are deduped
+out of future discovery, are never pruned, and accept `av3 outcome` follow-ups — all unchanged. `av3 pass`
+(DECIDED → SKIPPED) records "looked, not interested." Note: a manual apply also counts toward that day's
+per-company / daily pacing counters — intentional in mixed mode (you did apply).
 
 Transitions live in **one module** (`domain/state.py`) with an allowed-transitions table. Dedup,
 continuous-run resumption, and retries become queries on `state`, not bespoke logic. A crashed run
@@ -745,7 +755,7 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
 - ~~Job targeting?~~ **RESOLVED:** NL intent → LLM → editable structured filters (§6c).
 - ~~Multi-résumé model?~~ **RESOLVED:** dropped; one master fact bank, résumé generated per job, guarded (§6b).
 - ~~LinkedIn?~~ **RESOLVED:** cut from v3 (§6).
-- ~~LLM backend?~~ **RESOLVED:** auto-detect Ollama→Gemini→rule (no GPU gate).
+- ~~LLM backend?~~ **RESOLVED:** local Ollama (no GPU gate); deterministic bank/rule path is the floor below it. The Gemini cloud secondary tier was **removed 2026-06-09** — `gemini-1.5-flash` was retired by Google (the `v1beta` endpoint 404s for new keys, producing spurious fail-closed jobs), and a cloud tier conflicts with the local-first, zero-cost design. Ollama is the only model tier.
 - ~~Mid-form apply failure?~~ **RESOLVED:** fail fast → REVIEW, no retry (§8b).
 - ~~Novel form questions unattended?~~ **RESOLVED:** two-tier resolver — semantic match → bail-to-REVIEW default → confidence-gated backup; flagged + telemetry loop (§8b).
 - ~~Submit confirmation strictness?~~ **RESOLVED:** positive confirmation required; else FAILED→REVIEW (§5, §8b).

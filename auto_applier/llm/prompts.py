@@ -13,9 +13,9 @@ produced by prompt v1 against gemma4:e4b."*
 
 Schema discipline:
   * Every template demands JSON-only output (no preamble, no code fences) and
-    declares its expected schema inline. The Ollama/Gemini backends in
-    :mod:`auto_applier.llm.complete` already pass ``format=json`` / ``responseMimeType``,
-    but the schema-in-prompt keeps weaker local models honest.
+    declares its expected schema inline. The Ollama backend in
+    :mod:`auto_applier.llm.complete` already passes ``format=json``, but the
+    schema-in-prompt keeps weaker local models honest.
   * Defensive parsers live next to the worker that calls each prompt — they
     clamp out-of-range numbers, default missing keys, and reject unrecognized
     shapes. Strict at the wire, lenient at the merge.

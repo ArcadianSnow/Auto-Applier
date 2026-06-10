@@ -92,19 +92,20 @@ def check_events_db(settings: Settings) -> CheckResult:
 
 
 def check_llm(settings: Settings) -> CheckResult:
-    """Ollama reachability. WARN (not FAIL) — Gemini/rule fallback exists (spec §6)."""
+    """Ollama reachability. WARN (not FAIL) — the deterministic bank/rule path is the
+    floor below the LLM, so a brief Ollama outage degrades rather than breaks (spec §6).
+    Ollama is the only model tier (the Gemini cloud fallback was removed)."""
     url = settings.llm.ollama_host.rstrip("/") + "/api/tags"
     try:
         resp = httpx.get(url, timeout=2.0)
         resp.raise_for_status()
         models = [m.get("name", "") for m in resp.json().get("models", [])]
     except Exception as exc:
-        has_gemini = bool(settings.llm.gemini_api_key)
         return CheckResult(
             "llm", Status.WARN,
-            f"Ollama unreachable at {settings.llm.ollama_host} ({type(exc).__name__})"
-            + (" - Gemini key present, will fall back" if has_gemini else ""),
-            fix="start Ollama (`ollama serve`) or set GEMINI_API_KEY in .env",
+            f"Ollama unreachable at {settings.llm.ollama_host} ({type(exc).__name__}) "
+            "- scoring/optimize will fail-closed (no cloud fallback)",
+            fix="start Ollama (`ollama serve`) and pull the configured model",
         )
     want = settings.llm.ollama_model
     if want not in models and want.split(":")[0] not in {m.split(":")[0] for m in models}:

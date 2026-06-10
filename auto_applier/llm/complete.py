@@ -6,9 +6,16 @@ inferred; below → bail to REVIEW. The LLM is therefore the *backstop*, not the
 — most fills come from the bank.
 
 JSON-mode is non-negotiable here: the resolver expects a structured
-``{answer, confidence}`` reply. We request JSON via the Ollama ``format: "json"`` knob
-and the Gemini ``response_mime_type`` knob, parse, and reject on any malformed reply
-(no string-scraping fallbacks — those were the v2 reliability tax).
+``{answer, confidence}`` reply. We request JSON via the Ollama ``format: "json"`` knob,
+parse, and reject on any malformed reply (no string-scraping fallbacks — those were the
+v2 reliability tax).
+
+**Local-only:** the sole completion backend is local Ollama. The former cloud secondary
+tier (Google Gemini) was removed once ``gemini-1.5-flash`` was retired by Google (the
+``v1beta`` endpoint 404s for new keys) — keeping it pointed at a dead model only produced
+spurious fail-closed jobs, and a cloud tier sits awkwardly against the local-first,
+zero-cost design. If Ollama can't produce a parseable reply the resolver/score worker
+fails closed (→ REVIEW / SKIP), with the deterministic bank + rule path as the floor.
 
 Like the embedding client, this is an injectable Protocol so resolver tests can run
 without a live model.
@@ -68,65 +75,18 @@ class _OllamaJSONBackend:
             raise CompletionError(f"Ollama returned non-JSON: {raw!r}") from exc
 
 
-class _GeminiJSONBackend:
-    """Google Gemini ``v1beta/models/{model}:generateContent`` with
-    ``response_mime_type=application/json``. Secondary tier (free 1k/day, spec §6)."""
-
-    def __init__(
-        self,
-        api_key: str,
-        model: str = "gemini-1.5-flash",
-        timeout_s: float = 60.0,
-    ):
-        self.api_key = api_key
-        self.model = model
-        self.timeout_s = timeout_s
-
-    async def complete_json(self, prompt: str, *, system: str = "") -> dict:
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self.model}:generateContent?key={self.api_key}"
-        )
-        parts: list[dict] = []
-        if system:
-            parts.append({"text": system + "\n\n"})
-        parts.append({"text": prompt})
-        payload = {
-            "contents": [{"role": "user", "parts": parts}],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "temperature": 0.0,
-            },
-        }
-        async with httpx.AsyncClient(timeout=self.timeout_s) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            body = resp.json()
-        try:
-            text = body["candidates"][0]["content"]["parts"][0]["text"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise CompletionError(f"Gemini reply shape unexpected: {body!r}") from exc
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise CompletionError(f"Gemini returned non-JSON: {text!r}") from exc
-
-
 class FallbackCompletion:
-    """Ollama-first, Gemini-fallback. If both fail, raises :class:`CompletionError` —
-    the resolver treats that as "tier-3 unavailable" and bails to REVIEW.
+    """Local Ollama completion. If Ollama can't produce a parseable JSON reply, raises
+    :class:`CompletionError` — the resolver/score worker treats that as "tier-3
+    unavailable" and bails (→ REVIEW / SKIP).
 
-    No third tier (the v2 ``rule_based`` answer table is what the *bank* already does
-    deterministically — duplicating it here would just make the call graph confusing).
+    Named ``FallbackCompletion`` for historical reasons: it once chained Ollama → Gemini.
+    The Gemini cloud tier was removed (retired model + local-first design); the
+    deterministic bank + rule path is the real floor below this.
     """
 
-    def __init__(
-        self,
-        ollama: _OllamaJSONBackend | None = None,
-        gemini: _GeminiJSONBackend | None = None,
-    ):
+    def __init__(self, ollama: _OllamaJSONBackend | None = None):
         self.ollama = ollama
-        self.gemini = gemini
 
     async def complete_json(self, prompt: str, *, system: str = "") -> dict:
         last_exc: Exception | None = None
@@ -135,22 +95,13 @@ class FallbackCompletion:
                 return await self.ollama.complete_json(prompt, system=system)
             except (httpx.HTTPError, CompletionError) as exc:
                 last_exc = exc
-        if self.gemini is not None:
-            try:
-                return await self.gemini.complete_json(prompt, system=system)
-            except (httpx.HTTPError, CompletionError) as exc:
-                last_exc = exc
         raise CompletionError(
             f"no completion backend available (last error: {last_exc})"
         )
 
 
 def build_default(settings) -> FallbackCompletion:
-    """Construct the default chain from :class:`auto_applier.config.settings.Settings`."""
+    """Construct the default (Ollama-only) client from
+    :class:`auto_applier.config.settings.Settings`."""
     ollama = _OllamaJSONBackend(host=settings.llm.ollama_host, model=settings.llm.ollama_model)
-    gemini = (
-        _GeminiJSONBackend(api_key=settings.llm.gemini_api_key)
-        if settings.llm.gemini_api_key
-        else None
-    )
-    return FallbackCompletion(ollama=ollama, gemini=gemini)
+    return FallbackCompletion(ollama=ollama)

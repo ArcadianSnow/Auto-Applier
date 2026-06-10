@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import sqlite3
 from pathlib import Path
 
@@ -170,14 +169,9 @@ def _ollama_reachable() -> bool:
         return False
 
 
-def _gemini_key_present() -> bool:
-    """Fallback path: Gemini key in env. The completion client tries Ollama
-    first then Gemini, so either source unblocks the eval."""
-    return bool(os.environ.get("GEMINI_API_KEY"))
-
-
 def _llm_available() -> bool:
-    return _ollama_reachable() or _gemini_key_present()
+    # Ollama is the only model tier (the Gemini cloud fallback was removed).
+    return _ollama_reachable()
 
 
 # --------------------------------------------------------------- the harness
@@ -185,7 +179,7 @@ def _llm_available() -> bool:
 @pytest.mark.eval
 @pytest.mark.skipif(
     not _llm_available(),
-    reason="no LLM backend reachable (Ollama down + no GEMINI_API_KEY)",
+    reason="no LLM backend reachable (Ollama down)",
 )
 def test_golden_set_score_bands(tmp_path):
     """Replay every golden-set pair through ScoreWorker; assert each total

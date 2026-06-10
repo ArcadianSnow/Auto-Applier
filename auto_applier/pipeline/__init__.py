@@ -12,6 +12,12 @@ from auto_applier.pipeline.apply_worker import (
     DriverEntry,
     default_drivers,
 )
+from auto_applier.pipeline.discover_worker import (
+    BoardSpec,
+    DiscoverRunSummary,
+    DiscoverWorker,
+    boards_from_settings,
+)
 from auto_applier.pipeline.filter_worker import (
     FilterRunSummary,
     FilterWorker,
@@ -45,8 +51,12 @@ __all__ = [
     "AXIS_NAMES",
     "ApplyRunSummary",
     "ApplyWorker",
+    "BoardSpec",
     "CycleSummary",
+    "DiscoverRunSummary",
+    "DiscoverWorker",
     "DriverEntry",
+    "boards_from_settings",
     "FilterRunSummary",
     "FilterWorker",
     "OptimizeRunSummary",

@@ -5,8 +5,8 @@ answer resolver (spec §8b) and any future LLM consumer can be unit-tested witho
 live model.
 
 - :mod:`auto_applier.llm.embed` — Ollama ``nomic-embed-text`` (the spec default).
-- :mod:`auto_applier.llm.complete` — Ollama -> Gemini -> raises. JSON-mode completion for the
-  resolver's tier-3 confidence-gated backup.
+- :mod:`auto_applier.llm.complete` — local Ollama -> raises. JSON-mode completion for the
+  resolver's tier-3 confidence-gated backup. (The former Gemini cloud fallback was removed.)
 
 We deliberately do NOT port v2's big ``LLMRouter`` / prompt registry / disk cache layer
 in this pass — v3 only needs an answer-with-confidence call for the resolver. Richer

@@ -5,8 +5,13 @@ continuous-run resumption, and retries become queries on ``state`` rather than b
 logic scattered across the pipeline (the v2 root cause this fixes).
 
 Invariants encoded here:
-  * ``APPLIED`` is terminal and requires a positive submit confirmation (set by the
-    apply worker, never inferred from a click).
+  * ``APPLIED`` is terminal and requires a positive confirmation — either the apply
+    worker's on-page submit confirmation, OR an explicit human attestation via
+    ``av3 applied`` (the manual operating mode: discover+score only, human applies
+    externally). A human explicitly attesting "I applied" is a positive confirmation,
+    not an inference from a click — so it honors the same invariant. Hence the
+    ``DECIDED → APPLIED`` and ``REVIEW → APPLIED`` edges below (manual mode), alongside
+    the bot's ``APPLYING → APPLIED``.
   * A mid-form break fails fast: ``APPLYING → FAILED → REVIEW`` (no retry loop).
   * A crashed run leaves jobs in ``APPLYING``; a restart sweep re-queues or fails them.
 """
@@ -50,8 +55,9 @@ ALLOWED_TRANSITIONS: dict[JobState, frozenset[JobState]] = {
     JobState.DESCRIBED: frozenset({JobState.SCORED}),
     JobState.SCORED: frozenset({JobState.DECIDED}),
     # optimize+Strict gate sits on the DECIDED edge: pass→QUEUED_APPLY, fail→REVIEW.
+    # APPLIED here is the manual mode (human applied externally, `av3 applied`).
     JobState.DECIDED: frozenset(
-        {JobState.QUEUED_APPLY, JobState.REVIEW, JobState.SKIPPED}
+        {JobState.QUEUED_APPLY, JobState.REVIEW, JobState.SKIPPED, JobState.APPLIED}
     ),
     JobState.QUEUED_APPLY: frozenset({JobState.APPLYING, JobState.REVIEW}),
     # confirmation→APPLIED; no-confirm/break→FAILED; crash-sweep→QUEUED_APPLY re-queue.
@@ -62,8 +68,9 @@ ALLOWED_TRANSITIONS: dict[JobState, frozenset[JobState]] = {
         {JobState.APPLIED, JobState.FAILED, JobState.REVIEW, JobState.QUEUED_APPLY}
     ),
     JobState.FAILED: frozenset({JobState.REVIEW, JobState.QUEUED_APPLY}),
-    # REVIEW is human-driven; a human may queue it for (assisted) apply or skip it.
-    JobState.REVIEW: frozenset({JobState.QUEUED_APPLY, JobState.SKIPPED}),
+    # REVIEW is human-driven; a human may queue it for (assisted) apply, skip it, or
+    # attest a manual apply (`av3 applied`) → APPLIED.
+    JobState.REVIEW: frozenset({JobState.QUEUED_APPLY, JobState.SKIPPED, JobState.APPLIED}),
     JobState.APPLIED: frozenset(),
     JobState.SKIPPED: frozenset(),
     JobState.FILTERED: frozenset(),
@@ -96,6 +103,7 @@ class ApplyMode(str, Enum):
 
     BROWSER_AUTO = "browser_auto"        # bot fills + submits on a clean ATS form
     BROWSER_ASSISTED = "browser_assisted"  # bot pre-fills, human clicks submit
+    MANUAL = "manual"                    # human applied externally; recorded via `av3 applied`
 
 
 class ApplicationStatus(str, Enum):

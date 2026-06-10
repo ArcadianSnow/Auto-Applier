@@ -224,14 +224,10 @@ def test_export_diagnostics_scrubbed_default(monkeypatch, data_dir):
 
 
 def test_export_diagnostics_strips_secrets(monkeypatch, data_dir):
-    monkeypatch.setenv("GEMINI_API_KEY", "super-secret-key")
     # Stash a handle so telemetry.handle is present to strip.
     _run(monkeypatch, data_dir, "telemetry", "on", "--handle", "Casey")
     _seed_events(data_dir)
-    # GEMINI_API_KEY must be in env for THIS invoke too (set by _run? no — _run
-    # deletes it). Re-set after the helper clears it by invoking directly.
     monkeypatch.setenv("AV3_DATA_DIR", str(data_dir))
-    monkeypatch.setenv("GEMINI_API_KEY", "super-secret-key")
     runner = CliRunner()
     res = runner.invoke(cli, ["export-diagnostics"])
     assert res.exit_code == 0, res.output
@@ -239,7 +235,6 @@ def test_export_diagnostics_strips_secrets(monkeypatch, data_dir):
     tarball = next(data_dir.glob("diagnostics-*.tar.gz"))
     members = _extract(tarball)
     settings_blob = members["settings.json"].decode()
-    assert "super-secret-key" not in settings_blob
     assert "Casey" not in settings_blob  # raw handle stripped from settings dump
     # The manifest carries the hashed user_id, which is safe.
     manifest = json.loads(members["manifest.json"].decode())

@@ -2,11 +2,12 @@
 
 Design (spec §10): smart defaults out of the box; power users retune in
 ``user_config.json``. Validation runs on construction so ``doctor`` fails fast.
-Secrets live only in ``.env`` (never in the JSON), matching v2's credential flow.
+Any future secrets live only in ``.env`` (never in the JSON), matching v2's
+credential flow; ``.env`` is still loaded, though the pipeline is now fully local
+and reads no secret keys (the Gemini cloud tier was removed).
 
-Precedence: ``user_config.json`` is the primary, inspectable config. ``.env`` supplies
-secrets (currently ``GEMINI_API_KEY``). ``AV3_DATA_DIR`` env var can relocate the data
-dir (used by tests and alternate installs).
+Precedence: ``user_config.json`` is the primary, inspectable config. ``AV3_DATA_DIR``
+env var can relocate the data dir (used by tests and alternate installs).
 """
 
 from __future__ import annotations
@@ -73,12 +74,15 @@ class ScoringConfig(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    """LLM backend config. Fallback chain Ollama → Gemini → rule (spec §6, ported from v2)."""
+    """LLM backend config. Local Ollama → deterministic bank/rule floor (spec §6).
+
+    The former cloud secondary tier (Gemini) was removed once ``gemini-1.5-flash`` was
+    retired; the product is local-first and zero-cost, so Ollama is the only model tier.
+    """
 
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "gemma4:e4b"
     embed_model: str = "nomic-embed-text"  # spec resolved default (fast over accurate)
-    gemini_api_key: str | None = None  # injected from .env, never stored in JSON
 
 
 class PacingConfig(BaseModel):
@@ -170,6 +174,25 @@ class TargetingConfig(BaseModel):
     onsite_ok: bool = True
     salary_floor: int | None = None  # USD/year; None = no floor
     seniority: str = ""              # "junior" | "mid" | "senior" | "staff" | "" any
+
+    # ATS board identifiers the discovery producer sweeps (research/ats-discovery-seeding.md).
+    # These are per-company slugs/tokens you already know — there is no list-all endpoint
+    # for any ATS. Seeded with a small confirmed-live starter set (confirm-probe sweep
+    # 2026-05-26); grow them by hand or via the seeding workflow. Dead tokens are skipped
+    # at discovery, so generous lists are safe. The `discover` CLI + the scheduler both
+    # read these so headless `av3 run` and ad-hoc `av3 discover` stay in lockstep.
+    greenhouse_boards: list[str] = Field(
+        default_factory=lambda: [
+            "anthropic", "cloudflare", "tripadvisor", "figma",
+            "discord", "reddit", "gitlab", "robinhood",
+        ]
+    )
+    lever_boards: list[str] = Field(
+        default_factory=lambda: ["matchgroup", "highspot"]
+    )
+    ashby_boards: list[str] = Field(
+        default_factory=lambda: ["Ashby", "Linear", "Ramp", "Vanta", "Notion", "OpenAI"]
+    )
 
 
 class SchedulerConfig(BaseModel):
@@ -307,6 +330,11 @@ class Settings(BaseModel):
         return self.data_dir / "artifacts"
 
     @property
+    def shortlist_dir(self) -> Path:
+        """Saved manual/human-apply shortlists (``av3 shortlist`` → .md + .json views)."""
+        return self.data_dir / "shortlist"
+
+    @property
     def browser_profile_dir(self) -> Path:
         """One persistent shared Chrome profile across all sites (spec §8c)."""
         return self.data_dir / "browser_profile"
@@ -335,12 +363,5 @@ def load_settings(data_dir: Path | str | None = None) -> Settings:
         file_data = json.loads(cfg_path.read_text(encoding="utf-8"))
 
     file_data["data_dir"] = str(data_dir)
-
-    # Inject secrets from environment (never read from the JSON file).
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    if gemini_key:
-        file_data.setdefault("llm", {})
-        if isinstance(file_data["llm"], dict):
-            file_data["llm"].setdefault("gemini_api_key", gemini_key)
 
     return Settings(**file_data)

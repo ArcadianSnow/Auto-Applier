@@ -21,8 +21,8 @@ the machine). Two modes:
   rows. For the in-group debug case where the recipient is the owner and the extra
   fidelity is worth it. The CLI warns loudly that this bundle is PII-bearing.
 
-Settings are ALWAYS secret-stripped (``llm.gemini_api_key``, ``telemetry.handle``) in
-both modes — a key or a raw handle in a support bundle is never acceptable.
+Settings are ALWAYS secret-stripped (``telemetry.handle``) in both modes — a raw
+handle in a support bundle is never acceptable.
 """
 
 from __future__ import annotations
@@ -46,7 +46,6 @@ __all__ = ["DiagnosticsResult", "build_diagnostics", "collect_diagnostics"]
 # Settings keys stripped from the dump in BOTH modes. Dotted path into the
 # model_dump() dict. A secret or a raw handle never belongs in a support bundle.
 _SECRET_PATHS = (
-    ("llm", "gemini_api_key"),
     ("telemetry", "handle"),
 )
 

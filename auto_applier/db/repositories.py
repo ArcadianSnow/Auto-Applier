@@ -222,6 +222,26 @@ class ScoreRepo:
         rows = self.conn.execute("SELECT job_id, total FROM job_scores").fetchall()
         return {r["job_id"]: r["total"] for r in rows}
 
+    def list_ranked(
+        self, limit: int | None = None, min_total: float = 0.0
+    ) -> list[dict]:
+        """Scored jobs joined to their job row, ranked by score desc — the read behind
+        ``av3 digest`` (the discovery+scoring-only shortlist view). Each dict carries
+        score + the job's company/title/location/url/state so a digest needs no second
+        query. ``min_total`` filters out below-threshold noise; ``limit`` caps the list."""
+        sql = (
+            "SELECT j.id AS job_id, j.title, j.company, j.location, j.url, j.state, "
+            "       s.total, s.dimensions_json, s.scored_at "
+            "FROM job_scores s JOIN jobs j ON j.id = s.job_id "
+            "WHERE s.total >= ? "
+            "ORDER BY s.total DESC, j.company, j.title"
+        )
+        params: list = [min_total]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [dict(r) for r in self.conn.execute(sql, params)]
+
 
 # ------------------------------------------------------------------- applications
 class ApplicationRepo:
