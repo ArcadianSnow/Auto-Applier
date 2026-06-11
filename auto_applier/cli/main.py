@@ -821,6 +821,167 @@ def analytics_cmd(as_json: bool, min_samples: int | None) -> None:
             click.echo(f"  {arrow}{n.axis}: {n.rationale}")
 
 
+@cli.group("stories")
+def stories_group() -> None:
+    """STAR+R interview story bank (spec section 11 extras — on-demand prep).
+
+    Stories are generated from the master fact bank (the fabrication-guard source
+    of truth) tailored to one job, and accumulate in story_bank.json into a
+    reusable library that can answer any behavioral interview question.
+    """
+
+
+@stories_group.command("generate")
+@click.argument("job_id")
+def stories_generate(job_id: str) -> None:
+    """Generate 3 STAR+R stories tailored to JOB_ID and append them to the bank.
+
+    Needs the job's stored description and a reachable Ollama. Stories use only
+    fact-bank facts; read them back before an interview — they're prep notes,
+    you own the words.
+    """
+    import asyncio
+
+    from auto_applier.llm.complete import build_default
+    from auto_applier.resume.factbank import FactBank
+    from auto_applier.resume.story_bank import StoryGenerator, append_stories
+
+    settings = load_settings()
+    fact_bank_path = settings.data_dir / "profile" / "master.json"
+    if not fact_bank_path.exists():
+        click.echo(f"  x FAIL fact bank: missing at {fact_bank_path}", err=True)
+        click.echo("        fix -> seed the fact bank during onboarding first.", err=True)
+        sys.exit(2)
+    bank = FactBank.load(fact_bank_path)
+
+    conn = init_app_db(settings.app_db_path)
+    try:
+        job = JobRepo(conn).get(job_id)
+    finally:
+        conn.close()
+    if job is None:
+        click.echo(f"  x FAIL no job with id {job_id}", err=True)
+        sys.exit(2)
+    if not job.description.strip():
+        click.echo(f"  x FAIL job {job_id} has no stored description to tailor against.", err=True)
+        sys.exit(2)
+
+    generator = StoryGenerator(build_default(settings))
+    stories = asyncio.run(generator.generate(
+        bank, job.description, company=job.company, title=job.title, job_id=job.id,
+    ))
+    if not stories:
+        click.echo(
+            "  x no stories generated (LLM unreachable or reply malformed) — "
+            "check `av3 doctor` and retry.", err=True,
+        )
+        sys.exit(1)
+    append_stories(settings.story_bank_path, stories)
+    click.echo(f"added {len(stories)} stories for {job.title} @ {job.company}:")
+    for s in stories:
+        click.echo(f"  - {s.title}" + (f"  (answers: {s.question_prompt})" if s.question_prompt else ""))
+    click.echo(f"bank: {settings.story_bank_path}  (export: av3 stories export)")
+
+
+@stories_group.command("list")
+def stories_list() -> None:
+    """List the stories in the bank (title + provenance)."""
+    from auto_applier.resume.story_bank import load_bank
+
+    settings = load_settings()
+    stories = load_bank(settings.story_bank_path)
+    if not stories:
+        click.echo("Story bank is empty. Generate with: av3 stories generate <job_id>")
+        return
+    click.echo(f"{len(stories)} stories in {settings.story_bank_path}:")
+    for i, s in enumerate(stories, 1):
+        origin = f"  ({s.job_title} @ {s.company})" if (s.company or s.job_title) else ""
+        click.echo(f"  {i:3}. {s.title}{origin}")
+
+
+@stories_group.command("export")
+@click.option("--out", "out_path", default=None,
+              help="Markdown output path (default: story_bank.md beside the JSON bank).")
+def stories_export(out_path: str | None) -> None:
+    """Export the whole bank as a readable markdown prep document."""
+    from pathlib import Path
+
+    from auto_applier.resume.story_bank import export_bank_markdown, load_bank
+
+    settings = load_settings()
+    stories = load_bank(settings.story_bank_path)
+    target = Path(out_path) if out_path else settings.story_bank_path.with_suffix(".md")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(export_bank_markdown(stories), encoding="utf-8")
+    click.echo(f"wrote {len(stories)} stories -> {target}")
+
+
+@cli.command("research")
+@click.argument("company")
+@click.option("--source-file", "source_file", default=None,
+              help="File holding the pasted source material (career page text, articles, "
+                   "notes). Omit to read it from stdin (paste, then Ctrl-Z/Ctrl-D).")
+@click.option("--show", is_flag=True, default=False,
+              help="Print the previously saved briefing for COMPANY and exit (no LLM).")
+def research_cmd(company: str, source_file: str | None, show: bool) -> None:
+    """Build a grounded interview-prep briefing for COMPANY (spec section 11 extras).
+
+    You paste the source material (the tool never fetches anything — zero egress);
+    the local LLM distills it into what-they-do / tech-stack / culture / red-flags /
+    questions-to-ask, saying "not in source" instead of guessing. Saved as md + json
+    under the data dir's research/ folder.
+    """
+    import asyncio
+
+    from auto_applier.llm.complete import build_default
+    from auto_applier.research import (
+        CompanyResearcher,
+        briefing_path,
+        load_briefing,
+        save_briefing,
+    )
+
+    settings = load_settings()
+
+    if show:
+        briefing = load_briefing(settings.research_dir, company)
+        if briefing is None:
+            click.echo(f"no saved briefing for {company!r} "
+                       f"(expected at {briefing_path(settings.research_dir, company)})", err=True)
+            sys.exit(2)
+        click.echo(briefing.to_markdown())
+        return
+
+    if source_file:
+        from pathlib import Path
+
+        src = Path(source_file)
+        if not src.exists():
+            click.echo(f"  x FAIL source file not found: {src}", err=True)
+            sys.exit(2)
+        material = src.read_text(encoding="utf-8", errors="replace")
+    else:
+        click.echo("Paste the source material, then end input (Ctrl-Z then Enter on "
+                   "Windows, Ctrl-D elsewhere):", err=True)
+        material = sys.stdin.read()
+
+    if not material.strip():
+        click.echo("  x FAIL no source material provided — refusing to invent a briefing.", err=True)
+        sys.exit(2)
+
+    researcher = CompanyResearcher(build_default(settings))
+    briefing = asyncio.run(researcher.research(company, material))
+    if briefing is None:
+        click.echo(
+            "  x no briefing produced (LLM unreachable, reply malformed, or the source "
+            "had nothing grounded) — check `av3 doctor` and retry.", err=True,
+        )
+        sys.exit(1)
+    md_path = save_briefing(settings.research_dir, briefing)
+    click.echo(f"wrote briefing -> {md_path}")
+    click.echo(briefing.to_markdown())
+
+
 @cli.command()
 @click.option("--once", is_flag=True, default=True,
               help="Run one cycle and exit. The only mode v3.0 ships (staged scheduler is Phase 3).")

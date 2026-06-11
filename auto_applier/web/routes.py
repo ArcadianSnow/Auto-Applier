@@ -877,6 +877,79 @@ async def _read_json_dict(request: Request) -> dict:
     return body
 
 
+# ---------------------------------------------------------------- /api/reconcile (7/M)
+#
+# The interactive skill-reconciliation conversation (spec §7b) — the web
+# counterpart of `av3 reconcile`. The conversation shape: the app SURFACES
+# skills the stored JDs demand that the fact bank lacks; the user CONFIRMS the
+# ones they actually have; only that explicit confirmation mutates the bank
+# (Rule 2.6 — the bank is the fabrication guard's source of truth, additive
+# insert only).
+
+@api_router.get("/reconcile/proposals")
+async def reconcile_proposals(request: Request, min_count: int = 1) -> dict:
+    """Open skill-gap proposals + bank size. Pure read."""
+    from auto_applier.db.repositories import SkillGapRepo
+    from auto_applier.reconcile import build_proposals
+
+    web_state = _get_state(request)
+    bank = load_fact_bank(web_state.settings.data_dir)
+    with web_state.app_conn() as conn:
+        proposals = build_proposals(bank, SkillGapRepo(conn), min_count=min_count)
+    return {
+        "proposals": [{"skill": p.skill, "count": p.count} for p in proposals],
+        "bank_skill_count": len(bank.skills),
+    }
+
+
+@api_router.post("/reconcile/scan")
+async def reconcile_scan(request: Request) -> dict:
+    """Scan every stored JD and record demanded-but-missing skills as gaps.
+    Gather-only — writes the gap table, never the fact bank."""
+    from auto_applier.db.repositories import SkillGapRepo
+    from auto_applier.reconcile import record_batch_gaps
+
+    web_state = _get_state(request)
+    bank = load_fact_bank(web_state.settings.data_dir)
+    with web_state.app_conn() as conn:
+        jobs = JobRepo(conn).list_all_with_description()
+        bumps = record_batch_gaps(jobs, bank, SkillGapRepo(conn))
+        conn.commit()
+    return {"scanned": len(jobs), "bumps": bumps}
+
+
+@api_router.post("/reconcile/apply")
+async def reconcile_apply(request: Request) -> dict:
+    """Insert the user-confirmed skills into the fact bank (the gated act).
+    Additive only — appends to master.json, marks those gaps reconciled."""
+    from auto_applier.db.repositories import SkillGapRepo
+    from auto_applier.reconcile import apply_proposals
+
+    payload = await _read_json_dict(request)
+    skills = payload.get("skills")
+    if not isinstance(skills, list) or not all(isinstance(s, str) for s in skills):
+        raise HTTPException(status_code=400, detail="'skills' must be a list of strings")
+    approved = [s.strip() for s in skills if s.strip()]
+    if not approved:
+        raise HTTPException(status_code=400, detail="no skills provided")
+
+    web_state = _get_state(request)
+    bank = load_fact_bank(web_state.settings.data_dir)
+    before = len(bank.skills)
+    apply_proposals(bank, approved)
+    save_fact_bank(web_state.settings.data_dir, bank)
+    with web_state.app_conn() as conn:
+        gap_repo = SkillGapRepo(conn)
+        for skill in approved:
+            gap_repo.set_status(skill, "certified")
+        conn.commit()
+    return {
+        "added": len(bank.skills) - before,
+        "reconciled": len(approved),
+        "bank_skill_count": len(bank.skills),
+    }
+
+
 # ---------------------------------------------------------------- /  (HTML)
 
 @pages_router.get("/", response_class=HTMLResponse)
@@ -902,6 +975,20 @@ async def onboarding_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "onboarding.html",
+        {"version": __version__},
+    )
+
+
+@pages_router.get("/reconcile", response_class=HTMLResponse)
+async def reconcile_page(request: Request) -> HTMLResponse:
+    """The interactive skill-reconciliation conversation (spec §7b, 7/M).
+    Surfaces JD-demanded skills the fact bank lacks; the user checks the
+    ones they actually have and confirms — the only path that mutates the
+    bank, and it's additive."""
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request,
+        "reconcile.html",
         {"version": __version__},
     )
 

@@ -82,10 +82,15 @@ av3 prune [--ephemeral-days N] [--events-days N]
 av3 update [--exit-code]          # check the GitHub release feed; prompt if newer (no auto-replace)
 av3 survey                        # multi-ATS CAPTCHA-presence survey (dry-run, never submits)
 
+# Interview prep (on-demand extras; local LLM, zero egress)
+av3 stories generate <job_id>     # 3 STAR+R stories from the fact bank, tailored to that job
+av3 stories list | export         # browse / render the accumulated story bank (story_bank.json/.md)
+av3 research <company> [--source-file F] [--show]   # grounded briefing from PASTED material (never fetches)
+
 # Tests
 pip install -e ".[v3,dev]"
-pytest tests_v3/                  # 612 green / 11 deselected (live smoke/eval/integration markers)
-pytest tests_v3/test_apply_worker.py -k name
+pytest tests/                     # 889 green / 11 deselected (live smoke/eval/integration markers)
+pytest tests/test_apply_worker.py -k name
 
 # Build the standalone executable (PyInstaller; build-host tool, not a runtime dep)
 pip install pyinstaller && python build_v3.py     # → dist/AutoApplierV3
@@ -107,7 +112,9 @@ selector drift — the #1 v2 bug source).
 - **`db/`** — SQLite engine + `schema.sql` + repositories. `app.db` holds jobs / job_scores / applications /
   skill_gaps / answers. **SQLite is the system of record; CSV is an export format.**
 - **`domain/`** — pure dataclasses + the **job state machine** (`state.py`, one allowed-transitions table).
-- **`llm/`** — router (Ollama→Gemini→rule, ported from v2), `complete`, `embed` (nomic-embed-text), prompts.
+- **`llm/`** — `complete` (local Ollama only; the Gemini cloud tier was removed 2026-06-09 — retired model +
+  local-first design), `embed` (nomic-embed-text), versioned `prompts` (score / résumé / cover letter /
+  STAR stories / company research).
 - **`scoring`** lives across `llm/` + `pipeline/score_worker.py` — 7 weighted axes, JD vs the master profile.
 - **`resume/`** — `factbank` (the single master fact bank), `generate` (per-job résumé), `guard` (fabrication
   guard, fail-closed to REVIEW), `render` (ATS-safe single-column PDF), `answer_resolver` (two-tier: semantic
@@ -123,7 +130,11 @@ selector drift — the #1 v2 bug source).
   queue + `MirrorPolicy`, the relay `client` (drainer), and the `diagnostics` tarball builder.
 - **`web/`** — FastAPI app + Alpine.js dashboard (live pipeline, review queue, login-needed badges, history),
   SSE event feed, `ControlState` (manual / F6 hotkey / idle-detect), headed-browser launcher for
-  login-on-demand + assisted submit, the onboarding wizard, and the one-click `launch`.
+  login-on-demand + assisted submit, the onboarding wizard, the `/reconcile` skill-reconciliation
+  conversation, and the one-click `launch`. Branded (7/M): tokenized light/dark palette, no build step.
+- **`research.py`** — on-demand grounded company briefings from user-pasted material (`av3 research`);
+  **`resume/story_bank.py`** — STAR+R interview story bank from the fact bank (`av3 stories`). Both local
+  LLM, zero egress, never called by the pipeline.
 - **`doctor.py`** — preflight checks (config, app.db, events.db, LLM reachable, backups recent, relay
   reachable). Each returns a `CheckResult(PASS|WARN|FAIL)` with a `fix` hint; exits non-zero on any FAIL.
 - **`update.py`** — GitHub Releases version check (check + prompt, never auto-replace).
@@ -184,9 +195,12 @@ GitHub release feed and prompts (no in-place auto-replace in v3.0).
 - `events.db` — the observability spine + the `mirror_queue` table (higher write rate, pruned on a shorter
   window).
 - `profile/master.json` — the master fact bank (contact, work history, skills, work-auth, optional EEO).
-- `user_config.json` — typed settings (targeting, telemetry, scheduler, web, scoring weights). `.env` holds
-  secrets (`GEMINI_API_KEY`) — never in the JSON.
+- `user_config.json` — typed settings (targeting, telemetry, scheduler, web, scoring weights). `.env` is
+  still loaded for any future secrets — never put one in the JSON. (No secret keys today; the pipeline is
+  fully local.)
 - `artifacts/` — generated résumés / cover letters (files; the DB stores paths).
+- `shortlist/` — saved manual-apply shortlists (`av3 shortlist` → .md + .json views).
+- `story_bank.json` / `research/` — interview-prep extras (`av3 stories` / `av3 research`).
 - `browser_profile/` — one persistent shared Chrome profile across all sites.
 - `.backups/` — rotated SQLite snapshots. `diagnostics-<ts>.tar.gz` — support bundles.
 
@@ -203,7 +217,7 @@ source of truth); ephemera (SKIPPED/FILTERED) and events prune on configurable w
 - **Add scrollbars / good contrast** to any web UI panel that can overflow; the dashboard is keyboard-navigable.
 - **Original résumé files are never modified.** Generation writes to `artifacts/`; evolution proposes
   fact-bank additions the user approves.
-- **Tests live in `tests_v3/`.** Keep them green; document durable findings in the `auto-applier` skill's
+- **Tests live in `tests/`.** Keep them green; document durable findings in the `auto-applier` skill's
   `research/` before calling a task done.
 
 ## Legacy v2 — deleted (history only)

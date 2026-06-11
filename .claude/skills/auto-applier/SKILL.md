@@ -12,9 +12,11 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
 ## Context
 
 - **v3 is a ground-up rewrite** (decided 2026-05-26). v2 code = lessons, **not** a base to extend.
-- **v3.0-core (phases 0–5) is COMPLETE (2026-05-29).** 612 tests green. Remaining work is v3.1 (Phase 6):
-  strategy profiles, salary intelligence, outcome feedback loop, interactive skill-reconciliation, rich
-  analytics, branded UI polish. See spec §11b Phase 6 + the "scope split" table.
+- **v3.0-core (phases 0–5) COMPLETE (2026-05-29); Phase 6 / v3.1 COMPLETE (2026-06-11).** 889 tests green.
+  All planned sub-phases shipped — strategy profiles, salary intelligence, outcome feedback loop,
+  reconciliation (CLI + the `/reconcile` web conversation), learn trends, branded UI, story bank, company
+  research, plus the manual/human-apply mode. **There is no planned backlog**; new work is new scope —
+  see spec §11b for the shipped record.
 - **`CLAUDE.md` is now v3-first** (rewritten in Phase 5 6/M); it describes the `av3/` package directly.
 - Repo: this checkout's root (the `Auto Applier` working tree).
 - **The spec** (authoritative): `docs/v3-architecture.md`. Every design decision and its rationale lives there.
@@ -35,7 +37,7 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
 | Phase 3 pipeline staging (embedding pre-filter, score/optimize workers, scheduler) | `research/pipeline-staging.md` |
 | Phase 4 web UI + worker service (FastAPI, SchedulerService, dashboard, onboarding) | `research/web-ui-and-service.md` |
 | Phase 5 observability CLI (errors/stats) + telemetry mirror + relay + installer | `research/observability-and-distribution.md` |
-| Phase 6 / v3.1 sub-phases — per-job résumé rewire, strategy profiles, salary intel, feedback loop, analytics | `research/phase6-v3.1.md` |
+| Phase 6 / v3.1 sub-phases — per-job résumé rewire, strategy profiles, salary intel, feedback loop, analytics, branded UI + `/reconcile`, story bank, company research | `research/phase6-v3.1.md` |
 | Prior art — other auto-apply tools/repos, methodologies, what we adopt + smoketests (reCAPTCHA v3 score, JobSpy) | `research/prior-art-and-methodology.md` |
 | ATS market share by segment + what tier v3 can reach + source prioritization | `research/ats-market-landscape.md` |
 | How to stop résumé fabrication (the guard) | `research/fabrication-guard.md` |

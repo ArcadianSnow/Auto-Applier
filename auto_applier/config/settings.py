@@ -335,6 +335,16 @@ class Settings(BaseModel):
         return self.data_dir / "shortlist"
 
     @property
+    def story_bank_path(self) -> Path:
+        """STAR+R interview story bank (``av3 stories`` — file-grain prep library)."""
+        return self.data_dir / "story_bank.json"
+
+    @property
+    def research_dir(self) -> Path:
+        """Company-research briefings (``av3 research`` — md + json per company)."""
+        return self.data_dir / "research"
+
+    @property
     def browser_profile_dir(self) -> Path:
         """One persistent shared Chrome profile across all sites (spec §8c)."""
         return self.data_dir / "browser_profile"

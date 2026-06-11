@@ -264,3 +264,94 @@ with an instant clock). Suite 726 → **734 passed**, 11 deselected.
 **GOTCHAS.** (1) `Edit` on `cli/main.py` requires a Read-tool open first (Grep is not enough). (2) The §8a CLI
 line is in `cli/main.py`, not a worker_cmds file. (3) `.gitignore` ignores only `.claude/unstuck/` — this
 research dir IS git-tracked.
+
+---
+
+## (9/M) STAR+R story bank + (10/M) company research — DONE (2026-06-11)
+
+The "optional extras" pair from spec §11 ("keep story bank + company research", on-demand only). Both are
+v2 ports (the v2 sources live at git `5e674e6^` — `auto_applier/resume/story_bank.py` and
+`auto_applier/analysis/research.py`), rebuilt on the v3 grain rather than copied:
+
+**What changed in the port (the v3-grain deltas):**
+- **Path-injected, no globals.** v2 read module-level `DATA_DIR`/`RESEARCH_DIR` constants; v3 takes the
+  path as an argument and `Settings` grew `story_bank_path` (`data_dir/story_bank.json`) and
+  `research_dir` (`data_dir/research/`) derived properties.
+- **Stories generate from the FACT BANK, not raw résumé text.** v2 fed `resume_text[:3500]`; v3 feeds
+  `build_bank_facts(bank)` + `format_allowed_metrics(bank)` (the §6b generation helpers) so the same
+  fabrication rule as résumé generation applies — every metric must trace to `allowed_metrics`.
+- **LLM = the v3 `CompletionClient` protocol** (`build_default(settings)`, Ollama-only) instead of v2's
+  `LLMRouter`; prompts are versioned `PromptTemplate`s in `llm/prompts.py` (`star-stories-v1`,
+  `company-research-v1`) and registered in `ALL_TEMPLATES` for the eval harness.
+- **`utcnow_iso` from `domain/models.py`** (not inline datetime), `normalize` from `domain/dedup.py`
+  (v2's `normalize_company` doesn't exist in v3).
+
+**Behavioral contracts kept from v2 (they were right):**
+- Generation/research **never raise** — `[]` / `None` on any failure, with an INFO/WARNING log explaining
+  why (a prep nicety must not crash a session). Every empty return logs its reason.
+- Stories require ALL five STAR+R segments non-empty or the story is dropped.
+- Research refuses empty source material ("refusing to invent") and rejects a reply whose
+  `what_they_do` is empty/"not in source" — an all-empty shell never persists.
+- Story bank is **append-only** from generation; the user prunes by editing the file.
+- Briefings save **md + json side-by-side** (md for reading, json for reload).
+
+**CLI:** `av3 stories generate <job_id> | list | export [--out P]` (a click sub-group — first one in the
+CLI; the flat-command pattern didn't fit 3 actions on one noun) and `av3 research <company>
+[--source-file F | stdin] [--show]`. Both follow the `learn`/`reconcile` conventions: missing fact bank /
+unknown job / missing file → exit 2; LLM-produced-nothing → exit 1.
+
+**Zero-egress note (the design question for research):** v2's "company research" already took *pasted*
+source material rather than scraping — which is exactly what made it portable to v3's zero-egress rule.
+The LLM is local Ollama; nothing fetches. If a future version wants auto-fetch, that's an opt-in egress
+decision to take consciously (same shape as the §8d market-data adapter).
+
+**Tests** (+43 with the CLI contract file): `test_story_bank.py` (persistence round-trip, corrupt-file,
+unknown-key tolerance, append semantics, generation parse/filter/malformed/failure, prompt carries bank
+facts + JD, markdown export), `test_research.py` (path normalization, save/load round-trip, corrupt json,
+"not in source" honesty paths, non-list tolerance), `test_cli_stories_research.py` (generate happy path +
+all exit codes, list/export, research save/show/stdin/missing-file/LLM-failure). CLI tests stub
+`StoryGenerator.generate` / `CompanyResearcher.research` via monkeypatch — no Ollama needed.
+
+---
+
+## (7/M) branded UI polish + interactive reconciliation conversation — DONE (2026-06-11)
+
+The last Phase 6 sub-phase. Two halves:
+
+**Interactive skill-reconciliation (spec §7b's "conversation", web form).** The CLI loop from (5/M),
+reshaped as a conversation surface:
+- `GET /api/reconcile/proposals?min_count=N` — `build_proposals` over `SkillGapRepo` + the live bank
+  (pure read; returns proposals + `bank_skill_count`).
+- `POST /api/reconcile/scan` — `record_batch_gaps` over `JobRepo.list_all_with_description()`
+  (gather-only; writes the gap table, never the bank).
+- `POST /api/reconcile/apply` — the gated act: validates `{skills: [str]}` strictly (400 on any other
+  shape — the bank must be unreachable via a malformed payload), `apply_proposals` (additive,
+  case-insensitive dedupe) + `save_fact_bank` + `set_status(skill, "certified")`.
+- `/reconcile` page: Alpine.js component INLINE in the template (app.js stays dashboard-only; the
+  onboarding-style separate .js file is overkill for one component). Checkbox list ordered by demand
+  count, min-count filter, scan button, "Add N to fact bank" — disabled until something is checked. The
+  conversation shape: app surfaces → user confirms what they actually have → only that mutates the bank.
+
+**Branding (spec §10 "polished & branded, accessible").** Deliberately a token-layer change, not a
+redesign: brand mark (square "A" tile, inline-SVG favicon — no asset file), sticky topbar + pill nav
+(Dashboard / Skills / Onboarding), `--accent-soft`/`--radius`/`--shadow` tokens, refreshed light+dark
+palettes (same contrast posture), local-first footer tagline. Still system fonts, no build step, no new
+dependencies; keyboard nav / focus-visible outlines / prefers-color-scheme all preserved. Verified
+visually (Playwright screenshots of `/` and `/reconcile` against a live `av3 serve --no-scheduler`).
+
+**Tests** (`test_web_reconcile.py`, +12): proposals shape/filtering/in-bank exclusion, scan records gaps,
+apply additive + certifies + case-insensitive dedupe, 400-payload table (bank untouched on every reject),
+page renders, nav carries the link.
+
+**GOTCHA:** `WebState.app_conn()` is a context manager yielding a short-lived connection — `conn.commit()`
+must happen INSIDE the `with` block (scan/apply do).
+
+---
+
+## Phase 6 — COMPLETE (2026-06-11)
+
+All sub-phases shipped: (1/M) résumé-path rewire, (2/M)+(8/M) strategy profiles, (3/M) salary
+intelligence, (4/M) outcome feedback loop, (5/M)+(6/M) reconciliation + learn trends, (7/M) branded UI +
+web reconciliation, (9/M) story bank, (10/M) company research. Full suite **889 green**, 11 deselected by
+design. The lone §12 open question (market-data source) is resolved as the opt-in adapter from (3/M).
+No deferred remainder — future work is new scope, not Phase 6 leftovers.

@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}Skills &mdash; av3{% endblock %}
+{% block content %}
+  <div x-data="reconcile()" x-init="load()" class="reconcile">
+
+    <p><a href="/">&larr; Dashboard</a></p>
+
+    <section class="card">
+      <h1>Skill reconciliation</h1>
+      <p>
+        These are skills the stored job descriptions keep asking for that your
+        fact bank doesn't list. Check the ones you <strong>actually have</strong>
+        and confirm &mdash; they're added to the bank (additively; nothing is ever
+        removed) so future r&eacute;sum&eacute;s and scores can use them. Skills
+        you don't have stay listed: they're your what-to-learn signal
+        (<code>av3 learn</code>).
+      </p>
+      <p class="action-row">
+        <button class="secondary-btn" :disabled="busy" @click="scan()"
+                title="Re-scan every stored job description for demanded skills (read-only on the fact bank)">
+          Scan stored JDs
+        </button>
+        <span class="muted small" x-show="scanNote" x-text="scanNote"></span>
+      </p>
+      <p class="muted small">
+        Fact bank currently lists <strong x-text="bankCount"></strong> skills.
+      </p>
+    </section>
+
+    <template x-if="loading">
+      <p class="muted">Loading proposals...</p>
+    </template>
+
+    <template x-if="error">
+      <section class="card">
+        <h2>Couldn't load proposals</h2>
+        <p class="muted" x-text="error"></p>
+      </section>
+    </template>
+
+    <template x-if="!loading && !error">
+      <section class="card">
+        <h2>Proposals
+          <span class="count" x-text="proposals.length"></span>
+        </h2>
+        <p class="muted" x-show="proposals.length === 0">
+          No open skill gaps. Click "Scan stored JDs" to surface skills from the
+          jobs the pipeline has collected.
+        </p>
+        <div x-show="proposals.length > 0">
+          <label class="reconcile-filter">
+            Minimum JD demand
+            <input type="number" min="1" x-model.number="minCount"
+                   @change="load()" />
+          </label>
+          <ul class="proposal-list">
+            <template x-for="p in proposals" :key="p.skill">
+              <li>
+                <label>
+                  <input type="checkbox" :value="p.skill" x-model="selected" />
+                  <span class="proposal-skill" x-text="p.skill"></span>
+                  <span class="proposal-count muted"
+                        x-text="`${p.count} JD${p.count === 1 ? '' : 's'}`"></span>
+                </label>
+              </li>
+            </template>
+          </ul>
+          <p class="action-row">
+            <button class="primary-btn"
+                    :disabled="busy || selected.length === 0"
+                    @click="applySelected()"
+                    title="Insert the checked skills into the fact bank (additive)">
+              Add <span x-text="selected.length"></span> to fact bank
+            </button>
+            <span class="muted small" x-show="applyNote" x-text="applyNote"></span>
+          </p>
+          <p class="muted small">
+            Only add a skill you can speak to in an interview &mdash; the fact
+            bank is the fabrication guard's source of truth.
+          </p>
+        </div>
+      </section>
+    </template>
+
+  </div>
+{% endblock %}
+{% block scripts %}
+  <script>
+    function reconcile() {
+      return {
+        loading: true,
+        busy: false,
+        error: "",
+        proposals: [],
+        selected: [],
+        bankCount: 0,
+        minCount: 1,
+        scanNote: "",
+        applyNote: "",
+
+        async load() {
+          this.loading = true;
+          this.error = "";
+          try {
+            const r = await fetch(`/api/reconcile/proposals?min_count=${this.minCount}`);
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const data = await r.json();
+            this.proposals = data.proposals;
+            this.bankCount = data.bank_skill_count;
+            // Drop selections that no longer exist as proposals.
+            const open = new Set(this.proposals.map((p) => p.skill));
+            this.selected = this.selected.filter((s) => open.has(s));
+          } catch (e) {
+            this.error = String(e);
+          } finally {
+            this.loading = false;
+          }
+        },
+
+        async scan() {
+          this.busy = true;
+          this.scanNote = "";
+          try {
+            const r = await fetch("/api/reconcile/scan", { method: "POST" });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const data = await r.json();
+            this.scanNote = `scanned ${data.scanned} jobs, ${data.bumps} gap bumps`;
+            await this.load();
+          } catch (e) {
+            this.scanNote = `scan failed: ${e}`;
+          } finally {
+            this.busy = false;
+          }
+        },
+
+        async applySelected() {
+          if (this.selected.length === 0) return;
+          this.busy = true;
+          this.applyNote = "";
+          try {
+            const r = await fetch("/api/reconcile/apply", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ skills: this.selected }),
+            });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const data = await r.json();
+            this.applyNote =
+              `added ${data.added} skill(s); bank now lists ${data.bank_skill_count}`;
+            this.selected = [];
+            await this.load();
+          } catch (e) {
+            this.applyNote = `apply failed: ${e}`;
+          } finally {
+            this.busy = false;
+          }
+        },
+      };
+    }
+  </script>
+{% endblock %}

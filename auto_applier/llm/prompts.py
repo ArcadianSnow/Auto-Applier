@@ -151,14 +151,97 @@ GENERATE_COVER_LETTER = PromptTemplate(
 )
 
 
-#: All Phase-3 templates exported here so the eval harness ((7/M)) can iterate them.
-ALL_TEMPLATES: tuple[PromptTemplate, ...] = (SCORE_JD, GENERATE_RESUME, GENERATE_COVER_LETTER)
+# ============================================================ STAR+R stories (spec §11 Phase 6 extras)
+
+STAR_STORIES = PromptTemplate(
+    version="star-stories-v1",
+    system=(
+        "You prepare a candidate for interviews by writing 3 short STAR+Reflection "
+        "stories tailored to one specific job. Each story is built ONLY from facts in "
+        "the candidate's structured fact bank — the same fabrication rule as résumé "
+        "generation applies: you may select, recombine, and rephrase bank facts, but "
+        "you MUST NOT invent a company, title, date, credential, skill, or numeric "
+        "metric that is not in the bank. The candidate must recognize every story as "
+        "their own when they read it back during interview prep.\n\n"
+        "Output ONE JSON object with this exact shape and nothing else (no prose, no "
+        "code fences, no preamble):\n"
+        '{\n'
+        '  "stories": [\n'
+        '    {\n'
+        '      "title": str,            // short memorable handle, e.g. "The silent billing failure"\n'
+        '      "question_prompt": str,  // the behavioral question this story answers\n'
+        '      "situation": str,        // 1-2 sentences of context, from bank facts\n'
+        '      "task": str,             // what needed doing\n'
+        '      "action": str,           // what the candidate did (bank facts only)\n'
+        '      "result": str,           // outcome; every number must trace to allowed_metrics\n'
+        '      "reflection": str        // what they learned / would do differently\n'
+        '    },\n'
+        '    ...\n'
+        '  ]\n'
+        '}\n\n'
+        "Rules:\n"
+        "  - Exactly 3 stories, each targeting a different competency the job "
+        "description signals (e.g. ownership, debugging under pressure, stakeholder work).\n"
+        "  - Every $/% metric or 'team of N' scale claim MUST appear in the allowed "
+        "metrics list. If no metric supports a result, describe the outcome "
+        "qualitatively instead of inventing a number.\n"
+        "  - If the bank has no material for a competency, pick a different competency "
+        "rather than inventing material."
+    ),
+    template=(
+        "Candidate fact bank (the ONLY source of truth):\n{bank_facts}\n\n"
+        "Allowed metrics (every number used MUST trace to one of these):\n{allowed_metrics}\n\n"
+        "Job:\n  Company: {company}\n  Title: {title}\n\n"
+        "Job description:\n{job_description}"
+    ),
+)
+
+
+# ============================================================ company research (spec §11 Phase 6 extras)
+
+COMPANY_RESEARCH = PromptTemplate(
+    version="company-research-v1",
+    system=(
+        "You produce a grounded interview-prep briefing about a company from source "
+        "material the user pasted in (career-page text, news articles, reviews, their "
+        "own notes). You MUST stay within the source material — if it doesn't support "
+        "a claim, omit the claim. For a section with no supporting material, return "
+        "an empty list (or the literal string \"not in source\" for the prose field). "
+        "A grounded gap beats an invented fact.\n\n"
+        "Output ONE JSON object with this exact shape and nothing else (no prose, no "
+        "code fences, no preamble):\n"
+        '{\n'
+        '  "what_they_do": str,             // 2-3 sentences, or "not in source"\n'
+        '  "tech_stack_signals": [str, ...],// technologies/practices the source mentions\n'
+        '  "culture_signals": [str, ...],   // working style / values signals\n'
+        '  "red_flags": [str, ...],         // concerns visible in the source\n'
+        '  "questions_to_ask": [str, ...],  // sharp questions grounded in the source\n'
+        '  "talking_points": [str, ...]     // angles the candidate can raise\n'
+        '}'
+    ),
+    template=(
+        "Company: {company_name}\n\n"
+        "Source material (the ONLY thing you may draw from):\n{source_material}"
+    ),
+)
+
+
+#: All templates exported here so the eval harness can iterate them.
+ALL_TEMPLATES: tuple[PromptTemplate, ...] = (
+    SCORE_JD,
+    GENERATE_RESUME,
+    GENERATE_COVER_LETTER,
+    STAR_STORIES,
+    COMPANY_RESEARCH,
+)
 
 
 __all__ = [
     "ALL_TEMPLATES",
+    "COMPANY_RESEARCH",
     "GENERATE_COVER_LETTER",
     "GENERATE_RESUME",
     "SCORE_JD",
+    "STAR_STORIES",
     "PromptTemplate",
 ]

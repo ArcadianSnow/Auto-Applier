@@ -1,41 +1,45 @@
-/* Auto Applier v3 dashboard — Phase 4 (1/M)+(2/M).
+/* Auto Applier v3 dashboard — Phase 4 (1/M)+(2/M); branded polish Phase 6 (7/M).
  *
- * "Clean/functional, keyboard-navigable, good contrast" per spec §10.
- * Branded polish is deferred to v3.1. System font stack so we don't ship a
- * webfont; respects prefers-color-scheme so the dashboard isn't blindingly
- * bright on a night-running runner box.
- *
- * No build step — this file is hand-written and served as-is.
+ * "Clean/functional, keyboard-navigable, good contrast" per spec §10, with the
+ * v3.1 branded layer on top: one accent family (deep ink-blue), a square brand
+ * mark, tokenized radii/shadows. Still system font stack (no webfont, no build
+ * step) and still respects prefers-color-scheme so the dashboard isn't
+ * blindingly bright on a night-running runner box.
  */
 
 :root {
-  --fg: #1c1c1c;
-  --fg-muted: #555;
-  --bg: #fafafa;
+  --fg: #1a1d23;
+  --fg-muted: #51565f;
+  --bg: #f6f7f9;
   --bg-elev: #ffffff;
-  --bg-soft: #f1f1f1;
-  --border: #d8d8d8;
+  --bg-soft: #eceef2;
+  --border: #d5d9e0;
   --accent: #1f4f8f;
+  --accent-soft: rgba(31, 79, 143, 0.10);
   --ok: #1e7d3a;
-  --warn: #b85c00;
+  --warn: #a85400;
   --err: #b21e1e;
-  --muted: #8a8a8a;
+  --muted: #80858e;
+  --radius: 8px;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --fg: #eaeaea;
-    --fg-muted: #aaa;
-    --bg: #121212;
-    --bg-elev: #1c1c1c;
-    --bg-soft: #242424;
-    --border: #333;
+    --fg: #e8eaed;
+    --fg-muted: #a6abb4;
+    --bg: #111318;
+    --bg-elev: #1a1d24;
+    --bg-soft: #232730;
+    --border: #333845;
     --accent: #6aa7e8;
+    --accent-soft: rgba(106, 167, 232, 0.14);
     --ok: #4cc46a;
     --warn: #e89a4c;
     --err: #e87474;
-    --muted: #888;
+    --muted: #828896;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
   }
 }
 
@@ -53,24 +57,53 @@ html, body {
   display: flex;
   align-items: center;
   gap: 1.5rem;
-  padding: 0.7rem 1.4rem;
+  padding: 0.6rem 1.4rem;
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
   font-weight: 600;
   font-size: 1.05rem;
   text-decoration: none;
   color: var(--fg);
 }
-.nav { display: flex; gap: 1rem; margin-left: auto; }
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 1rem;
+  line-height: 1;
+}
+.brand-ver {
+  font-weight: 400;
+  font-size: 0.8em;
+  color: var(--fg-muted);
+}
+.nav { display: flex; gap: 0.3rem; margin-left: auto; }
 .nav a {
   color: var(--fg-muted);
   text-decoration: none;
-  padding: 0.2rem 0.4rem;
-  border-radius: 4px;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
 }
-.nav a:hover, .nav a:focus-visible {
+.nav a:hover {
+  color: var(--fg);
+  background: var(--accent-soft);
+}
+.nav a:focus-visible {
   color: var(--fg);
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -82,7 +115,8 @@ html, body {
 .card {
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
   padding: 1rem 1.2rem;
   margin-bottom: 1.2rem;
 }
@@ -517,3 +551,56 @@ pre.jd {
   max-height: 30rem;
   overflow-y: auto;
 }
+
+/* ---------------- skill reconciliation (7/M) ---------------- */
+.reconcile { max-width: 760px; margin: 0 auto; }
+.reconcile-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  margin-bottom: 0.6rem;
+}
+.reconcile-filter input {
+  width: 4.5rem;
+  padding: 0.25rem 0.45rem;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.reconcile-filter input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.proposal-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.7rem;
+  max-height: 24rem;
+  overflow-y: auto;
+  border: 1px solid var(--bg-soft);
+  border-radius: 6px;
+}
+.proposal-list li { border-bottom: 1px solid var(--bg-soft); }
+.proposal-list li:last-child { border-bottom: 0; }
+.proposal-list label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.45rem 0.7rem;
+  cursor: pointer;
+}
+.proposal-list label:hover { background: var(--accent-soft); }
+.proposal-list input[type="checkbox"] {
+  accent-color: var(--accent);
+  align-self: center;
+}
+.proposal-list input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.proposal-skill { font-weight: 500; flex: 1; }
+.proposal-count { font-size: 0.85rem; font-variant-numeric: tabular-nums; }

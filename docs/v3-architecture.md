@@ -330,7 +330,11 @@ operation the *default mode*, not a `--continuous` flag:
 > `SkillGapRepo`; `build_proposals` ranks gaps; `apply_proposals` additively inserts into the bank) +
 > `av3 reconcile [--scan] [--min-count N] [--apply "s1,s2"]`. Preview is read-only; **`--apply` is the only
 > fact-bank mutation and is additive + user-named** (Rule 2.6 — the bank is the fabrication-guard source of
-> truth). The interactive web conversation is deferred to (7/M) branded UI. See `research/phase6-v3.1.md` §(5/M).
+> truth). See `research/phase6-v3.1.md` §(5/M).
+>
+> **Status (Phase 6 7/M, 2026-06-11):** the **interactive web conversation is LIVE** — `/reconcile` page +
+> `/api/reconcile/{proposals,scan,apply}`. Same contract as the CLI: surface → user checks the skills they
+> actually have → confirm is the only bank mutation (additive). See `research/phase6-v3.1.md` §(7/M).
 
 v3 works in **batches**, not one-job-at-a-time: discovery producers fill the queue across all sources, then
 a batch is scored and résumés generated together. An **optional skill-reconciliation checkpoint** sits
@@ -566,7 +570,9 @@ Claude session debug straight from SQL — no log files.
   confirmation status). **v3.1 surfaces:** rich **analytics** (funnel, per-source success rates, skill-gap
   "what to learn next" trends), strategy-profile controls, and **branded** visual polish (use the
   `frontend-design` skill). v3.0 UI is **clean/functional**, keyboard-navigable, good contrast. One-click
-  launcher starts the server and opens the tab.
+  launcher starts the server and opens the tab. *(Status 2026-06-11: branded polish + the `/reconcile`
+  conversation shipped in Phase 6 (7/M); analytics/learn trends live as CLI `av3 analytics` / `av3 learn` —
+  their web panels remain a nice-to-have, not a planned gap.)*
 
 ---
 
@@ -721,8 +727,25 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
     `ApplyWorker` gained a `rotation_clock` ctor param + `ApplyRunSummary.rotated`; `run_once` softly defers
     once a source's budget elapses. `av3 apply` line gained `deferred=`/`rotated=`. +8 tests (full suite
     **734 green**). **Phase 6 core complete.**
-  - **Remaining (optional extras only, spec §11 deferrable):** story bank + on-demand company research;
-    branded UI polish (incl. the interactive reconciliation conversation).
+  - **(7/M) branded UI polish + interactive reconciliation conversation. ✅ DONE (2026-06-11).** Brand layer
+    on the dashboard (mark + sticky topbar + pill nav + tokenized radii/shadows/accent-soft, favicon,
+    local-first footer tagline; system fonts, no build step, dark mode + keyboard nav preserved) and the
+    §7b **interactive skill-reconciliation conversation** as a web surface: `/reconcile` page (Alpine.js) +
+    `GET /api/reconcile/proposals` / `POST /api/reconcile/scan` / `POST /api/reconcile/apply` — surface
+    gaps, user checks the skills they actually have, confirm is the only fact-bank mutation (additive,
+    Rule 2.6). +12 tests.
+  - **(9/M) STAR+R interview story bank. ✅ DONE (2026-06-11).** v2 port, rebuilt on the v3 grain:
+    `auto_applier/resume/story_bank.py` generates 3 stories per job from the **fact bank** (not raw résumé
+    text — same fabrication rule as generation) via local Ollama; append-only `story_bank.json` under the
+    data dir; `av3 stories generate <job_id> | list | export`. On-demand only — nothing in the pipeline
+    calls it. +24 tests.
+  - **(10/M) on-demand company research. ✅ DONE (2026-06-11).** v2 port: `auto_applier/research.py` builds a
+    grounded briefing (what-they-do / tech-stack / culture / red-flags / questions / talking-points) from
+    **user-pasted** source material via local Ollama — "not in source" beats invention; zero egress by
+    construction. Saved md+json under `research/`; `av3 research <company> [--source-file F | stdin]
+    [--show]`. +19 tests.
+  - **Phase 6 COMPLETE (2026-06-11, full suite 889 green).** All planned v3.1 sub-phases shipped; no
+    deferred remainder.
 
 ---
 
@@ -780,7 +803,10 @@ Findings live in `.claude/skills/auto-applier/research/`. Summary:
 - ~~Work-auth handling?~~ **RESOLVED:** captured explicitly in onboarding, no silent default (§6b, §8d).
 - ~~Salary fields?~~ **RESOLVED:** salary intelligence (user range + posted range + BLS OES market data) + comp filter that skips below-floor jobs (§8d).
 - ~~Fact-bank merge conflicts?~~ **RESOLVED:** keep all variants, user picks canonical in onboarding review (§6b).
-- Market-data source beyond BLS OES (Adzuna key? acceptable scope) — confirm before building §8d's salary module.
+- ~~Market-data source beyond BLS OES (Adzuna key? acceptable scope)?~~ **RESOLVED (Phase 6 3/M):** market
+  data is a pluggable, **opt-in** `MarketDataSource` adapter, default `"none"` (zero egress); the
+  recommendation math runs fully locally on posted-range + user-range. Any concrete adapter (BLS OES,
+  Adzuna) is a future opt-in entry in `build_market_source` — never a silent default (§8d).
 - ~~Data at rest?~~ **RESOLVED:** OS disk encryption + strict file perms (not app-level DB encryption — key paradox); field-level optional later (§4).
 - ~~Doctor scope?~~ **RESOLVED:** LLM reachable, DB writable+backups, logins valid, browser/disk/relay ready (§3).
 - ~~Prompt/model management?~~ **RESOLVED:** versioned prompt files + config model presets, eval-gated, not user-editable (§10).
