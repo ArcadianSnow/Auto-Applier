@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Copilot &mdash; av3{% endblock %}
+{% block content %}
+  <div x-data="copilot()" class="copilot">
+
+    <p><a href="/">&larr; Dashboard</a></p>
+
+    <section class="card">
+      <h1>Application copilot</h1>
+      <p>
+        Paste a screener question and get an <strong>honest</strong>, fact-bank-grounded
+        answer: verdict, paste-ready text, reasoning, and an overclaim check. A "yes" the
+        deterministic audit can't back with your fact bank <strong>fails closed to
+        review</strong> &mdash; the copilot won't overclaim on your behalf. Sensitive
+        questions (work auth, sponsorship, EEO, salary) are answered from your explicit
+        settings, never the model.
+      </p>
+      <label class="copilot-field">
+        Question
+        <textarea rows="3" x-model="question"
+                  placeholder="e.g. Have you led an implementation of Debezium or another CDC event tracking system?"></textarea>
+      </label>
+      <label class="copilot-field copilot-job">
+        Job id (optional &mdash; adds the job's title/location/JD as context)
+        <input type="text" x-model.trim="jobId" placeholder="e.g. e39ec5ba3968..." />
+      </label>
+      <p class="action-row">
+        <button class="primary-btn" :disabled="busy || !question.trim()" @click="ask()">
+          <span x-show="!busy">Ask</span><span x-show="busy">Thinking...</span>
+        </button>
+        <span class="muted small" x-show="error" x-text="error"></span>
+      </p>
+    </section>
+
+    <template x-if="answer">
+      <section class="card" :class="answer.needs_review ? 'copilot-review' : ''">
+        <h2>
+          <span class="status-pill" :class="verdictPill()" x-text="answer.verdict"></span>
+          <span class="muted small" x-show="answer.source !== 'llm'"
+                x-text="`(${answer.source} — deterministic, not the model)`"></span>
+        </h2>
+        <p x-show="answer.short_answer">
+          <strong>Short answer:</strong> <span x-text="answer.short_answer"></span>
+        </p>
+        <div x-show="answer.long_answer">
+          <p class="muted small">Paste-ready answer (copy from here):</p>
+          <pre class="copilot-answer" x-text="answer.long_answer"></pre>
+        </div>
+        <p x-show="answer.reasoning" class="muted">
+          <strong>Why:</strong> <span x-text="answer.reasoning"></span>
+        </p>
+        <p x-show="answer.overclaim_risk && answer.overclaim_risk !== 'none'">
+          <strong>Overclaim risk:</strong>
+          <span class="status-pill"
+                :class="answer.overclaim_risk === 'high' ? 'pill-review' : ''"
+                x-text="answer.overclaim_risk"></span>
+          <span class="muted" x-show="answer.risk_note" x-text="answer.risk_note"></span>
+        </p>
+        <p x-show="answer.unsupported_evidence && answer.unsupported_evidence.length">
+          <strong>Claims NOT in your fact bank:</strong>
+          <span class="muted" x-text="answer.unsupported_evidence.join('; ')"></span>
+        </p>
+        <p x-show="answer.framing" class="muted">
+          <strong>Interview framing:</strong> <span x-text="answer.framing"></span>
+        </p>
+        <p x-show="answer.gaps && answer.gaps.length" class="muted">
+          <strong>Gaps to learn:</strong> <span x-text="answer.gaps.join(', ')"></span>
+        </p>
+        <template x-for="note in (answer.audit_notes || [])" :key="note">
+          <p class="copilot-note" x-text="'! ' + note"></p>
+        </template>
+        <p class="muted small">
+          Advisory only. Nothing here is submitted anywhere; copy what you trust into the
+          form yourself. To bank a vetted answer for the form resolver, use
+          <code>av3 ask "..." --save</code>.
+        </p>
+      </section>
+    </template>
+
+  </div>
+{% endblock %}
+{% block scripts %}
+  <script>
+    function copilot() {
+      return {
+        question: "",
+        jobId: "",
+        busy: false,
+        error: "",
+        answer: null,
+
+        verdictPill() {
+          const v = this.answer?.verdict;
+          if (v === "yes") return "pill-applied";
+          if (v === "no") return "pill-skipped";
+          if (v === "review") return "pill-review";
+          return "pill-queued";
+        },
+
+        async ask() {
+          this.busy = true;
+          this.error = "";
+          this.answer = null;
+          try {
+            const body = { question: this.question };
+            if (this.jobId) body.job_id = this.jobId;
+            const r = await fetch("/api/copilot/ask", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            if (!r.ok) {
+              const detail = (await r.json().catch(() => ({})))?.detail;
+              throw new Error(detail || `HTTP ${r.status}`);
+            }
+            this.answer = await r.json();
+          } catch (e) {
+            this.error = String(e.message || e);
+          } finally {
+            this.busy = false;
+          }
+        },
+      };
+    }
+  </script>
+{% endblock %}

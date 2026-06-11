@@ -12,11 +12,11 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
 ## Context
 
 - **v3 is a ground-up rewrite** (decided 2026-05-26). v2 code = lessons, **not** a base to extend.
-- **v3.0-core (phases 0–5) COMPLETE (2026-05-29); Phase 6 / v3.1 COMPLETE (2026-06-11).** 889 tests green.
+- **v3.0-core (phases 0–5) COMPLETE (2026-05-29); Phase 6 / v3.1 COMPLETE (2026-06-11).** 944 tests green.
   All planned sub-phases shipped — strategy profiles, salary intelligence, outcome feedback loop,
   reconciliation (CLI + the `/reconcile` web conversation), learn trends, branded UI, story bank, company
-  research, plus the manual/human-apply mode. **There is no planned backlog**; new work is new scope —
-  see spec §11b for the shipped record.
+  research, the manual/human-apply mode, and the **application copilot** (§8f, shipped 2026-06-11 as the
+  first post-plan scope). **There is no planned backlog**; new work is new scope — see spec §11b.
 - **`CLAUDE.md` is now v3-first** (rewritten in Phase 5 6/M); it describes the `av3/` package directly.
 - Repo: this checkout's root (the `Auto Applier` working tree).
 - **The spec** (authoritative): `docs/v3-architecture.md`. Every design decision and its rationale lives there.
@@ -43,6 +43,7 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
 | How to stop résumé fabrication (the guard) | `research/fabrication-guard.md` |
 | Résumé model (fact bank → per-job generation) | `docs/v3-architecture.md` §6b |
 | Manual / human-apply mode (`av3 shortlist`/`applied`/`pass`, job-family classifier, DECIDED→APPLIED) | `research/manual-apply-mode.md` |
+| Application copilot (`av3 ask`, `/copilot`, the evidence audit / honesty gate, sensitive routing) | `research/application-copilot.md` |
 | Answer resolver / sensitive fields / salary | `docs/v3-architecture.md` §8b, §8d |
 | Telemetry (relay + Turso) / observability | `docs/v3-architecture.md` §9 |
 

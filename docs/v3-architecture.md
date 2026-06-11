@@ -512,6 +512,30 @@ heavy ML — insights + bounded auto-tuning, shown in the analytics dashboard (�
 turns "applied a lot" into "applies better over time," and it's what arbitrates open style questions (e.g.
 cover-letter length) with data instead of guesses.
 
+### 8f. Application copilot (post-v3.1, 2026-06-11)
+
+> **Status: v1 LIVE.** `auto_applier/copilot.py` + `av3 ask` + `/copilot` (web). Full design rationale:
+> `research/application-copilot.md`.
+
+An **interactive, honesty-first screener-question assistant** — distinct from the §8b answer resolver
+(which fills *known* form fields from stored answers). The copilot reasons over {fact bank + the specific
+job + an arbitrary question} and returns a structured answer: verdict (yes/no/partial/review), a
+paste-ready short + long answer, reasoning, overclaim-risk flag, interview framing, and skill gaps.
+
+The design centerpiece is the **evidence audit** — the judgment-call analog of the §6b fabrication guard.
+A local model (qwen3:8b) will agreeably overclaim ("Yes" to "have you led a Debezium implementation?"
+when the real experience is watermark-based sync), and the fabrication guard can't catch a wrong "Yes"
+because it isn't a fabricated noun. So the copilot prompt **demands `bank_evidence`** (the bank facts the
+verdict rests on) and a deterministic post-check token-matches each item against the bank corpus: a
+yes/partial verdict with **zero supported evidence fails closed to `review`**; unsupported items raise
+`overclaim_risk` to high. Saying "no" never requires evidence (the guarded risk is overclaim, not
+underclaim — "No + here's the adjacent experience" is the instructed pattern).
+
+Sensitive questions (work-auth / sponsorship / EEO / salary) **never reach the LLM** — they route through
+the same `classify_sensitive` + deterministic policy as the resolver. `av3 ask --save` upserts an
+accepted answer into the answer bank (so the §8b Tier-1 semantic match reuses it on real forms), and is
+refused while the answer `needs_review`. Nothing the copilot produces is ever auto-submitted.
+
 ---
 
 ## 9. Telemetry (the centralized-error decision)

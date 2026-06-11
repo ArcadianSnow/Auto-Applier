@@ -40,6 +40,50 @@ class CompletionError(RuntimeError):
     """Raised when no backend can produce a parseable JSON reply."""
 
 
+def repair_truncated_json(raw: str) -> dict | list | None:
+    """Bounded structural repair for a truncated Ollama ``format=json`` reply.
+
+    Ollama's JSON grammar guarantees the output is a valid JSON *prefix*, but a
+    model can stop emitting before closing its braces (observed live with
+    qwen3:8b: a complete object minus the final ``}``, padded with newlines).
+    This appends the missing closers — tracked outside string literals — and
+    retries the parse. It is NOT string-scraping (the v2 reliability tax this
+    module bans): no content is guessed, only structure the grammar already
+    promised is completed. Returns ``None`` when repair doesn't yield JSON.
+    """
+    s = raw.strip()
+    if not s or s[0] not in "{[":
+        return None
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    for ch in s:
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = in_string  # backslash only escapes inside a string
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack and stack[-1] == ch:
+                stack.pop()
+            else:
+                return None  # mismatched closer — not a clean truncation
+    if in_string:
+        s += '"'  # close a dangling string literal before the brackets
+    try:
+        return json.loads(s + "".join(reversed(stack)))
+    except json.JSONDecodeError:
+        return None
+
+
 class _OllamaJSONBackend:
     """Local Ollama ``/api/generate`` with ``format=json``. Primary tier."""
 
@@ -72,7 +116,10 @@ class _OllamaJSONBackend:
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise CompletionError(f"Ollama returned non-JSON: {raw!r}") from exc
+            repaired = repair_truncated_json(raw)
+            if repaired is not None:
+                return repaired
+            raise CompletionError(f"Ollama returned non-JSON: {raw[:500]!r}") from exc
 
 
 class FallbackCompletion:

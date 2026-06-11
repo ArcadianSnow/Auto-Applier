@@ -982,6 +982,116 @@ def research_cmd(company: str, source_file: str | None, show: bool) -> None:
     click.echo(briefing.to_markdown())
 
 
+@cli.command("ask")
+@click.argument("question")
+@click.option("--job", "job_id", default=None,
+              help="Job id — adds per-job context (title/company/location/JD excerpt) "
+                   "and computes the section-8d salary ask for salary questions.")
+@click.option("--save", is_flag=True, default=False,
+              help="Store the answer into the answer bank so the form resolver can reuse "
+                   "it (refused while the answer needs review).")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Emit the full structured answer as JSON.")
+def ask_cmd(question: str, job_id: str | None, save: bool, as_json: bool) -> None:
+    """Application copilot (spec section 8f): an honest, fact-bank-grounded answer to one
+    screener/application QUESTION.
+
+    Returns a verdict (yes/no/partial/review), a paste-ready answer, the reasoning, an
+    overclaim-risk flag, interview framing, and skill gaps. A yes that the deterministic
+    evidence audit can't support against your fact bank FAILS CLOSED to review — the
+    copilot would rather say "review this yourself" than overclaim on your behalf.
+    Sensitive questions (work auth / sponsorship / EEO / salary) are answered from
+    explicit bank/config policy, never the LLM.
+    """
+    import asyncio
+    import json as _json
+
+    from auto_applier.copilot import Copilot
+    from auto_applier.llm.complete import build_default
+    from auto_applier.resume.factbank import FactBank
+    from auto_applier.resume.salary import format_ask, parse_posted_range, recommend_ask
+
+    settings = load_settings()
+    fact_bank_path = settings.data_dir / "profile" / "master.json"
+    if not fact_bank_path.exists():
+        click.echo(f"  x FAIL fact bank: missing at {fact_bank_path}", err=True)
+        click.echo("        fix -> seed the fact bank during onboarding first.", err=True)
+        sys.exit(2)
+    bank = FactBank.load(fact_bank_path)
+
+    job = None
+    if job_id:
+        conn = init_app_db(settings.app_db_path)
+        try:
+            job = JobRepo(conn).get(job_id)
+        finally:
+            conn.close()
+        if job is None:
+            click.echo(f"  x FAIL no job with id {job_id}", err=True)
+            sys.exit(2)
+
+    # The §8d salary ask (posted range beats config; floor is a hard lower bound).
+    cfg = settings.salary
+    posted = parse_posted_range(job.compensation if job else None)
+    salary_ask = format_ask(
+        recommend_ask(user_floor=cfg.floor, user_ceiling=cfg.ceiling, posted=posted)
+    )
+
+    copilot = Copilot(build_default(settings))
+    answer = asyncio.run(copilot.answer(question, bank, job=job, salary_ask=salary_ask))
+
+    if as_json:
+        click.echo(_json.dumps(vars(answer), indent=2, default=str))
+    else:
+        click.echo(f"verdict: {answer.verdict.upper()}"
+                   + (f"   [{answer.source}]" if answer.source != "llm" else ""))
+        if answer.short_answer:
+            click.echo(f"short answer: {answer.short_answer}")
+        if answer.long_answer:
+            click.echo(f"\n{answer.long_answer}\n")
+        if answer.reasoning:
+            click.echo(f"why: {answer.reasoning}")
+        if answer.overclaim_risk != "none":
+            click.echo(f"overclaim risk: {answer.overclaim_risk}"
+                       + (f" — {answer.risk_note}" if answer.risk_note else ""))
+        if answer.unsupported_evidence:
+            click.echo("unsupported claims (NOT in your fact bank): "
+                       + "; ".join(answer.unsupported_evidence))
+        if answer.framing:
+            click.echo(f"interview framing: {answer.framing}")
+        if answer.gaps:
+            click.echo(f"gaps to learn: {', '.join(answer.gaps)}")
+        for note in answer.audit_notes:
+            click.echo(f"  ! {note}")
+
+    if answer.needs_review:
+        if save:
+            click.echo("  x not saving: the answer needs review — vet it, then store it "
+                       "with --save once you've confirmed the wording.", err=True)
+        sys.exit(1)
+
+    if save:
+        from auto_applier.llm.embed import OllamaEmbeddings
+        from auto_applier.resume.answer_resolver import store_answer
+
+        text = answer.long_answer or answer.short_answer
+        if not text:
+            click.echo("  x not saving: the answer has no text.", err=True)
+            sys.exit(1)
+        embed = OllamaEmbeddings(
+            host=settings.llm.ollama_host, model=settings.llm.embed_model
+        )
+        conn = init_app_db(settings.app_db_path)
+        try:
+            from auto_applier.db.repositories import AnswerRepo
+
+            asyncio.run(store_answer(AnswerRepo(conn), embed, question, text, source="user"))
+            conn.commit()
+        finally:
+            conn.close()
+        click.echo("saved to the answer bank (the form resolver can now reuse it).")
+
+
 @cli.command()
 @click.option("--once", is_flag=True, default=True,
               help="Run one cycle and exit. The only mode v3.0 ships (staged scheduler is Phase 3).")

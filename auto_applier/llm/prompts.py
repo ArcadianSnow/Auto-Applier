@@ -226,6 +226,57 @@ COMPANY_RESEARCH = PromptTemplate(
 )
 
 
+# ============================================================ application copilot (spec §8f)
+
+COPILOT_ANSWER = PromptTemplate(
+    version="copilot-answer-v1",
+    system=(
+        "You help a job candidate answer one screener/application question honestly. "
+        "Your prime directive is HONESTY over helpfulness: a truthful \"no\" with a "
+        "good explanation beats an agreeable \"yes\" every time — a wrong yes gets the "
+        "candidate burned in the technical screen.\n\n"
+        "Parse the question LITERALLY. If it names a specific tool, technique, or "
+        "category (e.g. \"Debezium or another CDC event tracking system\" = log-based "
+        "event CDC), and the candidate's experience is adjacent but not the literal "
+        "thing (e.g. watermark/timestamp incremental sync), the verdict is \"no\" or "
+        "\"partial\" — put the adjacent experience in long_answer instead.\n\n"
+        "Every claim about the candidate must rest on the fact bank below. You may use "
+        "general knowledge to INTERPRET the question (what a tool is, what a location "
+        "code means) but never to assert candidate experience the bank doesn't show.\n\n"
+        "Output ONE JSON object with this exact shape and nothing else (no prose, no "
+        "code fences, no preamble):\n"
+        '{\n'
+        '  "verdict": "yes" | "no" | "partial",  // the honest call on the question\n'
+        '  "short_answer": str,      // what to put in a radio/checkbox/one-line field\n'
+        '  "long_answer": str,       // paste-ready comments-box paragraph(s), first person\n'
+        '  "reasoning": str,         // why this verdict, 1-3 sentences\n'
+        '  "bank_evidence": [str],   // the EXACT bank facts the verdict rests on (quote them)\n'
+        '  "overclaim_risk": "none" | "low" | "high",  // self-assessed stretch in the answer\n'
+        '  "risk_note": str,         // what makes it a stretch, or ""\n'
+        '  "framing": str,           // 1-2 sentence interview-framing tip\n'
+        '  "gaps": [str]             // skills/concepts the question wants that the bank lacks\n'
+        '}\n\n'
+        "Rules:\n"
+        "  - A \"yes\" or \"partial\" verdict REQUIRES bank_evidence — quote the bank "
+        "facts verbatim or near-verbatim. A deterministic audit checks each item "
+        "against the bank; unverifiable evidence voids the verdict.\n"
+        "  - A \"no\" needs no evidence. Prefer \"no, but here is what I have done\" "
+        "in long_answer over stretching to yes.\n"
+        "  - Numbers in long_answer must trace to the allowed metrics list.\n"
+        "  - Write long_answer in the candidate's plain first-person voice. No "
+        "buzzwords, no \"I'm excited\", no em-dashes.\n"
+        "  - If the question cannot be answered from the bank at all, verdict \"no\" "
+        "with an honest long_answer, and list what's missing in gaps."
+    ),
+    template=(
+        "Candidate fact bank (the ONLY source of truth about the candidate):\n{bank_facts}\n\n"
+        "Allowed metrics (every number used MUST trace to one of these):\n{allowed_metrics}\n\n"
+        "{job_context}"
+        "Application question:\n{question}"
+    ),
+)
+
+
 #: All templates exported here so the eval harness can iterate them.
 ALL_TEMPLATES: tuple[PromptTemplate, ...] = (
     SCORE_JD,
@@ -233,12 +284,14 @@ ALL_TEMPLATES: tuple[PromptTemplate, ...] = (
     GENERATE_COVER_LETTER,
     STAR_STORIES,
     COMPANY_RESEARCH,
+    COPILOT_ANSWER,
 )
 
 
 __all__ = [
     "ALL_TEMPLATES",
     "COMPANY_RESEARCH",
+    "COPILOT_ANSWER",
     "GENERATE_COVER_LETTER",
     "GENERATE_RESUME",
     "SCORE_JD",

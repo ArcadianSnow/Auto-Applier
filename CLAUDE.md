@@ -82,14 +82,16 @@ av3 prune [--ephemeral-days N] [--events-days N]
 av3 update [--exit-code]          # check the GitHub release feed; prompt if newer (no auto-replace)
 av3 survey                        # multi-ATS CAPTCHA-presence survey (dry-run, never submits)
 
-# Interview prep (on-demand extras; local LLM, zero egress)
+# Interview prep + screener answering (on-demand; local LLM, zero egress)
+av3 ask "<question>" [--job ID] [--save] [--json]   # application copilot (§8f): honest, evidence-audited
+                                  # answer; an unsupported "yes" FAILS CLOSED to review; --save banks it
 av3 stories generate <job_id>     # 3 STAR+R stories from the fact bank, tailored to that job
 av3 stories list | export         # browse / render the accumulated story bank (story_bank.json/.md)
 av3 research <company> [--source-file F] [--show]   # grounded briefing from PASTED material (never fetches)
 
 # Tests
 pip install -e ".[v3,dev]"
-pytest tests/                     # 889 green / 11 deselected (live smoke/eval/integration markers)
+pytest tests/                     # 944 green / 11 deselected (live smoke/eval/integration markers)
 pytest tests/test_apply_worker.py -k name
 
 # Build the standalone executable (PyInstaller; build-host tool, not a runtime dep)
@@ -135,6 +137,10 @@ selector drift — the #1 v2 bug source).
 - **`research.py`** — on-demand grounded company briefings from user-pasted material (`av3 research`);
   **`resume/story_bank.py`** — STAR+R interview story bank from the fact bank (`av3 stories`). Both local
   LLM, zero egress, never called by the pipeline.
+- **`copilot.py`** — the application copilot (spec §8f, `av3 ask` + `/copilot`): honesty-first screener
+  answers with a deterministic **evidence audit** (the judgment-call analog of the fabrication guard —
+  a "yes" with no bank-supported evidence fails closed to review). Sensitive questions route through
+  the §8d policies, never the LLM. Advisory only; never auto-submitted.
 - **`doctor.py`** — preflight checks (config, app.db, events.db, LLM reachable, backups recent, relay
   reachable). Each returns a `CheckResult(PASS|WARN|FAIL)` with a `fix` hint; exits non-zero on any FAIL.
 - **`update.py`** — GitHub Releases version check (check + prompt, never auto-replace).

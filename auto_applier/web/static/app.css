@@ -604,3 +604,43 @@ pre.jd {
 }
 .proposal-skill { font-weight: 500; flex: 1; }
 .proposal-count { font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+
+/* ---------------- application copilot (§8f) ---------------- */
+.copilot { max-width: 760px; margin: 0 auto; }
+.copilot-field {
+  display: block;
+  margin: 0.6rem 0;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+.copilot-field textarea,
+.copilot-field input {
+  display: block;
+  width: 100%;
+  margin-top: 0.25rem;
+  padding: 0.45rem 0.6rem;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.copilot-field textarea:focus-visible,
+.copilot-field input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+.copilot-job input { font-family: var(--mono); font-size: 0.85rem; }
+.copilot-review { border-left: 4px solid var(--warn); }
+pre.copilot-answer {
+  background: var(--bg-soft);
+  border-radius: 6px;
+  padding: 0.8rem 0.9rem;
+  font: inherit;             /* prose, not code — it gets pasted into a form */
+  white-space: pre-wrap;
+  max-height: 22rem;
+  overflow-y: auto;
+  user-select: all;          /* one click selects the whole paste-ready answer */
+}
+.copilot-note { color: var(--warn); font-size: 0.9rem; margin: 0.25rem 0; }

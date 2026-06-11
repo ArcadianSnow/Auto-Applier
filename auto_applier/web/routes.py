@@ -950,6 +950,46 @@ async def reconcile_apply(request: Request) -> dict:
     }
 
 
+# ---------------------------------------------------------------- /api/copilot (§8f)
+
+@api_router.post("/copilot/ask")
+async def copilot_ask(request: Request) -> dict:
+    """Application copilot (spec §8f): one honest, audited answer per question.
+    Payload: ``{"question": str, "job_id": str?}``. The deterministic evidence
+    audit fails an unsupported yes closed to review; sensitive questions are
+    answered from bank/config policy, never the LLM. Advisory only — nothing
+    here flows into a form unattended."""
+    from auto_applier.copilot import Copilot
+    from auto_applier.llm.complete import build_default
+    from auto_applier.resume.salary import format_ask, parse_posted_range, recommend_ask
+
+    payload = await _read_json_dict(request)
+    question = payload.get("question")
+    if not isinstance(question, str) or not question.strip():
+        raise HTTPException(status_code=400, detail="'question' must be a non-empty string")
+
+    web_state = _get_state(request)
+    bank = load_fact_bank(web_state.settings.data_dir)
+
+    job = None
+    job_id = payload.get("job_id")
+    if job_id:
+        with web_state.app_conn() as conn:
+            job = JobRepo(conn).get(str(job_id))
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+
+    cfg = web_state.settings.salary
+    posted = parse_posted_range(job.compensation if job else None)
+    salary_ask = format_ask(
+        recommend_ask(user_floor=cfg.floor, user_ceiling=cfg.ceiling, posted=posted)
+    )
+
+    copilot = Copilot(build_default(web_state.settings))
+    answer = await copilot.answer(question, bank, job=job, salary_ask=salary_ask)
+    return vars(answer)
+
+
 # ---------------------------------------------------------------- /  (HTML)
 
 @pages_router.get("/", response_class=HTMLResponse)
@@ -975,6 +1015,18 @@ async def onboarding_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "onboarding.html",
+        {"version": __version__},
+    )
+
+
+@pages_router.get("/copilot", response_class=HTMLResponse)
+async def copilot_page(request: Request) -> HTMLResponse:
+    """The application copilot (spec §8f): paste a screener question, optionally
+    attach a job id, get back an honest, evidence-audited answer."""
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request,
+        "copilot.html",
         {"version": __version__},
     )
 
