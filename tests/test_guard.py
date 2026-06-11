@@ -145,3 +145,51 @@ def test_result_ok_only_on_pass(bank):
     r = _truthful()
     r.skills = ["COBOL"]
     assert guard_l1(r, bank).ok is False
+
+
+# ---------------------------------------------------------------------------
+# vet_cover_letter — the cover-letter prose check (found live 2026-06-11:
+# qwen3:8b wrote a Kubernetes/Terraform letter for a SQL Server DBA and the
+# unguarded prose reached QUEUED_APPLY).
+# ---------------------------------------------------------------------------
+
+from auto_applier.resume.guard import vet_cover_letter
+
+
+def test_cover_letter_clean_prose_passes(bank):
+    res = vet_cover_letter(
+        "My Python and SQL work at Acme Corporation maps to your data role.", bank
+    )
+    assert res.verdict is Verdict.PASS and not res.findings
+
+
+def test_cover_letter_fabricated_stack_goes_to_review(bank):
+    res = vet_cover_letter(
+        "He led zero-downtime Kubernetes migrations and designed Terraform modules.",
+        bank,
+    )
+    assert res.verdict is Verdict.REVIEW
+    flagged = {f.claim for f in res.findings}
+    assert flagged == {"Kubernetes", "Terraform"}
+    assert all(f.category == "skill" for f in res.findings)
+
+
+def test_cover_letter_term_supported_by_compound_bank_skill(bank):
+    # bank lists "Apache Spark"; the letter saying "Spark" is supported, not invented.
+    res = vet_cover_letter("Deep experience tuning Spark jobs.", bank)
+    assert res.verdict is Verdict.PASS
+
+
+def test_cover_letter_term_supported_by_work_bullet():
+    b = FactBank(
+        work_history=[WorkEntry("Acme", "DBA", "2020", "Present",
+                                bullets=["Automated deploys with Docker images"])],
+        skills=["SQL"],
+    )
+    res = vet_cover_letter("I containerized the pipeline with Docker.", b)
+    assert res.verdict is Verdict.PASS
+
+
+def test_cover_letter_empty_or_no_tech_terms_passes(bank):
+    assert vet_cover_letter("", bank).verdict is Verdict.PASS
+    assert vet_cover_letter("I am excited to bring my dedication.", bank).verdict is Verdict.PASS

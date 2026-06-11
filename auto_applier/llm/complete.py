@@ -91,8 +91,14 @@ class _OllamaJSONBackend:
         self,
         host: str,
         model: str,
-        timeout_s: float = 60.0,
+        timeout_s: float = 180.0,
     ):
+        # 180s default, not 60: résumé/cover generation asks an 8B model for a
+        # large JSON and can exceed 60s when the model also pays a cold load
+        # (observed live 2026-06-11: optimize failed a job closed on ReadTimeout).
+        # Short calls (resolver answers, scores) finish long before any ceiling,
+        # so the generous default only changes behavior where the alternative
+        # was a spurious fail-closed.
         self.host = host.rstrip("/")
         self.model = model
         self.timeout_s = timeout_s
@@ -143,7 +149,7 @@ class FallbackCompletion:
             except (httpx.HTTPError, CompletionError) as exc:
                 last_exc = exc
         raise CompletionError(
-            f"no completion backend available (last error: {last_exc})"
+            f"no completion backend available (last error: {last_exc!r})"
         )
 
 

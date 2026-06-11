@@ -19,7 +19,7 @@ class FakeElement:
         self.files = None
         self.clicked = False
 
-    async def click(self):
+    async def click(self, **kw):  # mirrors ElementHandle.click(timeout=...)
         self.clicked = True
 
     async def type(self, ch):
@@ -265,3 +265,76 @@ def test_summarize_survey():
 
 def test_summarize_empty():
     assert summarize_survey([]) == {"n": 0}
+
+
+# ---------------------------------------------------------------------------
+# settle_open_dropdown — react-select cleanup (live 2026-06-11: an open
+# "No options" menu intercepted pointer events over every later field).
+# ---------------------------------------------------------------------------
+
+from auto_applier.sources.browser.apply_base import settle_open_dropdown
+
+
+class _MenuOption:
+    def __init__(self, text):
+        self._text = text
+        self.clicked = False
+
+    async def text_content(self):
+        return self._text
+
+    async def click(self, **kw):
+        self.clicked = True
+
+
+class _Keyboard:
+    def __init__(self):
+        self.pressed = []
+
+    async def press(self, key):
+        self.pressed.append(key)
+
+
+class _MenuPage:
+    """Fake page with an open react-select menu and a real keyboard."""
+
+    def __init__(self, menu_open=True, options=()):
+        self._menu_open = menu_open
+        self.options = list(options)
+        self.keyboard = _Keyboard()
+
+    async def query_selector(self, selector):
+        if selector == ".select__menu":
+            return object() if self._menu_open else None
+        return None
+
+    async def query_selector_all(self, selector):
+        return self.options if selector == ".select__option" else []
+
+
+def test_settle_no_menu_is_noop():
+    page = _MenuPage(menu_open=False)
+    assert asyncio.run(settle_open_dropdown(page, "Yes")) is False
+    assert page.keyboard.pressed == []
+
+
+def test_settle_commits_matching_option():
+    yes, no = _MenuOption("Yes"), _MenuOption("No")
+    page = _MenuPage(options=[no, yes])
+    assert asyncio.run(settle_open_dropdown(page, "yes")) is True
+    assert yes.clicked and not no.clicked
+    assert page.keyboard.pressed == []  # committed, no Escape needed
+
+
+def test_settle_escapes_when_no_option_matches():
+    page = _MenuPage(options=[_MenuOption("Acme Office"), _MenuOption("Remote")])
+    assert asyncio.run(settle_open_dropdown(page, "totally unrelated")) is False
+    assert page.keyboard.pressed == ["Escape"]
+
+
+def test_settle_swallows_broken_pages():
+    class _Broken:
+        async def query_selector(self, selector):
+            raise RuntimeError("boom")
+
+    assert asyncio.run(settle_open_dropdown(_Broken(), "Yes")) is False

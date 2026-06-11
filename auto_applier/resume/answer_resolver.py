@@ -38,7 +38,6 @@ A bare string discards all three signals.
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -168,14 +167,6 @@ def classify_sensitive(label: str) -> SensitiveClass:
 
 
 # --------------------------------------------------------------------- resolver
-
-_LLM_SYSTEM = (
-    "You are answering one question on a job application form on the candidate's "
-    "behalf. The candidate's facts are below. Reply with JSON only: "
-    '{"answer": "<string>", "confidence": <0..1>}. '
-    "Use ONLY the facts provided. If the facts do not support a confident answer, "
-    "return confidence below 0.5."
-)
 
 
 @dataclass
@@ -338,50 +329,46 @@ class AnswerResolver:
             note=f"semantic match: '{best.question}' (cosine={best_score:.2f})",
         )
 
-    # ---- LLM backup (Tier 2) --------------------------------------------
+    # ---- LLM backup (Tier 2) — copilot-audited (spec §8f) ----------------
 
     async def _resolve_via_llm(self, question: CustomQuestion) -> Resolution | None:
-        prompt = self._build_llm_prompt(question)
-        try:
-            reply = await self.llm_client.complete_json(prompt, system=_LLM_SYSTEM)
-        except Exception:  # noqa: BLE001 — LLM unreachable -> caller bails to REVIEW
+        """Tier-3 inference, routed through the §8f copilot so the answer passes
+        the deterministic EVIDENCE AUDIT before it can fill a form.
+
+        The previous tier-3 gated on the model's SELF-reported confidence — and
+        a live dry-run (2026-06-11, GitLab screeners) showed qwen3:8b reporting
+        0.95 on "do you have production Kubernetes/Go experience?" judgment
+        calls whose honest answer was No. Self-reported confidence is exactly
+        the overclaim trap; the copilot's audit (a yes/partial verdict must
+        cite bank facts that deterministically check out, else review) is the
+        backstop. Anything the audit fails returns None → the caller bails to
+        REVIEW and the driver downgrades to assisted. Never raises.
+        """
+        from auto_applier.copilot import Copilot  # lazy — copilot imports this module
+
+        answer = await Copilot(self.llm_client).answer(
+            question.label or "", self.fact_bank,
+            salary_ask=self.salary_expectation,
+        )
+        if answer.needs_review or answer.overclaim_risk == "high":
             return None
-        answer = reply.get("answer")
-        try:
-            confidence = float(reply.get("confidence", 0.0))
-        except (TypeError, ValueError):
+        value = (answer.short_answer or answer.long_answer).strip()
+        if not value:
             return None
-        if not isinstance(answer, (str, int, float)) or confidence < self.config.llm_confidence_threshold:
+        # Audited answers carry a structural confidence, not a self-report:
+        # clean audit + no self-flagged stretch = 0.9; a "low" stretch = 0.75.
+        confidence = 0.9 if answer.overclaim_risk == "none" else 0.75
+        if confidence < self.config.llm_confidence_threshold:
             return None
         return Resolution(
             question=question,
-            value=str(answer),
+            value=value,
             source=ResolutionSource.INFERRED,
             confidence=confidence,
-            note=f"LLM-inferred (conf={confidence:.2f}); flag for §8e feedback loop",
-        )
-
-    def _build_llm_prompt(self, question: CustomQuestion) -> str:
-        bank = self.fact_bank
-        facts = {
-            "name": bank.contact.name,
-            "location": bank.contact.location,
-            "work_authorization": bank.work_authorization,
-            "requires_sponsorship": bank.requires_sponsorship,
-            "skills": bank.skills,
-            "work_history": [
-                {"company": w.company, "title": w.title, "start": w.start, "end": w.end}
-                for w in bank.work_history
-            ],
-            "education": [
-                {"institution": e.institution, "degree": e.degree} for e in bank.education
-            ],
-            "certifications": bank.certifications,
-        }
-        return (
-            "Question label on form: " + (question.label or "(no label)") + "\n"
-            "Required: " + ("yes" if question.required else "no") + "\n"
-            "Candidate facts (JSON):\n" + json.dumps(facts, default=str)
+            note=(
+                f"copilot-audited (verdict={answer.verdict}, "
+                f"risk={answer.overclaim_risk}); flag for §8e feedback loop"
+            ),
         )
 
     # ---- review bail ----------------------------------------------------

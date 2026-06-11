@@ -105,7 +105,22 @@ async def discover_custom_questions(page) -> list[CustomQuestion]:
             continue
         seen.add(key)
         qs.append(CustomQuestion(r["id"], r["label"], bool(r["required"]), r["kind"]))
-    return qs
+    # Second pass — dedup by visible label: the new job-boards layout renders a
+    # combo question as TWO elements (the visible combobox input + a hidden value
+    # carrier) with distinct ids but the same label. Keep the FIRST per label so
+    # each question is resolved + filled once (live 2026-06-11: every GitLab
+    # screener was LLM-resolved and typed twice). Empty labels are never deduped
+    # (we can't tell two label-less fields apart).
+    seen_labels: set[str] = set()
+    deduped: list[CustomQuestion] = []
+    for q in qs:
+        label_key = (q.label or "").strip().lower()
+        if label_key:
+            if label_key in seen_labels:
+                continue
+            seen_labels.add(label_key)
+        deduped.append(q)
+    return deduped
 
 
 async def prepare_application(

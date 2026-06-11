@@ -245,3 +245,52 @@ def guard_l1(resume: GeneratedResume, bank: FactBank) -> GuardResult:
     else:
         verdict = Verdict.PASS
     return GuardResult(verdict=verdict, findings=findings)
+
+
+# --- cover-letter prose check ------------------------------------------------
+
+def vet_cover_letter(
+    cover_text: str, bank: FactBank, vocabulary: tuple[str, ...] | None = None
+) -> GuardResult:
+    """Deterministic tech-claim check on cover-letter PROSE — guard_l1's sibling.
+
+    Free prose can't be allow-listed structurally the way a :class:`GeneratedResume`
+    can, so this is deliberately coarser: extract every known tech-skill phrase from
+    the letter (the same curated word-boundary vocabulary the §7b reconciler uses on
+    JDs — no LLM, no network) and flag any term the fact bank's corpus doesn't also
+    contain. Found live (2026-06-11): qwen3:8b wrote a Kubernetes/Terraform/ArgoCD
+    cover letter for a SQL Server DBA and the unguarded letter reached QUEUED_APPLY.
+
+    Symmetric extraction keeps it honest AND fair: the *same* extractor runs over
+    the letter and over the bank corpus (skills + work bullets + allowed metrics +
+    certifications), so "SQL" in the letter is supported by "SQL Server" in the
+    bank, while "Kubernetes" with no bank mention is flagged. Findings are
+    ``Severity.REVIEW`` (category ``skill``): prose mentions can be legitimate
+    framing (e.g. naming the employer's stack), so a human decides — but it never
+    auto-applies.
+    """
+    from auto_applier.reconcile import extract_candidate_skills
+
+    if not (cover_text or "").strip():
+        return GuardResult(verdict=Verdict.PASS)
+    claimed = extract_candidate_skills(cover_text, vocabulary)
+    if not claimed:
+        return GuardResult(verdict=Verdict.PASS)
+    corpus = " \n ".join(
+        bank.skills
+        + bank.certifications
+        + bank.allowed_metrics
+        + [b for w in bank.work_history for b in w.bullets]
+    )
+    supported = extract_candidate_skills(corpus, vocabulary)
+    findings = [
+        Finding(
+            Severity.REVIEW, "skill", term,
+            f"cover letter claims '{term}' but the fact bank never mentions it",
+        )
+        for term in sorted(claimed - supported)
+    ]
+    return GuardResult(
+        verdict=Verdict.REVIEW if findings else Verdict.PASS,
+        findings=findings,
+    )

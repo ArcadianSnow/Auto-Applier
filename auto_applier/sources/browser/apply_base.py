@@ -120,18 +120,61 @@ class ApplyOutcome:
 async def human_type(page, selector: str, text: str) -> bool:
     """Fill a field with human-paced per-keystroke jitter (research §anti-detect).
 
-    Returns False if the field is absent (caller decides whether absence is a hard fail
-    or an optional-field skip). Click-then-type is intentional: focusing via click matches
-    real user behavior better than direct .fill() and avoids the focus-related fingerprint.
+    Returns False if the field is absent OR not clickable within the bounded
+    timeout (caller decides whether that's a hard fail or an optional-field skip).
+    Click-then-type is intentional: focusing via click matches real user behavior
+    better than direct .fill() and avoids the focus-related fingerprint.
+
+    The click is BOUNDED (8s, not Playwright's 30s default) and a timeout returns
+    False instead of raising: observed live (2026-06-11), an open react-select
+    menu intercepted pointer events over every later field — an unbounded click
+    burned 30s per field and surfaced as a job-level error instead of an
+    observable per-field skip.
     """
     el = await page.query_selector(selector)
     if el is None:
         return False
-    await el.click()
+    try:
+        await el.click(timeout=8000)
+    except Exception:  # noqa: BLE001 — intercepted/unstable field -> observable skip
+        return False
     for ch in text:
         await el.type(ch)
         await asyncio.sleep(random.uniform(0.03, 0.12))
     return True
+
+
+# React-select (the new job-boards.greenhouse.io layout renders dropdown questions
+# as comboboxes, not <select>): typing opens a floating menu that stays open and
+# intercepts pointer events over later fields until committed or dismissed.
+_REACT_SELECT_MENU = ".select__menu"
+_REACT_SELECT_OPTION = ".select__option"
+
+
+async def settle_open_dropdown(page, value: str) -> bool:
+    """Commit or dismiss a combo-box menu left open by typing (react-select).
+
+    Tries to click the menu option matching ``value`` (case-insensitive,
+    substring either way) — which COMMITS the selection properly; otherwise
+    presses Escape so the menu can't block later fields. Fully defensive: any
+    failure is a no-op (returns False) — this is cleanup, never a new failure
+    mode. Returns True only when an option was actually committed.
+    """
+    try:
+        menu = await page.query_selector(_REACT_SELECT_MENU)
+        if menu is None:
+            return False
+        want = (value or "").strip().lower()
+        if want:
+            for opt in await page.query_selector_all(_REACT_SELECT_OPTION):
+                text = ((await opt.text_content()) or "").strip().lower()
+                if text and (want == text or want in text or text in want):
+                    await opt.click(timeout=3000)
+                    return True
+        await page.keyboard.press("Escape")
+    except Exception:  # noqa: BLE001 — cleanup must never raise
+        pass
+    return False
 
 
 # --- resolver wiring (shared across ATSes) --------------------------------------
@@ -193,7 +236,11 @@ async def fill_resolutions(
             # Both <input> and <textarea> take typed text. Same human_type for both
             # keeps the behavioral signal uniform across ATSes.
             ok = await human_type(page, sel, str(r.value))
-            filled[q.field_id] = ok
+            # Combo-box cleanup: if the typing opened a react-select menu (the new
+            # GH layout), commit the matching option or dismiss it — an open menu
+            # intercepts pointer events over every later field (live 2026-06-11).
+            committed = await settle_open_dropdown(page, str(r.value))
+            filled[q.field_id] = ok or committed
     return filled
 
 

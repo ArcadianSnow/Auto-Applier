@@ -85,7 +85,7 @@ from auto_applier.resume.generate import (
     generated_cover_letter_path,
     generated_resume_path,
 )
-from auto_applier.resume.guard import GuardResult, Verdict, guard_l1
+from auto_applier.resume.guard import GuardResult, Verdict, guard_l1, vet_cover_letter
 from auto_applier.resume.render import PdfRenderer, build_resume_html, render_resume_pdf
 
 __all__ = ["OptimizeRunSummary", "OptimizeWorker"]
@@ -271,6 +271,20 @@ class OptimizeWorker:
                 job, summary, reason=f"guard {verdict.verdict.value}: {findings_summary}"
             )
             raise StageSkip(f"guard {verdict.verdict.value}")
+
+        # 3b. Cover-letter prose check — guard_l1 vets the structured résumé only;
+        #     the letter is free prose, so it gets the deterministic tech-claim
+        #     vocabulary check. Found live (2026-06-11): the model wrote a
+        #     Kubernetes/Terraform letter for a SQL Server DBA and the unguarded
+        #     letter would have shipped. REVIEW-severity → human decides.
+        cover_verdict: GuardResult = vet_cover_letter(cover_body, self._fact_bank)
+        if not cover_verdict.ok:
+            findings_summary = self._summarize_findings(cover_verdict)
+            summary.guard_rejected += 1
+            self._route_to_review(
+                job, summary, reason=f"cover-letter guard: {findings_summary}"
+            )
+            raise StageSkip("cover-letter guard REVIEW")
 
         # 4. Render the PDF. We render BEFORE writing the cover letter so a render
         #    failure doesn't leave an orphan .txt on disk (the apply worker keys

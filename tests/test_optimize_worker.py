@@ -443,6 +443,32 @@ def test_guard_review_verdict_also_routes_to_review(settings, conn):
     assert JobRepo(conn).get(job.id).state is JobState.REVIEW
 
 
+def test_fabricated_cover_letter_routes_to_review(settings, conn):
+    """The résumé passes the guard but the COVER LETTER claims a stack the bank
+    never mentions (the live 2026-06-11 failure: a Kubernetes/Terraform letter
+    for a SQL Server DBA). The cover-letter prose check must block QUEUED_APPLY
+    and leave no artifacts behind."""
+    job = _seed_decided(conn, source_job_id="cl-1")
+    llm = _FakeLLM(cover_payload={
+        "body": (
+            "I led zero-downtime Kubernetes migrations and designed Terraform "
+            "modules across multi-cloud environments."
+        )
+    })
+    worker = _build(settings, conn, llm=llm)
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.guard_rejected == 1
+    assert summary.routed_to_review == 1
+    assert summary.queued == 0
+    assert JobRepo(conn).get(job.id).state is JobState.REVIEW
+    # Neither artifact lands: render is gated behind BOTH guards.
+    assert not generated_resume_path(settings, job.id).exists()
+    from auto_applier.resume.generate import generated_cover_letter_path
+    assert not generated_cover_letter_path(settings, job.id).exists()
+
+
 # --------------------------------------------------------------- render failure
 
 def test_render_failure_routes_to_review(settings, conn):

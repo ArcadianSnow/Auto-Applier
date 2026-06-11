@@ -22,7 +22,7 @@ class FakeElement:
         self.files = None
         self.clicked = False
 
-    async def click(self):
+    async def click(self, **kw):  # mirrors ElementHandle.click(timeout=...)
         self.clicked = True
 
     async def type(self, ch):

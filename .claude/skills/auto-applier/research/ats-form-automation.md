@@ -736,3 +736,59 @@ Pandas is NOT required for the tests (fakes return plain dicts).
 
 Live DOM inspected May 2026: `job-boards.greenhouse.io/anthropic`, `jobs.lever.co/voltus`,
 `jobs.ashbyhq.com/ramp`.
+
+
+---
+
+## First full E2E dry-run validation (2026-06-11) — findings + fixes
+
+First end-to-end live exercise of the whole apply chain (discover -> filter -> score ->
+optimize -> apply --dry-run) against real boards (gitlab/cloudflare GH, highspot Lever,
+Vanta/Linear Ashby) with the real fact bank + qwen3:8b in an isolated AV3_DATA_DIR.
+All 10 live smoke tests passed first (zero selector drift since 2026-05-26).
+
+**Stage results:** discover 468 seen -> 3 matched; filter ran with REAL embeddings for the
+first time (2 passed / 1 filtered, no fail-open) after pulling nomic-embed-text; score
+2 DECIDED; optimize generated a guard-passed resume + cover (one full pass); apply
+dry-run filled the live GitLab form end-to-end with zero errors on the final run.
+
+**Bugs found live -> fixed (each has a regression test):**
+
+1. **Embed client 10s timeout** (llm/embed.py): the FIRST call after Ollama swaps
+   models pays a >10s cold load -> ReadTimeout -> the filter failed open on every run
+   (the long-standing "no embed/bank" known-issue was never just a missing model —
+   the timeout guaranteed failure even with the model present). Now 60s, and {exc!r}
+   so ReadTimeout doesn't render as an empty reason.
+2. **Completion 60s timeout** (llm/complete.py): resume/cover generation on an 8B
+   model can exceed 60s -> spurious fail-closed to REVIEW. Now 180s.
+3. **UNGUARDED COVER LETTER (the big one):** qwen3:8b wrote a Kubernetes/Terraform/
+   ArgoCD cover letter for a SQL Server DBA and it reached QUEUED_APPLY — guard_l1
+   vets only the structured resume. New vet_cover_letter (resume/guard.py):
+   symmetric deterministic extraction (the reconcile vocabulary) over the letter vs
+   the bank corpus; unsupported tech claims -> REVIEW. Wired as gate 3b in the
+   optimize worker. Caught the live fabrication on re-run.
+4. **react-select menu blocks later fields:** the NEW job-boards.greenhouse.io layout
+   renders dropdown questions as comboboxes; typing opened a "No options" menu that
+   intercepted pointer events over every later field (30s timeout each, job-level
+   error). Fixes in apply_base: human_type click bounded to 8s + returns False on
+   intercept; new settle_open_dropdown commits the matching option or presses
+   Escape after each custom-question fill.
+5. **Question double-discovery on the new GH layout:** each combo question = a visible
+   combobox input + a hidden value carrier with distinct ids but the same label ->
+   every screener was LLM-resolved and typed TWICE. Label-level dedup added to the
+   GH discoverer (empty labels never deduped).
+6. **Tier-3 resolver overclaim trap (the most important):** the resolver gated on the
+   model's SELF-reported confidence — qwen3:8b reported 0.95 on "production
+   Kubernetes/Go experience?" judgment calls whose honest answer is No. Tier-3 now
+   routes through the section-8f copilot: the deterministic evidence audit must pass
+   (yes/partial cites bank facts that check out, else bail to REVIEW), confidence is
+   structural (0.9 clean / 0.75 self-flagged-low), and honest "No" fills legitimately.
+   Verified live: the Kubernetes screener now resolves to an honest No.
+
+**Still untaken (deliberately):** a real --no-dry-run submission. That remains the
+gated user decision; this validation makes it a much safer one.
+
+**Operational note:** nomic-embed-text is now installed in Ollama — the personal
+search's daily refresh will start ACTUALLY pre-filtering by embedding relevance
+(cosine >= 0.6 vs the profile) instead of failing open. Removing that model restores
+the old fail-open behavior if ever preferred.

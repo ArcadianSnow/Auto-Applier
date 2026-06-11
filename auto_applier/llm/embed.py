@@ -54,8 +54,13 @@ class OllamaEmbeddings:
         self,
         host: str = "http://localhost:11434",
         model: str = "nomic-embed-text",
-        timeout_s: float = 10.0,
+        timeout_s: float = 60.0,
     ):
+        # 60s default, not 10: the FIRST call after Ollama swaps models pays the
+        # cold-load (observed live 2026-06-11: >10s while qwen3:8b was resident,
+        # surfacing as ReadTimeout → the filter failed open every run). A warm
+        # call is ~20-50ms, so the generous ceiling costs nothing in the normal
+        # case and only shows up when the alternative was a spurious failure.
         self.host = host.rstrip("/")
         self.model = model
         self.timeout_s = timeout_s
@@ -69,7 +74,9 @@ class OllamaEmbeddings:
                 resp.raise_for_status()
                 data = resp.json()
         except httpx.HTTPError as exc:
-            raise EmbeddingError(f"Ollama embeddings unreachable: {exc}") from exc
+            # !r, not str: httpx.ReadTimeout formats as "" — an empty reason in
+            # the fail-open note made this bug needlessly hard to diagnose.
+            raise EmbeddingError(f"Ollama embeddings unreachable: {exc!r}") from exc
         vec = data.get("embedding")
         if not isinstance(vec, list) or not vec:
             raise EmbeddingError(f"Ollama returned no embedding: {data!r}")

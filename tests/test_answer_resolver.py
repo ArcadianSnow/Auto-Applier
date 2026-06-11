@@ -235,26 +235,70 @@ def test_semantic_match_below_threshold_falls_through(answer_repo):
     assert res.source is ResolutionSource.REVIEW
 
 
-# ---- Tier 2: LLM confidence gating ------------------------------------------
+# ---- Tier 2: LLM backup — copilot-audited (spec §8f) -------------------------
+#
+# Tier-3 routes through the §8f copilot: the reply must be the copilot schema and
+# a yes/partial verdict must cite bank facts that pass the deterministic evidence
+# audit. Self-reported confidence is gone — it was the overclaim trap (live
+# 2026-06-11: qwen3:8b self-reported 0.95 on Kubernetes/Go judgment calls).
 
-def test_llm_high_confidence_inferred(answer_repo):
-    llm = StubLLM(reply={"answer": "5", "confidence": 0.85})
+def _copilot_reply(**over) -> dict:
+    base = dict(
+        verdict="yes",
+        short_answer="5",
+        long_answer="Five years of professional Python and SQL work.",
+        reasoning="The bank lists Python and SQL experience.",
+        bank_evidence=["Python", "SQL"],   # both in _bank() → audit passes
+        overclaim_risk="none",
+        risk_note="",
+        framing="",
+        gaps=[],
+    )
+    base.update(over)
+    return base
+
+
+def test_llm_audited_grounded_answer_fills_as_inferred(answer_repo):
+    llm = StubLLM(reply=_copilot_reply())
     resolver = AnswerResolver(_bank(), answer_repo, llm_client=llm)
     res = asyncio.run(resolver.resolve(_q("Years of professional experience?")))
     assert res.value == "5"
     assert res.source is ResolutionSource.INFERRED
-    assert res.confidence == pytest.approx(0.85)
+    assert res.confidence == pytest.approx(0.9)  # structural, not self-reported
     assert res.needs_review is False
-    # Prompt carries the fact bank so the LLM can self-judge confidence.
-    assert "candidate facts" in llm.last_prompt.lower()
+    assert "copilot-audited" in res.note
+    # Prompt carries the fact bank so the model must ground its evidence.
+    assert "Python" in llm.last_prompt
 
 
-def test_llm_low_confidence_bails_to_review(answer_repo):
-    llm = StubLLM(reply={"answer": "maybe", "confidence": 0.3})
+def test_llm_unsupported_yes_fails_the_audit_and_bails(answer_repo):
+    # The model says yes citing experience the bank does NOT contain — the
+    # deterministic evidence audit voids it and the question goes to REVIEW.
+    llm = StubLLM(reply=_copilot_reply(
+        bank_evidence=["operated production Kubernetes clusters at scale"]))
     resolver = AnswerResolver(_bank(), answer_repo, llm_client=llm)
-    res = asyncio.run(resolver.resolve(_q("Have you ever piloted a submarine?")))
+    res = asyncio.run(resolver.resolve(_q("Production Kubernetes experience?")))
     assert res.needs_review is True
     assert res.source is ResolutionSource.REVIEW
+
+
+def test_llm_high_self_flagged_risk_bails(answer_repo):
+    llm = StubLLM(reply=_copilot_reply(overclaim_risk="high",
+                                       risk_note="this is a stretch"))
+    resolver = AnswerResolver(_bank(), answer_repo, llm_client=llm)
+    res = asyncio.run(resolver.resolve(_q("Have you led large teams?")))
+    assert res.needs_review is True
+
+
+def test_llm_honest_no_fills_without_evidence(answer_repo):
+    # "No" needs no evidence — the guarded risk is overclaim, not underclaim.
+    llm = StubLLM(reply=_copilot_reply(
+        verdict="no", short_answer="No", bank_evidence=[]))
+    resolver = AnswerResolver(_bank(), answer_repo, llm_client=llm)
+    res = asyncio.run(resolver.resolve(_q("Have you ever piloted a submarine?")))
+    assert res.value == "No"
+    assert res.source is ResolutionSource.INFERRED
+    assert res.needs_review is False
 
 
 def test_llm_unavailable_bails(answer_repo):
@@ -265,7 +309,7 @@ def test_llm_unavailable_bails(answer_repo):
 
 
 def test_llm_malformed_reply_bails(answer_repo):
-    llm = StubLLM(reply={"answer": None, "confidence": "high"})
+    llm = StubLLM(reply={"answer": None, "confidence": "high"})  # not copilot schema
     resolver = AnswerResolver(_bank(), answer_repo, llm_client=llm)
     res = asyncio.run(resolver.resolve(_q("Why?")))
     assert res.needs_review is True

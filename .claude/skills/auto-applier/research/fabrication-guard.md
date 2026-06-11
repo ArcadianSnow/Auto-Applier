@@ -359,3 +359,18 @@ No paid API, no cloud, fully within the project's zero-cost / local-first constr
 - [Named Entity Recognition — extract skill entities from resumes using spaCy (Medium / HR AI)](https://medium.com/hr-ai/named-entity-recognition-how-to-extract-skill-entities-from-resumes-using-spacy-865476b5771e)
 - [Named entity recognition in resumes (arXiv 2306.13062)](https://arxiv.org/abs/2306.13062)
 - [Aman's AI Journal — Factuality in LLMs](https://aman.ai/primers/ai/factuality-in-LLMs/)
+
+
+---
+
+## Addendum (2026-06-11): the cover letter was the unguarded surface
+
+First live optimize run: the structured resume passed guard_l1 clean, but the COVER
+LETTER fabricated an entire stack (Kubernetes/Terraform/ArgoCD for a SQL Server DBA).
+Free prose can't be allow-listed structurally, so vet_cover_letter (guard.py) does
+the coarser deterministic check: extract known tech-skill phrases (the section-7b
+reconcile vocabulary) from the letter AND from the bank corpus with the same
+extractor; any term claimed but not bank-supported -> REVIEW finding. Wired as gate
+3b in the optimize worker. REVIEW severity (not HARD_FAIL): naming the employer's
+stack can be legitimate framing — a human decides, but it never auto-applies.
+Details: research/ats-form-automation.md, E2E validation section.
