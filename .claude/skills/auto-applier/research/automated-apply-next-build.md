@@ -86,6 +86,27 @@ $env:AV3_DATA_DIR='C:\Users\jar85\JobSearch\av3data'; $env:PYTHONIOENCODING='utf
 python C:\Users\jar85\JobSearch\diagnose_apply.py https://job-boards.greenhouse.io/<token>/jobs/<id> <Company>
 ```
 
+**VALIDATED LIVE 2026-06-13 on Tailscale** (`/tailscale/jobs/4704631005`): the upload works —
+`filled['cover_letter']=True` and the on-page "Cover Letter" section shows the attached filename.
+Three findings to know:
+
+1. **Post-attach DOM swap (important).** After `set_input_files('#cover_letter', …)` fires react's
+   onChange, Greenhouse **removes the bare `#cover_letter` input** and renders the attached filename in
+   the Cover Letter section. So you CANNOT verify by re-reading `#cover_letter.files` (the element is
+   gone — reads as -1). Verify by the **visible filename in the section** instead (the diagnostic's
+   read-back was fixed to do this). The attach itself is unaffected — `filled['cover_letter']` is the
+   true signal, captured at attach time.
+2. **Cover Letter can be REQUIRED** (`Cover Letter*` on Tailscale). So a queued job at a company whose
+   letter ISN'T in the index → no attach → on a real `--no-dry-run` the required-field validation
+   correctly routes it to assisted/REVIEW (never submits blank). Another reason to map the multi-variant
+   companies before going live on them.
+3. **`#cover_letter` presence varies per company** (live survey of 10 boards): Postman, Adyen,
+   SingleStore, Tailscale, Celonis HAVE it; Monzo, Algolia do NOT (form renders, no cover field — the
+   defensive helper no-ops). And several companies **redirect `job-boards.greenhouse.io/<token>/jobs/<id>`
+   to their OWN careers host** (SumUp→sumup.com, Fivetran→fivetran.com, Databricks→databricks.com) — no
+   Greenhouse form at that URL at all (0 controls). Those jobs can't auto-apply via the greenhouse driver;
+   a discovery/routing follow-up (detect the redirect, mark for assisted) is worth a future ticket.
+
 ## BUILD 2 — Verify the Tailscale enumerated react-selects
 
 The `fill_combobox` committer was validated on Grafana (Yes/No, country, city, EEO). The
@@ -101,6 +122,24 @@ them commit, have the copilot/resolver return option-canonical short values for 
 (e.g. "No" not "No, I haven't…"), or have `fill_combobox` extract a yes/no/leading-number from the
 value. "Why are you interested in joining Tailscale?" correctly bails (company-specific) and the
 privacy consent correctly bails — leave those.
+
+**CONFIRMED LIVE 2026-06-13** (`/tailscale/jobs/4704631005`, 14 custom Qs, 13/19 filled). The job ID
+in the command above (`4663656005`) is stale — use `4704631005` or any live Tailscale posting. What
+committed vs bailed:
+- ✅ commit: sponsorship `[committed] No`, "hands-on experience designing/deploying…" `[committed] No`,
+  LinkedIn + Website (GitHub) typed, Gender/Hispanic `[committed] Decline To Self Identify`,
+  Disability `[committed] I do not want to answer`, Country `[committed] +1` (cosmetic dial-code badge,
+  submits US — known, not a bug).
+- ⛔ bail-blank (the BUILD 2 targets): "located in / willing to relocate to Singapore?" (Y/N),
+  "How many years of experience…" (`question_…[]`, a RANGE select), "have you used Tailscale before?"
+  — all `[ctrl-text] Select...`. These are the enumerated react-selects whose inferred prose answer
+  doesn't match an option. **This is the work:** option-canonical short values (or a yes/no/number
+  extractor in `fill_combobox`).
+- ✅ correct bail (leave): "Why are you interested in joining Tailscale?" (textarea, company-specific),
+  the "I have read and understand…Candidate Privacy…" consent (CONSENT class).
+- ⚠️ `veteran_status` bailed blank again here (BUILD 3 flake; non-required EEO — benign).
+Note `question_8799357005[]` — the years-of-experience field id ends in `[]` (a multi/array react-select);
+worth checking the committer handles the bracket-name selector.
 
 ## BUILD 3 — `veteran_status` intermittent EEO commit
 

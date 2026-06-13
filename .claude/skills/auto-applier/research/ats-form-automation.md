@@ -55,7 +55,24 @@ buttons; ignore those and target the underlying native input. **The cover letter
 button, so `set_input_files('#cover_letter', path)` works directly — no click. `.docx` uploads as-is (the
 accept list includes it), so no PDF render is needed. The driver wires this via
 `apply_base.attach_cover_letter` (defensive: missing input or error → observable False, never fatal —
-a cover letter is supplementary). See BUILD 1 in `automated-apply-next-build.md`. Greenhouse parses the résumé but does **not**
+a cover letter is supplementary). See BUILD 1 in `automated-apply-next-build.md`.
+
+**Post-attach DOM swap (verified live Tailscale 2026-06-13).** After `set_input_files('#cover_letter', …)`
+fires react's onChange, Greenhouse **removes the `#cover_letter` input** and shows the attached filename
+in the Cover Letter section. So `filled['cover_letter']` (captured at attach time) is the truth signal —
+re-reading `#cover_letter.files` afterward returns -1 (gone), which is NOT a failure. Verify by the
+visible filename. Cover Letter is sometimes **required** (`Cover Letter*`, e.g. Tailscale).
+
+**Per-company variance (live survey of 10 boards, 2026-06-13).** Whether `#cover_letter` exists is a
+per-company Greenhouse setting: Postman / Adyen / SingleStore / Tailscale / Celonis HAVE it; Monzo /
+Algolia do NOT (form renders, no cover field). The defensive helper no-ops where it's absent.
+
+**Redirect-off-Greenhouse (live, 2026-06-13).** Some companies redirect
+`job-boards.greenhouse.io/<token>/jobs/<id>` to their OWN careers host (SumUp→sumup.com,
+Fivetran→fivetran.com, Databricks→databricks.com). At those URLs there is **no Greenhouse form** (0
+controls, 0/5 standard fields, 0 custom questions) — the greenhouse driver can't fill or submit them.
+A discovery/routing follow-up (detect the cross-host redirect after `goto`, mark the job for assisted
+rather than letting it surface as an empty form) is worth a ticket. Greenhouse parses the résumé but does **not**
 force a "correct the parsed fields" step on the candidate — parsing populates the recruiter's view, not a
 blocking candidate flow.
 
