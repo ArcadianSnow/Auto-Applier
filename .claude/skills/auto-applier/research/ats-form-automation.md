@@ -67,6 +67,15 @@ visible filename. Cover Letter is sometimes **required** (`Cover Letter*`, e.g. 
 per-company Greenhouse setting: Postman / Adyen / SingleStore / Tailscale / Celonis HAVE it; Monzo /
 Algolia do NOT (form renders, no cover field). The defensive helper no-ops where it's absent.
 
+**EEO decline-option wording varies per form (live, 2026-06-13).** The resolver yields
+`"Prefer not to answer"` for EEO; the react-select committer must click whatever the form calls its
+decline option. Observed on one Tailscale form: gender/hispanic = `"Decline To Self Identify"`,
+disability = `"I do not want to answer"`, veteran = `"I don't wish to answer"`. The contraction
+("don't"/"won't") tripped `_DECLINE_SYNONYMS` until fixed (`n['’]t` with no leading `\b`) — see
+BUILD 3 in `automated-apply-next-build.md`. All four EEO comboboxes now commit. The decline-match is
+intentionally an OPTION-ONLY branch: a decline value never falls through to a substantive option
+(it must never auto-pick "I am not a protected veteran" for a "prefer not" answer).
+
 **Redirect-off-Greenhouse (live, 2026-06-13).** Some companies redirect
 `job-boards.greenhouse.io/<token>/jobs/<id>` to their OWN careers host (SumUp→sumup.com,
 Fivetran→fivetran.com, Databricks→databricks.com). At those URLs there is **no Greenhouse form** (0

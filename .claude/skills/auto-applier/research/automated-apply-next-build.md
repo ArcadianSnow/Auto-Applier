@@ -3,9 +3,13 @@
 > Written 2026-06-13, after the field-fill overhaul (commit **20b3731**, 1004 tests green).
 > Read `automated-apply-go-live.md` first for the full backstory; this is the forward plan.
 >
-> **UPDATE 2026-06-13 — BUILD 1 (cover-letter upload) SHIPPED.** 1023 tests green. See the
-> "BUILD 1 — DONE" section below; the remaining builds (Tailscale enumerated dropdowns,
-> veteran flake, gated go-live) are unchanged.
+> **UPDATE 2026-06-13 — BUILD 1, 2, 3 all resolved. 1026 tests green.**
+> - BUILD 1 (cover-letter upload) SHIPPED + validated live (Tailscale). Merged to master + pushed.
+> - BUILD 2 (enumerated react-selects) CLOSED as no-fix-needed: the bails are honest RESOLVER
+>   decisions, not a filler miss (proven via the resolver-detail dump). See "BUILD 2 RESULT".
+> - BUILD 3 (veteran_status) FIXED: a `_DECLINE_SYNONYMS` contraction gap ("don't"), not a flake.
+> The only thing left before go-live is the gated, watched `--no-dry-run` itself (+ the open user
+> decision on multi-variant cover-letter defaults).
 
 ## Where we are
 
@@ -137,16 +141,40 @@ committed vs bailed:
   extractor in `fill_combobox`).
 - ✅ correct bail (leave): "Why are you interested in joining Tailscale?" (textarea, company-specific),
   the "I have read and understand…Candidate Privacy…" consent (CONSENT class).
-- ⚠️ `veteran_status` bailed blank again here (BUILD 3 flake; non-required EEO — benign).
-Note `question_8799357005[]` — the years-of-experience field id ends in `[]` (a multi/array react-select);
-worth checking the committer handles the bracket-name selector.
+- ⚠️ `veteran_status` bailed blank again here — turned out NOT to be a flake; see BUILD 3 (fixed).
 
-## BUILD 3 — `veteran_status` intermittent EEO commit
+### BUILD 2 RESULT (2026-06-13): no safe "make them commit" fix — closing it.
 
-One non-required EEO react-select flakes ~1/run (the others commit). Already added scroll-into-view
-+ menu-wait + pre-clear + 3 retries. If it matters, instrument `fill_combobox` to log which option
-it clicked and re-run the diagnostic a few times to see the failure mode (menu not rendering vs
-option-click intercepted). Benign for now — EEO is optional, blank is acceptable.
+The `diagnose_apply.py` resolver-detail dump (`src=/fills=/review=/val=` per question) showed the
+enumerated bails are **the RESOLVER honestly bailing, not a `fill_combobox` miss**:
+- relocate-to-Singapore (`src=review`), used-Tailscale-before (`src=review`), privacy-consent
+  (`src=review`/CONSENT) → `needs_review=True`, no value ever reaches the filler. → assisted is
+  CORRECT. Nothing to fix.
+- "How many years of experience…" → `src=bank conf=0.84 fills=True`, but `val='Honest answer: zero
+  years in that specific role…'` — a PROSE bank answer routed into a range react-select. It didn't
+  commit because prose ≠ an option. **Auto-committing it is the WRONG move:** it would push a
+  disqualifying-but-honest "0 years" onto an auto-submit screener (exactly Joseph's weakest axis,
+  DBA→SE). Bailing to assisted so the human decides is the safer, honest behavior — the invariant
+  ("a blank the human fills beats a confident wrong answer") says leave it. So a yes/no/number
+  extractor in `fill_combobox` was deliberately NOT added: it would only fire on this prose case,
+  where firing is undesirable. Clean standalone numeric answers are rare here and can be revisited
+  if data shows them.
+
+Net: the enumerated react-selects behave correctly. No filler change for screeners.
+
+## BUILD 3 — `veteran_status` — DONE (2026-06-13): contraction regex gap, not a flake
+
+Root-caused via the live EEO option-text dump. The resolver yields `"Prefer not to answer"`; the
+decline-only branch in `_click_combobox_option` must click the **decline option**, whose wording
+varies per form. Tailscale's veteran decline option is **"I don't wish to answer"** — and the old
+`_DECLINE_SYNONYMS` `\b(?:not|n't|never)\b` alternative **never matched the contraction "don't"**
+(no word boundary between "do" and "n't"), so no option matched → deterministic bail. It only LOOKED
+intermittent because gender/hispanic use "Decline To Self Identify" (caught by `decline`) and
+disability uses "I do not want to answer" (caught by `not…answer`) — only the "don't"/"won't"
+phrasing slipped. Fix: `n['’]t` (no leading `\b`) in the negation alternative + added `share`.
+VERIFIED LIVE: veteran_status now `[committed] I don't wish to answer`; all 4 EEO comboboxes commit.
+Tests: `test_apply_driver.py::test_decline_*`. (The earlier scroll/menu-wait/retry hardening stays —
+it was a separate below-the-fold concern.) 1026 green.
 
 ## THEN — the gated go-live (unchanged)
 

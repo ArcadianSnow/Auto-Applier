@@ -320,10 +320,18 @@ _REACT_SELECT_OPTION = ".select__option"
 # react-select option text varies ("Decline To Self Identify", "I don't wish to answer", …).
 # EEO "decline" option text varies a lot: "Decline To Self Identify", "I don't wish to
 # answer", "I do not want to answer", "Prefer not to say/disclose". Match: 'decline',
-# 'prefer not', or any negation co-occurring with answer/say/disclose/identify (covers
+# 'prefer not', or any negation co-occurring with answer/say/disclose/identify/share (covers
 # want/wish/choose-not-to). Disability's "I do not WANT to answer" was missed before.
+#
+# CONTRACTION FIX (live Tailscale 2026-06-13): the negation alternative MUST catch
+# contractions ("don't", "won't", "doesn't"). The old `\b(?:not|n't|never)\b` never matched
+# inside "don't" — there's no word boundary between "do" and "n't" — so the veteran option
+# "I don't wish to answer" slipped through, the decline-only branch found no matching option,
+# and veteran_status deterministically bailed (it only *looked* like an intermittent flake
+# because the veteran decline wording differs per form). `n['’]t` (no leading \b) fixes it.
 _DECLINE_SYNONYMS = re.compile(
-    r"\bdecline\b|\bprefer not\b|\b(?:not|n't|never)\b.{0,20}\b(answer|say|disclose|identify|specify)\b",
+    r"\bdecline\b|\bprefer not\b|"
+    r"(?:\bnot\b|\bnever\b|n['’]t)[^.]{0,20}?\b(?:answer|say|disclose|identify|specify|share)\b",
     re.IGNORECASE,
 )
 

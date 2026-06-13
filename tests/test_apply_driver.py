@@ -511,3 +511,46 @@ def test_settle_swallows_broken_pages():
             raise RuntimeError("boom")
 
     assert asyncio.run(settle_open_dropdown(_Broken(), "Yes")) is False
+
+
+# ---------------------------------------------------------------------------
+# _click_combobox_option — decline-synonym matching for EEO react-selects.
+# Regression for the veteran_status deterministic bail (live Tailscale 2026-06-13):
+# the resolver yields "Prefer not to answer" and the decline-only branch must find the
+# decline OPTION, whose wording varies per form ("I don't wish to answer" was missed
+# because _DECLINE_SYNONYMS didn't catch the contraction "don't").
+# ---------------------------------------------------------------------------
+
+from auto_applier.sources.browser.apply_base import _DECLINE_SYNONYMS, _click_combobox_option
+
+
+def test_decline_value_clicks_contraction_decline_option():
+    """value 'Prefer not to answer' commits the veteran option 'I don't wish to answer'
+    (the contraction that used to slip past the decline regex)."""
+    not_vet = _MenuOption("I am not a protected veteran")
+    is_vet = _MenuOption("I identify as one or more of the classifications of a protected veteran")
+    decline = _MenuOption("I don't wish to answer")
+    page = _MenuPage(options=[not_vet, is_vet, decline])
+
+    assert asyncio.run(_click_combobox_option(page, "Prefer not to answer")) is True
+    assert decline.clicked
+    assert not not_vet.clicked and not is_vet.clicked  # never the substantive answers
+
+
+def test_decline_value_does_not_click_a_nondecline_option():
+    """No decline option present → a decline value must NOT fall through to a substantive
+    option (never auto-answer 'I am not a protected veteran' for a 'prefer not' value)."""
+    not_vet = _MenuOption("I am not a protected veteran")
+    is_vet = _MenuOption("I identify as one or more of the classifications of a protected veteran")
+    page = _MenuPage(options=[not_vet, is_vet])
+
+    assert asyncio.run(_click_combobox_option(page, "Prefer not to answer")) is False
+    assert not not_vet.clicked and not is_vet.clicked
+
+
+def test_decline_synonyms_matches_common_eeo_phrasings():
+    for ok in ("I don't wish to answer", "I do not want to answer", "Decline To Self Identify",
+               "I prefer not to answer", "I choose not to disclose", "won't answer"):
+        assert _DECLINE_SYNONYMS.search(ok), ok
+    for no in ("Yes", "No", "Male", "I am not a protected veteran"):
+        assert not _DECLINE_SYNONYMS.search(no), no
