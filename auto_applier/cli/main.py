@@ -541,6 +541,71 @@ def pass_cmd(job_ids, shortlist_name, mark_all) -> None:
         sys.exit(1)
 
 
+@cli.command("queue")
+@click.argument("job_ids", nargs=-1)
+@click.option("--shortlist", "shortlist_name", default=None,
+              help="Name of a saved shortlist (file stem in the shortlist dir).")
+@click.option("--all", "mark_all", is_flag=True, default=False,
+              help="With --shortlist: queue EVERY job in that shortlist.")
+def queue_cmd(job_ids, shortlist_name, mark_all) -> None:
+    """Queue jobs for the apply worker WITHOUT running optimize (DECIDED/REVIEW → QUEUED_APPLY).
+
+    The normal DECIDED→QUEUED_APPLY path is `av3 optimize` (generate + guard a per-job
+    résumé). This is the manual-résumé route for automated apply: when you want the worker
+    to upload your hand-crafted `artifacts/resume.pdf` instead of a generated one, queue the
+    jobs here (no optimize → no per-job PDF → the worker uses the good global résumé).
+    See research/automated-apply-go-live.md, blocker B. Per-job isolation; batch-safe.
+    """
+    from auto_applier.db.engine import tx
+    from auto_applier.domain.state import InvalidTransition
+
+    settings = load_settings()
+    ids, err = _resolve_job_ids(settings, job_ids, shortlist_name, mark_all)
+    if err:
+        click.echo(f"  x FAIL {err}", err=True)
+        sys.exit(2)
+    if not ids:
+        click.echo("  x FAIL no job ids (pass ids or --shortlist NAME --all)", err=True)
+        sys.exit(2)
+
+    queued_n = already_n = error_n = 0
+    conn = init_app_db(settings.app_db_path)
+    try:
+        repo = JobRepo(conn)
+        for jid in ids:
+            job = repo.get(jid)
+            if job is None:
+                error_n += 1
+                click.echo(f"  x error   {jid}  not found", err=True)
+                continue
+            if job.state is JobState.QUEUED_APPLY:
+                already_n += 1
+                click.echo(f"  - already  {jid}  already QUEUED_APPLY")
+                continue
+            # Only DECIDED/REVIEW legally reach QUEUED_APPLY (state.py). Anything else
+            # (APPLIED, SCORED, APPLYING, …) is an error, not a silent no-op.
+            if job.state not in (JobState.DECIDED, JobState.REVIEW):
+                error_n += 1
+                click.echo(f"  x error   {jid}  state={job.state.value} "
+                           f"(only DECIDED/REVIEW can be queued)", err=True)
+                continue
+            try:
+                with tx(conn):
+                    repo.set_state(jid, JobState.QUEUED_APPLY)
+                queued_n += 1
+                click.echo(f"  + queued   {jid}  {job.company} — {job.title}")
+            except (InvalidTransition, KeyError) as exc:
+                error_n += 1
+                click.echo(f"  x error   {jid}  {exc}", err=True)
+    finally:
+        conn.close()
+    click.echo(f"\nqueued={queued_n} already={already_n} errors={error_n}")
+    if queued_n:
+        click.echo("Next: `av3 apply --once --dry-run` (dress rehearsal) before any real submit.")
+    if error_n:
+        sys.exit(1)
+
+
 @cli.command()
 def status() -> None:
     """Show job counts by state from app.db."""
@@ -1105,8 +1170,11 @@ def ask_cmd(question: str, job_id: str | None, save: bool, as_json: bool) -> Non
               help="auto = bot fills + submits on clean forms; assisted = pre-fill, human submits.")
 @click.option("--no-llm", is_flag=True, default=False,
               help="Skip Ollama wiring. Resolver uses bank + sensitive policy only.")
+@click.option("--keep-open", is_flag=True, default=False,
+              help="Leave the browser open after the run (dry-run dress-rehearsal review). "
+                   "Press Enter in the terminal to close it.")
 def apply(once: bool, limit: int | None, source: str | None,
-          dry_run: bool, mode: str, no_llm: bool) -> None:
+          dry_run: bool, mode: str, no_llm: bool, keep_open: bool) -> None:
     """Drain QUEUED_APPLY jobs through the apply worker (spec section 7 #7).
 
     Constructs the resolver from the fact bank, opens one stealthy Chrome session, and
@@ -1189,7 +1257,13 @@ def apply(once: bool, limit: int | None, source: str | None,
                 dry_run=dry_run,
                 drivers=drivers,
             )
-            return await worker.run_once(limit=limit)
+            result = await worker.run_once(limit=limit)
+            if keep_open:
+                # Dress-rehearsal review: hold the filled forms on screen until the user
+                # is done inspecting. Block on a thread so the event loop stays alive.
+                click.echo("\n--keep-open: browser left open. Press Enter here to close it...")
+                await asyncio.get_event_loop().run_in_executor(None, sys.stdin.readline)
+            return result
         finally:
             await session.stop()
 

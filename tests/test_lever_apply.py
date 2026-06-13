@@ -127,7 +127,7 @@ def test_dry_run_classifies_hcaptcha_fills_and_does_not_submit():
         {"id": "eeo[gender]", "label": "Gender", "required": False, "kind": "select"},
     ]
     page = FakePage(html, scripts, questions)
-    applicant = Applicant("Pat", "Doe", "pat@example.com", "555-1234")
+    applicant = Applicant("Pat", "Doe", "pat@example.com", "555-987-1234")
 
     outcome = asyncio.run(
         prepare_application(page, _listing(), applicant, resume_path="/tmp/resume.pdf", dry_run=True)
@@ -141,7 +141,8 @@ def test_dry_run_classifies_hcaptcha_fills_and_does_not_submit():
     # Lever's single 'name' field gets the full name.
     assert page.elements["input[name='name']"].typed == "Pat Doe"
     assert page.elements["input[name='email']"].typed == "pat@example.com"
-    assert page.elements["input[name='phone']"].typed == "555-1234"
+    # Phone normalized to +E.164 for intl-tel-input (country auto-selected by the prefix).
+    assert page.elements["input[name='phone']"].typed == "+15559871234"
     # Résumé attached + parse-wait observed the storage id.
     assert outcome.filled["resume"] is True
     assert outcome.filled["resume_parsed"] is True

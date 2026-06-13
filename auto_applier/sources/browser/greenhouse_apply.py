@@ -29,6 +29,7 @@ from auto_applier.sources.browser.apply_base import (
     CustomQuestion,
     any_required_unresolved,
     check_auth_wall,
+    fill_phone,
     fill_resolutions,
     human_type,
 )
@@ -66,33 +67,70 @@ async def _collect_script_srcs(page) -> list[str]:
 
 
 async def discover_custom_questions(page) -> list[CustomQuestion]:
-    """Walk Greenhouse custom-question inputs (``#question_<id>``) and pair each with its
-    visible label — the IDs are per-posting and unstable, so we read labels at runtime."""
+    """Walk Greenhouse custom-question controls and pair each with its visible label.
+
+    The current ``job-boards.greenhouse.io`` React layout renders each question as a real
+    control with ``id="question_<id>"`` (``<textarea>`` for essays, ``<input type=text>``
+    for free text, and an ``<input role=combobox class="select__input">`` REACT-SELECT for
+    dropdowns), wrapped by sibling ``question_<id>-label`` / ``-description`` elements. We
+    must select the CONTROLS — selecting the ``-label``/``-description`` wrappers (the bug
+    live 2026-06-13) makes the driver type answers into a non-input and nothing lands.
+    So the selector is tag-qualified (input/textarea/select), which excludes the wrappers.
+    react-select comboboxes are marked ``kind='input'`` so the fill path types-and-commits
+    via ``settle_open_dropdown`` (native ``select_option`` doesn't work on react-select)."""
     raw = await page.evaluate(
         """
         () => {
           const out = [];
-          const els = document.querySelectorAll(
-            "[id^='question_'], [name^='question_'], [id^='job_application_answers']"
-          );
-          els.forEach(el => {
-            const id = el.id || el.name || '';
-            let label = '';
-            if (el.id) {
-              const lab = document.querySelector(`label[for='${el.id}']`);
-              if (lab) label = lab.innerText.trim();
+          // The standard fields the DRIVER fills directly (not via the resolver).
+          const STD = new Set(['first_name','last_name','email','phone','resume']);
+          // Skip non-question controls: standard fields, file/hidden/search/buttons, the
+          // react-select hidden requiredInput carrier, the intl-tel-input search box, and
+          // the reCAPTCHA textarea. Everything else WITH A LABEL is a real question — incl.
+          // the semantic-id fields the old question_* selector missed (preferred_name,
+          // country, candidate-location, gender, hispanic_ethnicity, veteran_status,
+          // disability_status). (live 2026-06-13: those were all skipped → blank.)
+          const skip = (el) => {
+            const id = el.id || '', name = el.getAttribute('name') || '';
+            const type = (el.getAttribute('type') || '').toLowerCase();
+            const cls = (el.className || '').toString();
+            if (STD.has(id) || STD.has(name)) return true;
+            if (['hidden','file','search','submit','button','reset','image'].includes(type)) return true;
+            if (/requiredInput|g-recaptcha|iti__|visually-hidden/.test(cls)) return true;
+            if (id.startsWith('iti-')) return true;
+            if (/recaptcha/i.test(id + ' ' + name)) return true;
+            return false;
+          };
+          const labelFor = (el) => {
+            let label = (el.getAttribute('aria-label') || '').trim();
+            if (!label && el.id) { const l = document.getElementById(el.id + '-label'); if (l) label = (l.innerText||'').trim(); }
+            if (!label && el.id) { const f = document.querySelector(`label[for='${el.id}']`); if (f) label = (f.innerText||'').trim(); }
+            if (!label) { const w = el.closest('div,fieldset,li'); const l = w && w.querySelector('label'); if (l) label = (l.innerText||'').trim(); }
+            return label;
+          };
+          document.querySelectorAll('input, textarea, select').forEach(el => {
+            if (skip(el)) return;
+            const id = el.id || el.getAttribute('name') || '';
+            if (!id) return;
+            const label = labelFor(el);
+            if (!label) return;  // can't resolve a label-less field by intent
+            const tag = el.tagName.toLowerCase();
+            const isCombo = el.getAttribute('role') === 'combobox'
+                         || (el.className || '').toString().includes('select__input');
+            // react-select (combobox) is committed by opening + clicking an option, not by
+            // typing or native select_option → its own 'combobox' kind (see fill_resolutions).
+            const kind = tag === 'textarea' ? 'textarea'
+                       : tag === 'select' ? 'select'
+                       : isCombo ? 'combobox' : 'input';
+            let options = [];
+            if (tag === 'select') {
+              options = Array.from(el.querySelectorAll('option'))
+                .map(o => (o.textContent || '').trim()).filter(Boolean);
             }
-            if (!label) {
-              const wrap = el.closest('div,fieldset,li');
-              const lab = wrap && wrap.querySelector('label');
-              if (lab) label = lab.innerText.trim();
-            }
-            out.push({
-              id, label,
-              required: el.required || el.getAttribute('aria-required') === 'true',
-              kind: el.tagName.toLowerCase() === 'textarea' ? 'textarea'
-                   : el.tagName.toLowerCase() === 'select' ? 'select' : 'input',
-            });
+            const lt = label.replace(/\\s+$/, '');
+            const required = el.required || el.getAttribute('aria-required') === 'true'
+                          || lt.endsWith('*');
+            out.push({id, label, options, required, kind});
           });
           return out;
         }
@@ -104,13 +142,13 @@ async def discover_custom_questions(page) -> list[CustomQuestion]:
         if not key or key in seen:
             continue
         seen.add(key)
-        qs.append(CustomQuestion(r["id"], r["label"], bool(r["required"]), r["kind"]))
-    # Second pass — dedup by visible label: the new job-boards layout renders a
-    # combo question as TWO elements (the visible combobox input + a hidden value
-    # carrier) with distinct ids but the same label. Keep the FIRST per label so
-    # each question is resolved + filled once (live 2026-06-11: every GitLab
-    # screener was LLM-resolved and typed twice). Empty labels are never deduped
-    # (we can't tell two label-less fields apart).
+        qs.append(CustomQuestion(
+            r["id"], r["label"], bool(r["required"]), r["kind"],
+            options=list(r.get("options") or []),
+        ))
+    # Dedup by visible label as a belt-and-suspenders (an older layout rendered a combo
+    # question as a visible input + a hidden value carrier sharing a label). Keep the FIRST
+    # per label; empty labels are never deduped (we can't tell two label-less fields apart).
     seen_labels: set[str] = set()
     deduped: list[CustomQuestion] = []
     for q in qs:
@@ -179,7 +217,9 @@ async def prepare_application(
     outcome.filled["last_name"] = await human_type(page, _FIELD_SELECTORS["last_name"], applicant.last_name)
     outcome.filled["email"] = await human_type(page, _FIELD_SELECTORS["email"], applicant.email)
     if applicant.phone:
-        outcome.filled["phone"] = await human_type(page, _FIELD_SELECTORS["phone"], applicant.phone)
+        # intl-tel-input: use its setNumber() API (correct in every dial-code mode) so the
+        # country flag is set AND the dial code isn't doubled. See fill_phone.
+        outcome.filled["phone"] = await fill_phone(page, _FIELD_SELECTORS["phone"], applicant.phone)
 
     # Attach résumé via the native file input.
     resume_el = await page.query_selector(_RESUME_SELECTOR)

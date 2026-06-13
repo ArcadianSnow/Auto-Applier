@@ -38,6 +38,7 @@ from auto_applier.sources.browser.apply_base import (
     CustomQuestion,
     any_required_unresolved,
     check_auth_wall,
+    fill_phone,
     fill_resolutions,
     human_type,
 )
@@ -192,7 +193,8 @@ async def prepare_application(
     outcome.filled["name"] = await human_type(page, _FIELD_SELECTORS["name"], applicant.full_name)
     outcome.filled["email"] = await human_type(page, _FIELD_SELECTORS["email"], applicant.email)
     if applicant.phone:
-        outcome.filled["phone"] = await human_type(page, _FIELD_SELECTORS["phone"], applicant.phone)
+        # intl-tel-input setNumber() — correct in all dial-code modes (see fill_phone).
+        outcome.filled["phone"] = await fill_phone(page, _FIELD_SELECTORS["phone"], applicant.phone)
 
     # Attach résumé via the native file input, then wait for the async parse to settle so
     # custom-Q discovery doesn't race Lever's prefill writes (research §Lever).

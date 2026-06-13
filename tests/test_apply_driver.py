@@ -51,8 +51,13 @@ class FakePage:
     async def eval_on_selector_all(self, selector, js):
         return self._scripts  # only used for script[src]
 
-    async def evaluate(self, js):
-        return self._questions  # discover_custom_questions
+    async def evaluate(self, js, arg=None):
+        # Two-arg call = fill_phone's intl-tel-input setNumber probe; the fake has no iti
+        # instance, so return False to exercise the type-the-+E.164 fallback. One-arg call
+        # = discover_custom_questions.
+        if arg is not None:
+            return False
+        return self._questions
 
     async def query_selector(self, selector):
         if selector == "button[type=submit]":
@@ -222,6 +227,139 @@ def test_required_question_unresolved_downgrades_auto_to_assisted():
     assert outcome.status is ApplicationStatus.ASSISTED_PENDING
     assert outcome.submitted is False
     assert "unresolved" in outcome.note
+
+
+def test_human_attestation_gate_downgrades_auto_to_assisted_end_to_end():
+    """Blocker A, full chain: a native-select "Which best describes you?" whose options
+    are AI-vs-human is discovered WITH options, the REAL resolver classifies it
+    HUMAN_ATTESTATION → REVIEW (the bot must never attest to being human), and because
+    it is required the driver downgrades BROWSER_AUTO → ASSISTED_PENDING. The human then
+    truthfully attests when they submit. (research/automated-apply-go-live.md, blocker A)"""
+    from auto_applier.db import init_app_db
+    from auto_applier.db.repositories import AnswerRepo
+    from auto_applier.resume.answer_resolver import (
+        AnswerResolver, ResolutionSource, SensitiveClass,
+    )
+    from auto_applier.resume.factbank import Contact, FactBank
+
+    html = '<textarea id="g-recaptcha-response"></textarea><form><button type="submit"></button></form>'
+    scripts = ["https://www.gstatic.com/recaptcha/releases/x/recaptcha__en.js"]
+    # Non-descriptive label — caught only by the option PAIR captured at discovery.
+    questions = [{
+        "id": "question_777",
+        "label": "Which of the following best describes you?",
+        "required": True, "kind": "select",
+        "options": ["I am an AI or automated program", "I am a human being"],
+    }]
+    page = FakePage(html, scripts, questions)
+
+    import tempfile, os
+    db_path = os.path.join(tempfile.mkdtemp(), "app.db")
+    bank = FactBank(contact=Contact(name="Pat Doe", email="pat@x.com", location="Remote"),
+                    work_authorization="US citizen")
+    resolver = AnswerResolver(bank, answer_repo=AnswerRepo(init_app_db(db_path)))
+
+    outcome = asyncio.run(
+        prepare_application(
+            page, _listing(), Applicant("Pat", "Doe", "pat@x.com"), "/tmp/r.pdf",
+            dry_run=False, mode=ApplyMode.BROWSER_AUTO, resolver=resolver,
+        )
+    )
+    # The option pair was captured through discovery onto the CustomQuestion.
+    assert outcome.custom_questions[0].options == [
+        "I am an AI or automated program", "I am a human being"]
+    # Resolver flagged it as the attestation gate and bailed to REVIEW.
+    assert outcome.resolutions[0].sensitive is SensitiveClass.HUMAN_ATTESTATION
+    assert outcome.resolutions[0].source is ResolutionSource.REVIEW
+    # Required + unresolved → never auto-submitted; handed to the human.
+    assert outcome.status is ApplicationStatus.ASSISTED_PENDING
+    assert outcome.submitted is False
+
+
+def test_normalize_phone_for_intl_tel_input():
+    """Phone must be typed as +E.164 so intl-tel-input auto-selects the country (its
+    default flag is the globe = no country). Verified live on Greenhouse 2026-06-12."""
+    from auto_applier.sources.browser.apply_base import normalize_phone
+    assert normalize_phone("1-682-718-8130") == "+16827188130"   # his number (cc + 10)
+    assert normalize_phone("682-718-8130") == "+16827188130"     # bare US national
+    assert normalize_phone("(682) 718 8130") == "+16827188130"
+    assert normalize_phone("+44 20 7946 0958") == "+442079460958"  # already international
+    assert normalize_phone("") == ""
+    assert normalize_phone("  ") == ""
+
+
+def test_greenhouse_phone_filled_as_e164():
+    """The driver normalizes before filling — the form must receive +E.164, not 1-682-…
+    (here the fake has no iti instance, so fill_phone falls back to typing)."""
+    html = '<form></form>'
+    page = FakePage(html, scripts=[], questions=[])
+    applicant = Applicant("Pat", "Doe", "pat@example.com", "1-682-718-8130")
+    asyncio.run(prepare_application(page, _listing(), applicant, "/tmp/r.pdf", dry_run=True))
+    assert page.elements["#phone"].typed == "+16827188130"
+
+
+def test_fill_phone_prefers_iti_setnumber_api():
+    """When intl-tel-input IS present, fill_phone calls setNumber via evaluate (no typing) —
+    this is what fixes the doubled-+1 in separate-dial-code mode."""
+    from auto_applier.sources.browser.apply_base import fill_phone
+
+    class ItiPage:
+        def __init__(self): self.arg = None
+        async def evaluate(self, js, arg=None):
+            self.arg = arg
+            return True  # iti instance present, setNumber succeeded
+        async def query_selector(self, sel):
+            raise AssertionError("must not fall back to typing when iti is present")
+
+    p = ItiPage()
+    assert asyncio.run(fill_phone(p, "#phone", "1-682-718-8130")) is True
+    assert p.arg == ["#phone", "+16827188130"]  # normalized E.164 passed to setNumber
+
+
+def test_fill_phone_separate_dial_code_types_national_only():
+    """In separate-dial-code mode the dial code is shown OUTSIDE the input, so typing the
+    +CC doubles it (the bug the user saw). fill_phone types the national digits only."""
+    from auto_applier.sources.browser.apply_base import fill_phone
+
+    class SepPage:
+        def __init__(self): self.typed = ""
+        async def evaluate(self, js, arg=None):
+            if isinstance(arg, list):
+                return False                       # no iti instance on window
+            return {"mode": "separate", "dial": "+1"}  # separate-dial-code mode probe
+        async def query_selector(self, sel):
+            outer = self
+            class El:
+                async def click(self, **k): pass
+                async def type(self, ch): outer.typed += ch
+            return El()
+
+    p = SepPage()
+    assert asyncio.run(fill_phone(p, "#phone", "1-682-718-8130")) is True
+    assert p.typed == "6827188130"  # national significant number, NO leading +1
+
+
+def test_fill_refuses_to_type_a_human_affirmation():
+    """Value-side backstop (blocker A): even if classification ever slips and a resolver
+    hands back "I am a human being", the FILLER must never type it. Field left unfilled."""
+    from auto_applier.sources.browser.apply_base import (
+        CustomQuestion, affirms_human, fill_resolutions,
+    )
+    from auto_applier.resume.answer_resolver import Resolution, ResolutionSource
+
+    assert affirms_human("I am a human being") is True
+    assert affirms_human("I am not a robot") is True
+    assert affirms_human("United States") is False
+
+    q = CustomQuestion("question_att", "Which best describes you?", True, "select")
+    # A (hypothetical) bad resolution that slipped through as a fillable value.
+    bad = Resolution(question=q, value="I am a human being", source=ResolutionSource.INFERRED)
+    page = FakePage("<form></form>", scripts=[], questions=[])
+    filled = asyncio.run(fill_resolutions(page, [q], [bad]))
+    assert filled["question_att"] is False
+    # Nothing was selected on the element.
+    assert not hasattr(page.elements.get(f"#question_att", FakeElement()), "selected") or \
+        getattr(page.elements.get("#question_att"), "selected", None) is None
 
 
 def test_optional_unresolved_does_not_block_auto_submit():

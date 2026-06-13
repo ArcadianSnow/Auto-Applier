@@ -49,10 +49,13 @@ from auto_applier.sources.browser.apply_base import CustomQuestion
 
 __all__ = [
     "AnswerResolver",
+    "ProfileField",
     "Resolution",
     "ResolutionSource",
     "SensitiveClass",
+    "classify_profile_field",
     "classify_sensitive",
+    "is_open_ended",
 ]
 
 
@@ -66,6 +69,7 @@ class ResolutionSource(str, Enum):
     SENSITIVE_DEFAULT = "sensitive_default"  # EEO blank -> "prefer not to answer"
     FACT_BANK = "fact_bank"     # work-auth pulled from the fact bank directly
     USER_CONFIG = "user_config"  # e.g. salary expectation from user_config.json
+    PROFILE = "profile"         # contact/profile field (LinkedIn, city, name) from the bank
     REVIEW = "review"           # bailed; human must answer
 
 
@@ -77,6 +81,8 @@ class SensitiveClass(str, Enum):
     WORK_AUTHORIZATION = "work_authorization"
     SPONSORSHIP = "sponsorship"
     SALARY = "salary"
+    HUMAN_ATTESTATION = "human_attestation"  # "are you a human / an automated program?"
+    CONSENT = "consent"           # "I have read and agree to the privacy policy / terms / AI guidelines"
 
 
 @dataclass
@@ -120,6 +126,11 @@ _WORK_AUTH_PATTERNS = [
     r"\b(work|employment).*\bauthor(ized|ization|ised|isation)\b",
     r"\bright to work\b",
     r"\blegally\b.*\b(work|employ)\b",
+    # "Are you currently eligible to work in your country of residence?" — seen live on
+    # Grafana 2026-06-12, missed by the older patterns and auto-answered by the LLM
+    # instead of the deterministic fact-bank policy. "eligible to work" is work-auth.
+    r"\beligib(le|ility)\b.*\b(work|employ)\b",
+    r"\b(work|employ)\w*\b.*\beligib(le|ility)\b",
     r"\b(work|employment)\s+permit\b",
     r"\bcitizen(ship)?\s+status\b",
 ]
@@ -138,6 +149,54 @@ _SALARY_PATTERNS = [
     r"\bpay range\b",
 ]
 
+# Human-attestation gate (a knockout for an automated submitter). Seen live on a real
+# Solutions form 2026-06-12: a "Which of the following best describes you?" dropdown
+# whose options were "I am an AI or automated program" / "I am a human being". The bot
+# is an automated program; auto-ticking "human being" would be a FALSE attestation, and
+# these gates exist precisely to catch bots. The only correct behavior is to NOT answer
+# it and hand the form to the human (who then truthfully attests as the human reviewing
+# + submitting). Two detection layers because the label is often non-descriptive:
+#   (1) label patterns — catch the descriptive phrasings;
+#   (2) option-pair — catch "describes you?" style labels by their human-vs-AI options.
+# Deliberately NOT matched: the reCAPTCHA "I'm not a robot" *widget* (handled by the
+# CAPTCHA classifier, not the resolver) — these patterns target a real radio/select.
+_HUMAN_ATTESTATION_LABEL_PATTERNS = [
+    r"\bare you (an? )?(human|robot|bot|ai)\b",
+    r"\bhuman being\b",
+    r"\bautomated (program|agent|system|tool|script)\b",
+    r"\b(a |an )?(ro)?bot\b.*\b(human|person)\b",
+    r"\b(human|person)\b.*\b(a |an )?(ro)?bot\b",
+    r"\bare you a real (person|human)\b",
+]
+# The live Grafana gate (2026-06-12) was a react-select labelled exactly "Which of the
+# following best describes you?" — its options ("I am an AI…" / "I am a human being")
+# are NOT in the DOM until the menu opens, so option-pair detection can't see them and
+# the bare label matches none of the patterns above. So we ALSO treat a generic
+# "best describes you" select as the attestation gate — UNLESS the label carries a
+# demographic noun (then it's a self-ID question → EEO, handled below). Both branches
+# fail safe; this just routes the common case to the right bail.
+_DESCRIBES_YOU = re.compile(r"\bbest describes you\b", re.IGNORECASE)
+
+# Consent / acknowledgment gates ("I have read and understand the Candidate Privacy
+# Policy and AI Guidelines…", "I agree to the terms…"). A bot must not knowingly consent
+# on the user's behalf — especially to AI-tool-use-in-hiring policies. Always bail to the
+# human, who agrees (or not) when they review + submit. (Live Tailscale form 2026-06-13.)
+_CONSENT_PATTERNS = [
+    r"\bi (have read|acknowledge|agree|consent|certify|confirm|understand)\b",
+    r"\bprivacy (policy|notice|statement)\b",
+    r"\bterms (and conditions|of service|of use)\b",
+    r"\bconsent to\b",
+    r"\bai guidelines\b",
+]
+# An option counts as a "human" affirmation or an "AI/automated" disclosure. The gate
+# fires only when BOTH appear among the options — that pairing is the signature.
+_ATTEST_HUMAN_OPTION = re.compile(
+    r"\b(human being|i am (a )?human|real (person|human)|a person)\b", re.IGNORECASE
+)
+_ATTEST_AI_OPTION = re.compile(
+    r"\b(an? )?(ai|a\.i\.|automated|bot|robot|machine|program|agent)\b", re.IGNORECASE
+)
+
 
 def _matches_any(text: str, patterns: list[str]) -> bool:
     for p in patterns:
@@ -146,15 +205,39 @@ def _matches_any(text: str, patterns: list[str]) -> bool:
     return False
 
 
-def classify_sensitive(label: str) -> SensitiveClass:
-    """Classify a question label by sensitivity (spec §8d).
+def _is_attestation_option_pair(options: list[str] | None) -> bool:
+    """True iff the options include BOTH a human affirmation AND an AI/automated option.
 
-    Order matters: SPONSORSHIP wins over WORK_AUTHORIZATION because "do you require
-    sponsorship?" matches both patterns but the answer comes from a different
-    fact-bank field. Salary is checked before EEO because compensation language
-    occasionally overlaps with demographic surveys.
+    This is how we catch the non-descriptive "Which of the following best describes you?"
+    label — by the human-vs-AI shape of its choices. A normal select (country, years of
+    experience, a yes/no) won't have both markers, so the false-positive cost is ~nil.
+    """
+    if not options:
+        return False
+    has_human = any(_ATTEST_HUMAN_OPTION.search(o or "") for o in options)
+    has_ai = any(_ATTEST_AI_OPTION.search(o or "") for o in options)
+    return has_human and has_ai
+
+
+def classify_sensitive(label: str, options: list[str] | None = None) -> SensitiveClass:
+    """Classify a question by sensitivity (spec §8d) from its label (+ optional options).
+
+    Order matters. HUMAN_ATTESTATION is checked FIRST because it is a hard safety gate
+    (a bot must never attest to being human) and must win over any weaker overlap.
+    SPONSORSHIP then wins over WORK_AUTHORIZATION because "do you require sponsorship?"
+    matches both patterns but the answer comes from a different fact-bank field. Salary
+    is checked before EEO because compensation language occasionally overlaps with
+    demographic surveys.
     """
     s = label or ""
+    if _matches_any(s, _HUMAN_ATTESTATION_LABEL_PATTERNS) or _is_attestation_option_pair(options):
+        return SensitiveClass.HUMAN_ATTESTATION
+    # Generic "…best describes you?" with no demographic noun = the bot-check gate
+    # (react-select hides its options). With a demographic noun it's self-ID → EEO.
+    if _DESCRIBES_YOU.search(s) and not _matches_any(s, _EEO_PATTERNS):
+        return SensitiveClass.HUMAN_ATTESTATION
+    if _matches_any(s, _CONSENT_PATTERNS):
+        return SensitiveClass.CONSENT
     if _matches_any(s, _SPONSORSHIP_PATTERNS):
         return SensitiveClass.SPONSORSHIP
     if _matches_any(s, _WORK_AUTH_PATTERNS):
@@ -164,6 +247,147 @@ def classify_sensitive(label: str) -> SensitiveClass:
     if _matches_any(s, _EEO_PATTERNS):
         return SensitiveClass.EEO
     return SensitiveClass.NONE
+
+
+# ----------------------------------------------------- profile/contact-field classifier
+#
+# These map to the fact bank's contact block (name / location / links). They were reaching
+# the LLM tier and getting yes/no'd ("Website" → "No, I have not built a website"; "LinkedIn
+# Profile" → "I don't have one"). They are deterministic lookups, not questions. A field
+# with NO bank value BAILS to assisted (blank) — never a negation (live finding 2026-06-12).
+
+class ProfileField(str, Enum):
+    NONE = "none"
+    LINKEDIN = "linkedin"
+    GITHUB = "github"
+    WEBSITE = "website"          # personal site / portfolio (NOT github)
+    PREFERRED_FIRST_NAME = "preferred_first_name"
+    CITY = "city"
+    COUNTRY = "country"
+    COUNTRY_TIMEZONE = "country_timezone"
+    LOCATION = "location"        # full "City, State, Country"
+
+
+# Order matters: most-specific first. GitHub before generic website; preferred-name before
+# a bare "name"; country+timezone before bare country; city/location before country.
+_PROFILE_PATTERNS: list[tuple[ProfileField, list[str]]] = [
+    (ProfileField.LINKEDIN, [r"\blinked\s?in\b"]),
+    (ProfileField.GITHUB, [r"\bgit\s?hub\b"]),
+    (ProfileField.PREFERRED_FIRST_NAME,
+     [r"\bpreferred (first )?name\b", r"\bnick\s?name\b",
+      r"\bwhat should we call you\b", r"\bgoes by\b"]),
+    (ProfileField.COUNTRY_TIMEZONE,
+     [r"\bcountry and time\s?zone\b", r"\btime\s?zone and country\b",
+      r"\btime\s?zone\b"]),
+    (ProfileField.CITY,
+     [r"\bcity\b", r"\blocation \(city\)\b", r"\bwhat city\b"]),
+    (ProfileField.WEBSITE,
+     [r"\b(website|web site|portfolio|personal site|personal web)\b"]),
+    (ProfileField.COUNTRY,
+     [r"\bwhat country\b", r"\bcountry of residence\b", r"\bcountry you (are|'re) (in|based)\b",
+      r"^\s*country\b"]),
+    (ProfileField.LOCATION,
+     [r"\bwhere are you (located|based)\b", r"\bcurrent location\b",
+      r"\byour location\b", r"\bcity[,/ ]+state\b"]),
+]
+
+
+def classify_profile_field(label: str) -> ProfileField:
+    """Classify a question as a contact/profile field (or NONE). Deterministic lookup."""
+    s = label or ""
+    for field_kind, patterns in _PROFILE_PATTERNS:
+        if _matches_any(s, patterns):
+            return field_kind
+    return ProfileField.NONE
+
+
+# --------------------------------------------------------- open-ended (essay) detection
+#
+# The §8f copilot is built for yes/no SCREENERS. On an open-ended "Why/Describe/Tell us"
+# prompt it manufactures a yes/no and fills the NEGATION — live 2026-06-12 it wrote "Not
+# interested in a Solutions Engineer role" on an SE application. So open-ended prompts must
+# come from the answer BANK (a prepared, seeded answer) or BAIL to assisted — the LLM is
+# never allowed to free-write an essay from scratch. Better a blank the human fills than a
+# confident wrong answer submitted under their name.
+_OPEN_ENDED_PATTERNS = [
+    r"\bwhy\b",
+    r"\bdescribe\b",
+    r"\btell us\b", r"\btell me\b",
+    r"\bwhat (is|are|was|were|makes|motivates|interests|excites|draws|attracts)\b",
+    r"\bexplain\b", r"\belaborate\b", r"\bin your own words\b",
+    r"\bshare (a|an|your|some)\b",
+    r"\bwhat.{0,30}\bexperience\b",
+    r"\bhow (would|do|did|have) you\b",
+    r"\bwalk (us|me) through\b",
+    r"\bgive (an|us an|me an) example\b",
+    r"\binterested in\b", r"\bmotivat", r"\bexcites you\b",
+]
+
+
+def is_open_ended(label: str, kind: str = "") -> bool:
+    """True for essay/motivation prompts: a textarea, or a 'why/describe/tell us' label.
+
+    A textarea is treated as open-ended regardless of wording — it's a prose field, and we
+    never want the LLM inventing prose for it without a prepared answer.
+    """
+    if (kind or "").lower() == "textarea":
+        return True
+    return _matches_any(label or "", _OPEN_ENDED_PATTERNS)
+
+
+# A minimal US state → timezone map for the "what country and time zone?" field. Best-effort;
+# unknown states fall back to just the country. Keys are lowercased state names.
+_US_TIMEZONE = {
+    "texas": "Central Time", "illinois": "Central Time", "missouri": "Central Time",
+    "california": "Pacific Time", "washington": "Pacific Time", "oregon": "Pacific Time",
+    "new york": "Eastern Time", "florida": "Eastern Time", "georgia": "Eastern Time",
+    "massachusetts": "Eastern Time", "virginia": "Eastern Time", "pennsylvania": "Eastern Time",
+    "colorado": "Mountain Time", "arizona": "Mountain Time", "utah": "Mountain Time",
+}
+
+
+_AUTHORIZED_HINTS = re.compile(
+    r"\b(citizen|authoriz|authoris|permanent resident|green ?card|eligible|"
+    r"indefinite leave|settled status|no sponsorship)\b", re.IGNORECASE
+)
+
+
+def _is_authorized(bank) -> bool:
+    """Confidently authorized to work in their own country? Used to answer yes/no
+    eligibility questions. True when sponsorship is explicitly not required, or the
+    work-auth status reads as citizen/authorized/permanent. Conservative: unknown → False
+    (falls back to the status string → unmatched select → assisted, which is safe)."""
+    if getattr(bank, "requires_sponsorship", None) is False:
+        return True
+    return bool(_AUTHORIZED_HINTS.search(bank.work_authorization or ""))
+
+
+def _is_yes_no_question(question: CustomQuestion) -> bool:
+    """Heuristic: does this question want a Yes/No (not a status string)? True when the
+    options are a yes/no pair, or the label is phrased as a yes/no ("Are you…/Do you…")
+    and isn't asking for a status/what/which."""
+    opts = [o.strip().lower() for o in (getattr(question, "options", None) or []) if o.strip()]
+    if opts and set(opts) <= {"yes", "no", "y", "n"}:
+        return True
+    label = (question.label or "").strip().lower()
+    if re.match(r"^(are|do|does|can|will|have|has|is)\b", label) and not _matches_any(
+        label, [r"\bstatus\b", r"\bwhat\b", r"\bwhich\b"]
+    ):
+        return True
+    return False
+
+
+def _split_location(location: str) -> tuple[str, str, str]:
+    """Parse "City, State, Country" → (city, state/region, country). Tolerant of 1–3 parts:
+    one part → country; two → (city, country); three+ → (city, region, country)."""
+    parts = [p.strip() for p in (location or "").split(",") if p.strip()]
+    if not parts:
+        return "", "", ""
+    if len(parts) == 1:
+        return "", "", parts[0]
+    if len(parts) == 2:
+        return parts[0], "", parts[1]
+    return parts[0], parts[1], parts[-1]
 
 
 # --------------------------------------------------------------------- resolver
@@ -203,12 +427,28 @@ class AnswerResolver:
     # ---- public ----------------------------------------------------------
 
     async def resolve(self, question: CustomQuestion) -> Resolution:
-        sensitivity = classify_sensitive(question.label)
+        sensitivity = classify_sensitive(
+            question.label, getattr(question, "options", None)
+        )
         if sensitivity is not SensitiveClass.NONE:
             return self._resolve_sensitive(question, sensitivity)
+        # Profile/contact fields (LinkedIn, city, preferred name…) are deterministic bank
+        # lookups, NOT questions — resolve them before the LLM can yes/no them.
+        profile = classify_profile_field(question.label)
+        if profile is not ProfileField.NONE:
+            return self._resolve_profile(question, profile)
         bank_hit = await self._resolve_from_bank(question)
         if bank_hit is not None:
             return bank_hit
+        # Open-ended essays must come from the bank (a prepared answer) or BAIL — the LLM
+        # is never allowed to free-write prose (it produced wrong negations live). Binary
+        # screeners still go to the copilot-audited tier below.
+        if is_open_ended(question.label, getattr(question, "kind", "")):
+            return self._review(
+                question,
+                note="open-ended prompt, no prepared/bank answer — bailed to assisted "
+                     "(LLM essay invention disabled; seed the answer to auto-fill it)",
+            )
         if self.llm_client is not None:
             llm_hit = await self._resolve_via_llm(question)
             if llm_hit is not None:
@@ -228,6 +468,27 @@ class AnswerResolver:
         self, question: CustomQuestion, sensitivity: SensitiveClass
     ) -> Resolution:
         bank = self.fact_bank
+        if sensitivity is SensitiveClass.HUMAN_ATTESTATION:
+            # Always REVIEW — never a value. The bot is an automated program; the only
+            # honest answer ("AI / automated") fails the application, and ticking "human
+            # being" is a false attestation. Hand it to the human, who attests truthfully
+            # when they review + submit (assisted). This bail flows through
+            # any_required_unresolved → ASSISTED_PENDING. NEVER weaken this to raise the
+            # auto rate. (research/automated-apply-go-live.md, blocker A.)
+            return self._review(
+                question,
+                note="human-attestation gate — a bot must never attest to being human; "
+                     "handed to the human to answer truthfully (assisted)",
+                sensitivity=SensitiveClass.HUMAN_ATTESTATION,
+            )
+        if sensitivity is SensitiveClass.CONSENT:
+            # A bot must not knowingly consent on the user's behalf (privacy policy / terms /
+            # AI-tool-use-in-hiring guidelines). Always bail → assisted; the human agrees.
+            return self._review(
+                question,
+                note="consent/acknowledgment gate — the human must knowingly agree (assisted)",
+                sensitivity=SensitiveClass.CONSENT,
+            )
         if sensitivity is SensitiveClass.EEO:
             value = self._pick_eeo(question.label, bank.eeo)
             return Resolution(
@@ -245,12 +506,23 @@ class AnswerResolver:
                     note="work authorization not captured in fact bank — no silent default",
                     sensitivity=SensitiveClass.WORK_AUTHORIZATION,
                 )
+            # A yes/no eligibility question ("Are you authorized/eligible to work…?") needs
+            # "Yes", not the raw status string "US Citizen" (which won't match a Yes/No
+            # select — live 2026-06-12 the dropdown was left blank). Map to Yes/No when the
+            # question is yes/no AND we can confidently determine authorization; otherwise
+            # return the status string (status selects/free-text take that).
+            if _is_yes_no_question(question) and _is_authorized(bank):
+                value = "Yes"
+                note = "work-auth eligibility → Yes (authorized; from fact bank)"
+            else:
+                value = bank.work_authorization
+                note = "work authorization status from fact bank (explicit, never defaulted)"
             return Resolution(
                 question=question,
-                value=bank.work_authorization,
+                value=value,
                 source=ResolutionSource.FACT_BANK,
                 sensitive=SensitiveClass.WORK_AUTHORIZATION,
-                note="work authorization from fact bank (explicit, never defaulted)",
+                note=note,
             )
         if sensitivity is SensitiveClass.SPONSORSHIP:
             if bank.requires_sponsorship is None:
@@ -289,6 +561,57 @@ class AnswerResolver:
             if key.lower() in lowered:
                 return val or "Prefer not to answer"
         return "Prefer not to answer"
+
+    # ---- profile/contact fields (deterministic bank lookups) -------------
+
+    def _resolve_profile(self, question: CustomQuestion, field: ProfileField) -> Resolution:
+        """Fill a contact/profile field from the fact bank. Missing value → BAIL (assisted),
+        never a negation. A blank the human fills beats "No, I have not built a website"."""
+        contact = self.fact_bank.contact
+        value = self._profile_value(field, contact)
+        if not value:
+            return self._review(
+                question,
+                note=f"profile field '{field.value}' not in fact bank — bailed to assisted "
+                     f"(add it to the bank to auto-fill)",
+            )
+        return Resolution(
+            question=question,
+            value=value,
+            source=ResolutionSource.PROFILE,
+            note=f"profile field '{field.value}' from fact bank",
+        )
+
+    @staticmethod
+    def _profile_value(field: ProfileField, contact) -> str:
+        links = {k.lower(): v for k, v in (contact.links or {}).items()}
+        city, region, country = _split_location(contact.location)
+        if field is ProfileField.LINKEDIN:
+            return links.get("linkedin", "")
+        if field is ProfileField.GITHUB:
+            return links.get("github", "")
+        if field is ProfileField.WEBSITE:
+            # personal site / portfolio; fall back to GitHub — these fields are typically
+            # labelled "Portfolio (i.e. website, github, blogs, etc)", so GitHub is a valid
+            # answer when there's no dedicated personal site.
+            for k in ("website", "portfolio", "personal", "site", "blog", "github"):
+                if k in links:
+                    return links[k]
+            return ""
+        if field is ProfileField.PREFERRED_FIRST_NAME:
+            return (contact.name or "").split()[0] if contact.name else ""
+        if field is ProfileField.CITY:
+            return city
+        if field is ProfileField.COUNTRY:
+            return country
+        if field is ProfileField.LOCATION:
+            return contact.location or ""
+        if field is ProfileField.COUNTRY_TIMEZONE:
+            tz = _US_TIMEZONE.get(region.lower()) if country.lower() in ("united states", "usa", "us") else ""
+            if country and tz:
+                return f"{country} ({tz})"
+            return contact.location or country
+        return ""
 
     # ---- semantic bank match (Tier 1) -----------------------------------
 

@@ -542,6 +542,11 @@ class ApplyWorker:
         # Mirror INFERRED resolutions to the event spine (spec §8b iteration loop / §9
         # metadata-only mirror). Skip EEO entirely — those answer rows never mirror.
         self._mirror_inferred_resolutions(run_id, job, outcome)
+        # Local-only per-question observability — what resolved/filled vs bailed. NOT
+        # mirrored (sink._maybe_mirror forwards only error/resolver_inferred). Without it a
+        # dry-run left no record of fills, which made the 2026-06-13 "nothing filled" report
+        # un-diagnosable. Metadata only — never the answer value.
+        self._log_resolutions(run_id, job, outcome)
 
         if self._dry_run:
             # No state transition (we never went to APPLYING) — job stays in QUEUED_APPLY.
@@ -657,6 +662,33 @@ class ApplyWorker:
         )
         self._job_repo.set_state(job.id, JobState.FAILED)
         self._job_repo.set_state(job.id, JobState.REVIEW)
+
+    def _log_resolutions(self, run_id: str, job: Job, outcome: ApplyOutcome) -> None:
+        """Emit a local ``resolution`` event per discovered question (metadata only).
+
+        Records ``{label, kind, required, source, fills, filled_on_page}`` — enough to see,
+        from ``events.db`` alone, exactly what each form field resolved to and whether it
+        landed, WITHOUT the answer value ever being written. Not mirrored (see
+        ``sink._maybe_mirror`` — only error/resolver_inferred categories forward)."""
+        sink = get_sink()
+        if sink is None or not outcome.resolutions:
+            return
+        for q, r in zip(outcome.custom_questions, outcome.resolutions):
+            sink.emit(
+                stage="resolution",
+                status="ok",
+                run_id=run_id,
+                platform=job.source,
+                job_id=job.id,
+                context={
+                    "label": (q.label or "")[:120],
+                    "kind": q.kind,
+                    "required": q.required,
+                    "source": r.source.value,
+                    "fills": bool(getattr(r, "fills", False)),
+                    "filled_on_page": outcome.filled.get(f"q:{q.field_id}"),
+                },
+            )
 
     def _mirror_inferred_resolutions(
         self, run_id: str, job: Job, outcome: ApplyOutcome

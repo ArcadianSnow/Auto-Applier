@@ -792,3 +792,23 @@ gated user decision; this validation makes it a much safer one.
 search's daily refresh will start ACTUALLY pre-filtering by embedding relevance
 (cosine >= 0.6 vs the profile) instead of failing open. Removing that model restores
 the old fail-open behavior if ever preferred.
+
+## Dress-rehearsal #2 quirks (2026-06-12) — phone widget + react-select attestation
+
+Reading the resolver events from the first 5-job Solutions dry-run surfaced two more
+ATS-form realities (fixes in `apply_base.py` / `answer_resolver.py`, tests green):
+
+7. **Phone is intl-tel-input with a GLOBE default (no country selected).** On the current
+   Greenhouse layout `#phone` is wrapped in `.iti--allow-dropdown` and the default flag is
+   `iti__flag iti__globe` — NOT US. Typing a national number (`1-682-718-8130`) leaves it
+   with no dial code → invalid. Fix: `normalize_phone()` types `+E.164` (`+16827188130`);
+   intl-tel-input auto-selects the country from the `+` prefix (verified live: flag → US,
+   value → `+1 682-718-8130`). Never drive its country dropdown (it's a search dialog).
+   Wired into Greenhouse + Lever drivers.
+8. **The human-attestation gate is a react-select with a non-descriptive label.** Grafana's
+   `"Which of the following best describes you?*"` (options "I am an AI…" / "I am a human
+   being") renders as react-select — options are NOT in the DOM until the menu opens, so
+   option-pair detection can't see them, and the bare label matches no attestation pattern.
+   The copilot answered it (conf 0.75). Fix: a `"…best describes you"` label rule (EEO-guarded)
+   + a value-side `affirms_human()` backstop in `fill_resolutions` that refuses to TYPE any
+   human affirmation. See research/automated-apply-go-live.md (blocker A) for the full story.

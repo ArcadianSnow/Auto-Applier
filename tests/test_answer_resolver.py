@@ -22,6 +22,9 @@ from auto_applier.resume.answer_resolver import (
     classify_sensitive,
     store_answer,
 )
+from auto_applier.resume.answer_resolver import (
+    ProfileField, classify_profile_field, is_open_ended,
+)
 from auto_applier.resume.factbank import Contact, FactBank
 from auto_applier.resume.seed_answers import seed_from_v2_file
 from auto_applier.sources.browser.apply_base import CustomQuestion
@@ -80,8 +83,10 @@ def answer_repo(tmp_path):
     return AnswerRepo(db)
 
 
-def _q(label: str, *, kind="input", required=True, field_id="question_42") -> CustomQuestion:
-    return CustomQuestion(field_id=field_id, label=label, required=required, kind=kind)
+def _q(label: str, *, kind="input", required=True, field_id="question_42",
+       options=None) -> CustomQuestion:
+    return CustomQuestion(field_id=field_id, label=label, required=required, kind=kind,
+                          options=options or [])
 
 
 # ---- sensitive-field classification ----------------------------------------
@@ -94,6 +99,9 @@ def _q(label: str, *, kind="input", required=True, field_id="question_42") -> Cu
     ("Preferred pronouns", SensitiveClass.EEO),
     ("Are you legally authorized to work in the United States?", SensitiveClass.WORK_AUTHORIZATION),
     ("Right to work in the UK?", SensitiveClass.WORK_AUTHORIZATION),
+    # "eligible to work" phrasing — missed live on Grafana 2026-06-12, now classified.
+    ("Are you currently eligible to work in your country of residence?",
+     SensitiveClass.WORK_AUTHORIZATION),
     ("Do you require visa sponsorship?", SensitiveClass.SPONSORSHIP),
     ("Will you now or in the future require sponsorship?", SensitiveClass.SPONSORSHIP),
     ("Salary expectation", SensitiveClass.SALARY),
@@ -105,13 +113,224 @@ def test_classify_sensitive(label, expected):
     assert classify_sensitive(label) is expected
 
 
+# ---- human-attestation gate (blocker A) ------------------------------------
+
+@pytest.mark.parametrize("label", [
+    "Are you a human or an automated program?",
+    "Please confirm you are a human being",
+    "Are you a bot?",
+    "Are you a real person?",
+    "This application was completed by a human being (not an automated program)",
+])
+def test_classify_human_attestation_from_label(label):
+    assert classify_sensitive(label) is SensitiveClass.HUMAN_ATTESTATION
+
+
+def test_classify_human_attestation_bare_describes_you_label():
+    """The live Grafana gate: a react-select labelled exactly this, whose AI/human
+    options are NOT in the DOM at discovery → caught by the label alone (no options)."""
+    assert classify_sensitive("Which of the following best describes you?*") \
+        is SensitiveClass.HUMAN_ATTESTATION
+
+
+def test_describes_you_with_demographic_noun_is_eeo_not_attestation():
+    """A self-ID question ("…best describes your gender/race") stays EEO (→ prefer-not),
+    not the attestation gate — the demographic noun disambiguates."""
+    assert classify_sensitive("Which of the following best describes your gender?") \
+        is SensitiveClass.EEO
+    assert classify_sensitive("Select the option that best describes your race/ethnicity") \
+        is SensitiveClass.EEO
+
+
+def test_classify_human_attestation_from_option_pair():
+    """Non-descriptive label ("Which of the following best describes you?") is caught
+    by the human-vs-AI shape of its options — the live 2026-06-12 gate."""
+    opts = ["I am an AI or automated program", "I am a human being"]
+    assert classify_sensitive("Which of the following best describes you?", opts) \
+        is SensitiveClass.HUMAN_ATTESTATION
+
+
+def test_classify_human_attestation_wins_over_other_classes():
+    # Even if other sensitive words co-occur, the safety gate takes priority.
+    assert classify_sensitive(
+        "Are you a human being authorized to work?",
+    ) is SensitiveClass.HUMAN_ATTESTATION
+
+
+def test_normal_select_options_do_not_false_positive():
+    # A benign select (country / years) has neither the human nor the AI marker pair.
+    assert classify_sensitive("Country of residence",
+                              ["United States", "Canada", "Germany"]) is SensitiveClass.NONE
+    assert classify_sensitive("Years of experience",
+                              ["0-2", "3-5", "6+"]) is SensitiveClass.NONE
+
+
+@pytest.mark.parametrize("label", [
+    'I have read and understand Tailscale\'s "Candidate Privacy Policy" and "AI Guidelines"',
+    "I agree to the terms and conditions",
+    "I acknowledge the privacy policy",
+    "I consent to the processing of my data",
+])
+def test_classify_consent(label):
+    assert classify_sensitive(label) is SensitiveClass.CONSENT
+
+
+def test_consent_always_bails_to_review():
+    """A bot must not knowingly consent (privacy/terms/AI-guidelines) — bail to the human."""
+    resolver = AnswerResolver(_bank(), answer_repo=_make_empty_repo(), llm_client=StubLLM(reply=_copilot_reply()))
+    res = asyncio.run(resolver.resolve(_q(
+        'I have read and understand the "Candidate Privacy Policy" and "AI Guidelines"',
+        kind="select", options=["Yes", "No"])))
+    assert res.needs_review is True
+    assert res.sensitive is SensitiveClass.CONSENT
+
+
+def test_human_attestation_always_bails_to_review():
+    """The bot must NEVER attest to being human. Always REVIEW → driver downgrades to
+    assisted, where the human truthfully attests (research/automated-apply-go-live.md)."""
+    resolver = AnswerResolver(_bank(), answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q(
+        "Which of the following best describes you?", kind="select",
+        options=["I am an AI or automated program", "I am a human being"])))
+    assert res.value is None
+    assert res.needs_review is True
+    assert res.source is ResolutionSource.REVIEW
+    assert res.sensitive is SensitiveClass.HUMAN_ATTESTATION
+
+
+def test_human_attestation_never_reaches_llm():
+    """A misfiring LLM must not be able to answer the gate — Tier-0 catches it first."""
+    llm = StubLLM(reply=_copilot_reply(verdict="yes", short_answer="I am a human being"))
+    resolver = AnswerResolver(_bank(), answer_repo=_make_empty_repo(), llm_client=llm)
+    res = asyncio.run(resolver.resolve(_q("Are you a human or an automated program?")))
+    assert res.needs_review is True
+    assert res.sensitive is SensitiveClass.HUMAN_ATTESTATION
+    assert llm.last_prompt == ""  # never invoked
+
+
+# ---- profile/contact fields + open-ended bail (2026-06-12 rehearsal #2) ----------
+
+def _contact_bank():
+    return FactBank(
+        contact=Contact(
+            name="Joseph Lira", email="j@x.com",
+            location="Dallas, Texas, United States",
+            links={"LinkedIn": "https://linkedin.com/in/joseph-lira/"},
+        ),
+        work_authorization="US Citizen", requires_sponsorship=False,
+    )
+
+
+@pytest.mark.parametrize("label, expected", [
+    ("LinkedIn Profile", ProfileField.LINKEDIN),
+    ("GitHub", ProfileField.GITHUB),
+    ("Website", ProfileField.WEBSITE),
+    ("Preferred First Name", ProfileField.PREFERRED_FIRST_NAME),
+    ("Location (City)", ProfileField.CITY),
+    ("What country and time zone are you based in?", ProfileField.COUNTRY_TIMEZONE),
+    ("Where are you located?", ProfileField.LOCATION),
+    ("Why do you want this job?", ProfileField.NONE),
+])
+def test_classify_profile_field(label, expected):
+    assert classify_profile_field(label) is expected
+
+
+def test_profile_linkedin_fills_from_bank():
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q("LinkedIn Profile")))
+    assert res.value == "https://linkedin.com/in/joseph-lira/"
+    assert res.source is ResolutionSource.PROFILE
+    assert res.needs_review is False
+
+
+def test_profile_missing_website_bails_not_negates():
+    """The KEY fix: 'Website' with no bank link BAILS (blank), never 'No I have not built
+    a website.' A blank the human fills beats a confident wrong negation."""
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q("Website")))
+    assert res.value is None
+    assert res.needs_review is True
+    assert res.source is ResolutionSource.REVIEW
+
+
+def test_profile_website_falls_back_to_github():
+    """Website/Portfolio fields ("i.e. website, github, blogs") use the GitHub link when
+    there's no dedicated personal site."""
+    bank = _contact_bank()
+    bank.contact.links["GitHub"] = "https://github.com/ArcadianSnow"
+    r = AnswerResolver(bank, answer_repo=_make_empty_repo())
+    res = asyncio.run(r.resolve(_q("Portfolio (i.e. website, github, blogs, etc)")))
+    assert res.value == "https://github.com/ArcadianSnow"
+    assert res.source is ResolutionSource.PROFILE
+
+
+def test_profile_preferred_name_and_city_and_timezone():
+    r = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    assert asyncio.run(r.resolve(_q("Preferred First Name"))).value == "Joseph"
+    assert asyncio.run(r.resolve(_q("Location (City)"))).value == "Dallas"
+    tz = asyncio.run(r.resolve(_q("What country and time zone are you based in?"))).value
+    assert "United States" in tz and "Central Time" in tz
+
+
+def test_open_ended_detection():
+    assert is_open_ended("Why are you interested in this role?") is True
+    assert is_open_ended("Describe your experience with sales") is True
+    assert is_open_ended("Tell us about a project you led") is True
+    assert is_open_ended("Anything else?", kind="textarea") is True   # textarea = prose
+    assert is_open_ended("Are you authorized to work in the US?") is False
+
+
+def test_open_ended_bails_instead_of_llm_inventing_an_essay():
+    """The harm fix: an open-ended motivation prompt with no prepared answer must BAIL to
+    assisted — the LLM must NOT free-write (it wrote 'Not interested in a Solutions
+    Engineer role' live). The copilot is never even invoked."""
+    llm = StubLLM(reply=_copilot_reply(verdict="no", short_answer="Not interested in a Solutions Engineer role"))
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo(), llm_client=llm)
+    res = asyncio.run(resolver.resolve(_q("Why are you interested in a Solutions Engineer role?",
+                                         kind="textarea")))
+    assert res.needs_review is True
+    assert res.source is ResolutionSource.REVIEW
+    assert llm.last_prompt == ""  # LLM never invoked for the essay
+
+
+def test_open_ended_fills_from_bank_when_seeded(answer_repo):
+    """When the prepared answer IS seeded, the open-ended prompt fills from the bank (the
+    point of seeding) — bailing only happens when there's no prepared answer."""
+    asyncio.run(store_answer(answer_repo, embed_client=None,
+                             question="Why are you interested in a Solutions Engineer role?",
+                             answer="Because it combines deep technical work with customer contact..."))
+    resolver = AnswerResolver(_contact_bank(), answer_repo)
+    res = asyncio.run(resolver.resolve(_q("Why are you interested in a Solutions Engineer role?",
+                                          kind="textarea")))
+    assert res.value.startswith("Because it combines")
+    assert res.source is ResolutionSource.BANK
+
+
+def test_work_auth_yes_no_eligibility_maps_to_yes():
+    """'Are you eligible to work…?' (yes/no) → 'Yes', not the status string 'US Citizen'
+    (which wouldn't match a Yes/No select — live blank 2026-06-12)."""
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(
+        _q("Are you currently eligible to work in your country of residence?", kind="select")))
+    assert res.value == "Yes"
+    assert res.sensitive is SensitiveClass.WORK_AUTHORIZATION
+
+
+def test_work_auth_status_question_returns_status_string():
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q("What is your work authorization status?")))
+    assert res.value == "US Citizen"
+
+
 # ---- §8d policy: work auth / sponsorship --------------------------------------
 
 def test_work_auth_uses_factbank_value():
+    # "Are you authorized…?" is a yes/no question → "Yes" (citizen ⇒ authorized), which
+    # matches a Yes/No dropdown. The fact-bank value still gates it (no silent default).
     bank = _bank(work_authorization="US citizen")
     resolver = AnswerResolver(bank, answer_repo=_make_empty_repo())
     res = asyncio.run(resolver.resolve(_q("Are you authorized to work in the US?")))
-    assert res.value == "US citizen"
+    assert res.value == "Yes"
     assert res.source is ResolutionSource.FACT_BANK
     assert res.sensitive is SensitiveClass.WORK_AUTHORIZATION
     assert res.needs_review is False
