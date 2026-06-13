@@ -3,16 +3,18 @@
 > Written 2026-06-13, after the field-fill overhaul (commit **20b3731**, 1004 tests green).
 > Read `automated-apply-go-live.md` first for the full backstory; this is the forward plan.
 >
-> **UPDATE 2026-06-13 — BUILD 1, 1.1, 2, 3 all resolved. 1029 tests green.**
+> **UPDATE 2026-06-13 — BUILD 1, 1.1, 1.2, 2, 3 all resolved. 1037 tests green.**
 > - BUILD 1 (cover-letter upload) SHIPPED + validated live (Tailscale). Merged to master + pushed.
 > - BUILD 1.1 (per-job cover model) REPLACED the company-index: per-posting letters via `av3 cover`
 >   → `artifacts/uploads/<job_id>/Cover Letter<ext>` (generic upload basename = anti-detection),
 >   archived on confirmed APPLIED. Company-index machinery removed. See "BUILD 1.1".
+> - BUILD 1.2 (per-job RÉSUMÉ) extends the same model: `av3 resume` → `uploads/<job_id>/Resume<ext>`,
+>   manual wins over the optimize PDF, archived on APPLIED. Mechanism shared with cover. See "BUILD 1.2".
 > - BUILD 2 (enumerated react-selects) CLOSED as no-fix-needed: the bails are honest RESOLVER
 >   decisions, not a filler miss (proven via the resolver-detail dump). See "BUILD 2 RESULT".
 > - BUILD 3 (veteran_status) FIXED: a `_DECLINE_SYNONYMS` contraction gap ("don't"), not a flake.
-> Left before go-live: the gated watched `--no-dry-run`; per-job `av3 cover` assignment for the jobs
-> you queue; (follow-up) extend the generic-filename model to the résumé.
+> Left before go-live: the gated watched `--no-dry-run`; per-job `av3 cover` / `av3 resume` for the
+> jobs you queue.
 
 ## Where we are
 
@@ -137,10 +139,25 @@ in the folder path / archive, never in the uploaded basename.
   row (the row points at the kept file). Non-APPLIED (assisted/review) leaves the file in the job folder
   — it isn't "confirmed used" yet, and assisted still needs it available.
 
-**Follow-up (not in this build):** the RÉSUMÉ has the identical filename tell (`{job_id}.pdf` /
-`Joseph_Lira_Resume_Solutions_Engineer.pdf`). The same per-job-folder + generic-basename pattern should
-extend to it (e.g. `artifacts/uploads/<job_id>/Resume<ext>` or a real-name basename). Scoped out here to
-keep the résumé path stable; do it next with the same mechanism.
+## BUILD 1.2 — Per-job RÉSUMÉ upload (same mechanism as the cover letter)
+
+The résumé had the identical filename tell (`{job_id}.pdf` / `Joseph_Lira_Resume_Solutions_Engineer.pdf`
+upload under those exact basenames). Extended the per-job model to it:
+- `av3 resume <job_id> <resume.pdf>` copies into `artifacts/uploads/<job_id>/Resume<ext>` (generic
+  basename). `av3 resume <job_id>` shows the current assignment.
+- Worker résumé source order: manual `existing_job_resume(job.id)` → optimize per-job PDF
+  (`generated/{job_id}.pdf`) → global `artifacts/resume.pdf`. Manual wins.
+- Archived on confirmed APPLIED → `uploads/_archive/Resume - <job_id><ext>` (the optimize PDF / global
+  résumé are left in place — `archive_resume` only moves a file in the uploads folder).
+- The per-job upload mechanism is now **shared** (generate.py `_assign_upload`/`_existing_upload`/
+  `_archive_upload`); cover + résumé are thin wrappers (stems `Cover Letter` / `Resume`). Tests:
+  `test_cover_library.py` (résumé section), `test_cli_cover.py` (`av3 resume`), `test_apply_worker.py`
+  (precedence + archive). 1037 green.
+
+> Note: the OPTIMIZE-generated résumé still uploads as `{job_id}.pdf` (a numeric tell) when no manual
+> résumé is assigned. The manual go-live path (`av3 queue` + `av3 resume`) avoids it; if the auto
+> optimize→apply path is ever used for real, normalize that upload basename too (copy to a generic name
+> before upload, same idea).
 
 ## BUILD 2 — Verify the Tailscale enumerated react-selects
 

@@ -18,9 +18,13 @@ import asyncio
 
 from auto_applier.resume.generate import (
     archive_cover_letter,
+    archive_resume,
     assign_cover_letter,
+    assign_resume,
     existing_job_cover,
+    existing_job_resume,
     job_cover_upload_path,
+    job_resume_upload_path,
 )
 from auto_applier.sources.browser.apply_base import attach_cover_letter
 
@@ -100,6 +104,51 @@ def test_archive_moves_and_appends_job_id(settings, tmp_path):
 
 def test_archive_none_when_nothing_assigned(settings):
     assert archive_cover_letter(settings, "job-6") is None
+
+
+# --------------------------------------------------------------- résumé (same mechanism)
+
+def test_resume_assign_uses_generic_basename(settings, tmp_path):
+    src = tmp_path / "Joseph_Lira_Resume_Solutions_Engineer.docx"
+    src.write_text("RESUME", encoding="utf-8")
+    dest = assign_resume(settings, "job-r1", src)
+
+    assert dest.name == "Resume.docx"  # NOT the per-posting source name
+    assert dest == job_resume_upload_path(settings, "job-r1", ".docx")
+    assert existing_job_resume(settings, "job-r1") == dest
+    assert dest.read_text(encoding="utf-8") == "RESUME"
+
+
+def test_resume_prefers_pdf_on_lookup(settings, tmp_path):
+    # Assigned a .pdf; lookup returns it (.pdf is first in the résumé ext order).
+    src = tmp_path / "r.pdf"
+    src.write_text("pdf", encoding="utf-8")
+    dest = assign_resume(settings, "job-r2", src)
+    assert dest.name == "Resume.pdf"
+    assert existing_job_resume(settings, "job-r2") == dest
+
+
+def test_resume_archive_moves_and_appends_job_id(settings, tmp_path):
+    src = tmp_path / "r.pdf"
+    src.write_text("keep", encoding="utf-8")
+    assign_resume(settings, "job-r3", src)
+    dest = archive_resume(settings, "job-r3")
+
+    assert dest is not None
+    assert dest.parent == settings.uploads_dir / "_archive"
+    assert dest.name == "Resume - job-r3.pdf"
+    assert existing_job_resume(settings, "job-r3") is None
+
+
+def test_resume_and_cover_coexist_in_same_job_folder(settings, tmp_path):
+    cov = tmp_path / "c.docx"; cov.write_text("C", encoding="utf-8")
+    res = tmp_path / "r.pdf"; res.write_text("R", encoding="utf-8")
+    assign_cover_letter(settings, "job-rc", cov)
+    assign_resume(settings, "job-rc", res)
+
+    # Distinct stems → both resolve independently, no collision.
+    assert existing_job_cover(settings, "job-rc").name == "Cover Letter.docx"
+    assert existing_job_resume(settings, "job-rc").name == "Resume.pdf"
 
 
 # --------------------------------------------------------------- attach_cover_letter

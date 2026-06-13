@@ -759,6 +759,50 @@ def test_no_cover_letter_anywhere_passes_empty(settings, conn):
     assert apps[0].cover_letter_path == ""
 
 
+def test_manual_per_job_resume_uploaded_then_archived_on_applied(settings, conn, tmp_path):
+    """A manually-assigned résumé (av3 resume) is uploaded from the generic-named job folder
+    and, on a confirmed APPLIED, archived with the job id appended (BUILD 1.2 — mirrors cover)."""
+    from auto_applier.resume.generate import (
+        assign_resume, existing_job_resume, job_resume_upload_path,
+    )
+
+    job = _seed_queued_lever(conn, company="Tailscale", source_job_id="res-1")
+    src = tmp_path / "Joseph_Lira_Resume_Solutions_Engineer.docx"
+    src.write_text("RESUME", encoding="utf-8")
+    upload_path = assign_resume(settings, job.id, src)
+    assert upload_path == job_resume_upload_path(settings, job.id, ".docx")
+
+    seen: dict = {}
+    worker = _build_worker(settings, conn, driver=_recording_resume_driver(seen))
+    asyncio.run(worker.run_once())
+
+    assert seen["resume_path"] == str(upload_path)  # uploaded the generic-named file
+    assert existing_job_resume(settings, job.id) is None  # moved
+    archived = settings.uploads_dir / "_archive" / f"Resume - {job.id}.docx"
+    assert archived.exists()
+    apps = ApplicationRepo(conn).list_by_job(job.id)
+    assert apps[0].generated_resume_path == str(archived)
+
+
+def test_manual_resume_takes_precedence_over_optimize_pdf(settings, conn, tmp_path):
+    """When BOTH a manual résumé and an optimize-generated PDF exist, the manual one wins."""
+    from auto_applier.resume.generate import assign_resume
+
+    job = _seed_queued_lever(conn, company="acmeco", source_job_id="res-2")
+    pdf = generated_resume_path(settings, job.id)
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    pdf.write_bytes(b"%PDF optimize\n")
+    src = tmp_path / "hand.pdf"
+    src.write_text("hand-crafted", encoding="utf-8")
+    upload_path = assign_resume(settings, job.id, src)
+
+    seen: dict = {}
+    worker = _build_worker(settings, conn, driver=_recording_resume_driver(seen))
+    asyncio.run(worker.run_once())
+
+    assert seen["resume_path"] == str(upload_path)  # NOT the optimize pdf
+
+
 def test_failed_recovery_records_per_job_resume_path(settings, conn):
     """A driver crash routes the job to REVIEW with a FAILED Application row carrying the
     per-job résumé path, so dashboard triage shows which résumé it would have used."""

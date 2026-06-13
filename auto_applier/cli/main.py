@@ -653,6 +653,51 @@ def cover_cmd(job_id, source) -> None:
     click.echo(f"    {source}\n      -> {dest}  (uploads as {dest.name!r})")
 
 
+@cli.command("resume")
+@click.argument("job_id")
+@click.argument("source", required=False, type=click.Path(exists=False))
+def resume_cmd(job_id, source) -> None:
+    """Assign a hand-crafted résumé to a job (per posting, like `av3 cover`).
+
+    `av3 resume <job_id> <resume.pdf>` copies your résumé into the job's upload folder under the
+    GENERIC name `Resume<ext>` — the apply worker uploads it from there, so an ATS only ever sees
+    "Resume.pdf" (a per-posting source filename like `Joseph_Lira_Resume_Solutions_Engineer.docx`
+    would be a mass-apply fingerprint). A manually-assigned résumé takes precedence over the
+    optimize-generated PDF; with neither, the worker uploads the global `artifacts/resume.pdf`.
+    On a confirmed APPLIED the worker moves it to `uploads/_archive` with the job id appended.
+
+    `av3 resume <job_id>` (no source) shows the job's currently-assigned résumé, if any.
+    """
+    from auto_applier.resume.generate import assign_resume, existing_job_resume
+
+    settings = load_settings()
+    conn = init_app_db(settings.app_db_path)
+    try:
+        job = JobRepo(conn).get(job_id)
+    finally:
+        conn.close()
+    if job is None:
+        click.echo(f"  x FAIL job {job_id} not found", err=True)
+        sys.exit(2)
+
+    if not source:
+        current = existing_job_resume(settings, job_id)
+        if current is None:
+            click.echo(f"{job_id}  {job.company} — {job.title}\n  no résumé assigned "
+                       f"(assign with: av3 resume {job_id} <resume.pdf>)")
+        else:
+            click.echo(f"{job_id}  {job.company} — {job.title}\n  résumé: {current}")
+        return
+
+    try:
+        dest = assign_resume(settings, job_id, source)
+    except FileNotFoundError as exc:
+        click.echo(f"  x FAIL {exc}", err=True)
+        sys.exit(2)
+    click.echo(f"  + assigned {job_id}  {job.company} — {job.title}")
+    click.echo(f"    {source}\n      -> {dest}  (uploads as {dest.name!r})")
+
+
 @cli.command()
 def status() -> None:
     """Show job counts by state from app.db."""

@@ -13,7 +13,7 @@ from auto_applier.db import init_app_db
 from auto_applier.db.repositories import JobRepo
 from auto_applier.domain.models import Job
 from auto_applier.domain.state import JobState
-from auto_applier.resume.generate import existing_job_cover
+from auto_applier.resume.generate import existing_job_cover, existing_job_resume
 
 
 def _seed(settings, *, sid="s", company="Tailscale", title="Solutions Engineer"):
@@ -68,3 +68,29 @@ def test_cover_missing_source_exit_2(settings):
     res = CliRunner().invoke(cli, ["cover", jid, "does-not-exist.docx"])
     assert res.exit_code == 2
     assert "not found" in res.output
+
+
+# --------------------------------------------------------------- av3 resume
+
+def test_resume_assigns_under_generic_name(settings, tmp_path):
+    jid = _seed(settings, sid="r")
+    src = tmp_path / "Joseph_Lira_Resume_Solutions_Engineer.pdf"
+    src.write_text("RESUME", encoding="utf-8")
+
+    res = CliRunner().invoke(cli, ["resume", jid, str(src)])
+    assert res.exit_code == 0, res.output
+    assert "assigned" in res.output
+    assert "'Resume.pdf'" in res.output  # generic upload basename
+
+    got = existing_job_resume(settings, jid)
+    assert got is not None and got.name == "Resume.pdf"
+    assert got.read_text(encoding="utf-8") == "RESUME"
+
+
+def test_resume_show_and_unknown_job(settings, tmp_path):
+    jid = _seed(settings, sid="rs")
+    res = CliRunner().invoke(cli, ["resume", jid])
+    assert res.exit_code == 0 and "no résumé assigned" in res.output
+
+    bad = CliRunner().invoke(cli, ["resume", "no-such-id"])
+    assert bad.exit_code == 2 and "not found" in bad.output
