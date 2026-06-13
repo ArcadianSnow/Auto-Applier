@@ -94,3 +94,21 @@ def test_resume_show_and_unknown_job(settings, tmp_path):
 
     bad = CliRunner().invoke(cli, ["resume", "no-such-id"])
     assert bad.exit_code == 2 and "not found" in bad.output
+
+
+def test_cover_uses_applicant_name_from_fact_bank(settings, tmp_path):
+    """When the fact bank has a name, the upload basename is name-prefixed
+    (Joseph Lira Cover Letter.docx) — pulled from profile/master.json by the CLI."""
+    import json
+    profile_dir = settings.data_dir / "profile"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    (profile_dir / "master.json").write_text(
+        json.dumps({"contact": {"name": "Joseph Lira"}}), encoding="utf-8")
+
+    jid = _seed(settings, sid="named")
+    src = tmp_path / "CoverLetter_Tailscale_SE_Commercial.docx"
+    src.write_text("C", encoding="utf-8")
+    res = CliRunner().invoke(cli, ["cover", jid, str(src)])
+    assert res.exit_code == 0, res.output
+    assert "'Joseph Lira Cover Letter.docx'" in res.output
+    assert existing_job_cover(settings, jid).name == "Joseph Lira Cover Letter.docx"

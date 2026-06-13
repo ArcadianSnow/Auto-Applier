@@ -151,6 +151,51 @@ def test_resume_and_cover_coexist_in_same_job_folder(settings, tmp_path):
     assert existing_job_resume(settings, "job-rc").name == "Resume.pdf"
 
 
+# --------------------------------------------------------------- name-prefixed basenames
+
+def test_name_prefix_on_cover_and_resume(settings, tmp_path):
+    cov = tmp_path / "CoverLetter_Tailscale_SE_Commercial.docx"; cov.write_text("C", encoding="utf-8")
+    res = tmp_path / "Joseph_Lira_Resume_Solutions_Engineer.pdf"; res.write_text("R", encoding="utf-8")
+
+    cdest = assign_cover_letter(settings, "job-n", cov, name="Joseph Lira")
+    rdest = assign_resume(settings, "job-n", res, name="Joseph Lira")
+
+    assert cdest.name == "Joseph Lira Cover Letter.docx"
+    assert rdest.name == "Joseph Lira Resume.pdf"
+    # Lookup finds name-prefixed files (glob on the stem, decoupled from the prefix).
+    assert existing_job_cover(settings, "job-n") == cdest
+    assert existing_job_resume(settings, "job-n") == rdest
+
+
+def test_name_prefixed_replaced_on_reassign(settings, tmp_path):
+    src1 = tmp_path / "a.pdf"; src1.write_text("1", encoding="utf-8")
+    first = assign_resume(settings, "job-n2", src1, name="Joseph Lira")
+    assert first.name == "Joseph Lira Resume.pdf"
+    # Re-assign (even with no name) clears the name-prefixed prior → exactly one résumé.
+    src2 = tmp_path / "b.docx"; src2.write_text("2", encoding="utf-8")
+    second = assign_resume(settings, "job-n2", src2)
+    assert not first.exists()
+    folder = settings.uploads_dir / "job-n2"
+    resumes = list(folder.glob("*Resume.*"))
+    assert len(resumes) == 1 and resumes[0] == second
+
+
+def test_name_prefixed_archived_keeps_name(settings, tmp_path):
+    src = tmp_path / "r.pdf"; src.write_text("R", encoding="utf-8")
+    assign_resume(settings, "job-n3", src, name="Joseph Lira")
+    dest = archive_resume(settings, "job-n3")
+    assert dest is not None
+    assert dest.name == "Joseph Lira Resume - job-n3.pdf"
+
+
+def test_safe_name_strips_illegal_chars(settings, tmp_path):
+    src = tmp_path / "r.pdf"; src.write_text("R", encoding="utf-8")
+    # Illegal Windows filename chars in the name must not break the basename.
+    dest = assign_resume(settings, "job-n4", src, name='Joseph "JL" Lira/Jr')
+    assert dest.name == "Joseph JL LiraJr Resume.pdf"
+    assert dest.exists()
+
+
 # --------------------------------------------------------------- attach_cover_letter
 
 class _FileEl:

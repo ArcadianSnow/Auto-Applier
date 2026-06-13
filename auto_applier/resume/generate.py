@@ -33,6 +33,7 @@ live in the schema, spec §4).
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -113,40 +114,63 @@ def _norm_ext(ext: str) -> str:
     return ext if (not ext or ext.startswith(".")) else "." + ext
 
 
-# --- generic per-job upload mechanism (shared by cover letter + résumé) ---------
-# Each job's upload-ready files live under uploads/<job_id>/ with a GENERIC basename
-# (``Cover Letter<ext>`` / ``Resume<ext>``). Playwright uploads a file by its basename, so a
-# per-posting source name (``CoverLetter_Tailscale_SE_Commercial.docx``,
-# ``Joseph_Lira_Resume_Solutions_Engineer.docx``) is a mass-apply fingerprint — the per-job
-# identity lives in the folder path, never the uploaded name (§8c anti-detection). One assigned
-# file per (stem) per job; on a confirmed APPLIED it's archived (moved) with the job id appended.
+def _safe_name(name: str) -> str:
+    """Filesystem-safe form of the applicant name for an upload basename.
 
-def _upload_path(settings: Settings, job_id: str, stem: str, ext: str) -> Path:
-    return _job_upload_dir(settings, job_id) / f"{stem}{_norm_ext(ext)}"
+    Strips characters illegal in Windows filenames and collapses whitespace. Empty/blank →
+    "" (the caller then uses the bare stem)."""
+    cleaned = re.sub(r'[<>:"/\\|?*]', "", (name or "")).strip()
+    return re.sub(r"\s+", " ", cleaned)
+
+
+def _basename(stem: str, name: str) -> str:
+    """Upload basename: ``"<Name> <Stem>"`` when a name is given, else the bare ``<Stem>``.
+
+    A real applicant's file is ``Joseph Lira Resume.pdf`` / ``Joseph Lira Cover Letter.docx`` —
+    the NAME is not a templating tell (it's the applicant's own), so it's consistent with the
+    anti-detection goal while looking like a normal upload. With no name → the bare generic stem."""
+    nm = _safe_name(name)
+    return f"{nm} {stem}" if nm else stem
+
+
+# --- generic per-job upload mechanism (shared by cover letter + résumé) ---------
+# Each job's upload-ready files live under uploads/<job_id>/ with a normal basename — either the
+# bare generic stem (``Cover Letter<ext>`` / ``Resume<ext>``) or name-prefixed
+# (``Joseph Lira Resume.pdf``). Playwright uploads a file by its basename, so the per-POSTING
+# source name (``CoverLetter_Tailscale_SE_Commercial.docx``) is a mass-apply fingerprint — the
+# per-job identity lives in the folder PATH, never the uploaded name (§8c anti-detection). Lookup
+# globs ``*<stem><ext>`` so it finds the file regardless of any name prefix. One assigned file per
+# (stem) per job; on a confirmed APPLIED it's archived (moved) with the job id appended.
+
+def _upload_path(settings: Settings, job_id: str, stem: str, ext: str, name: str = "") -> Path:
+    return _job_upload_dir(settings, job_id) / f"{_basename(stem, name)}{_norm_ext(ext)}"
 
 
 def _existing_upload(settings: Settings, job_id: str, stem: str, exts) -> Path | None:
     folder = _job_upload_dir(settings, job_id)
     if not folder.exists():
         return None
+    # Glob ``*<stem><ext>`` (ext-preference order) so a name-prefixed OR bare file is found.
     for ext in exts:
-        cand = folder / f"{stem}{ext}"
-        if cand.exists():
-            return cand
+        matches = sorted(folder.glob(f"*{stem}{ext}"))
+        if matches:
+            return matches[0]
     return None
 
 
-def _assign_upload(settings: Settings, job_id: str, source: Path | str, stem: str) -> Path:
+def _assign_upload(
+    settings: Settings, job_id: str, source: Path | str, stem: str, name: str = ""
+) -> Path:
     src = Path(source)
     if not src.exists():
         raise FileNotFoundError(f"file not found: {src}")
     folder = _job_upload_dir(settings, job_id)
     folder.mkdir(parents=True, exist_ok=True)
-    # Replace any prior assignment for this stem (incl. a different extension) so there's
-    # exactly one. glob on the stem catches every extension robustly.
-    for prior in folder.glob(f"{stem}.*"):
+    # Replace any prior assignment for this stem (name-prefixed or bare, any extension) so
+    # there's exactly one. glob ``*<stem>.*`` catches every variant robustly.
+    for prior in folder.glob(f"*{stem}.*"):
         prior.unlink()
-    dest = _upload_path(settings, job_id, stem, src.suffix)
+    dest = _upload_path(settings, job_id, stem, src.suffix, name)
     shutil.copyfile(src, dest)
     return dest
 
@@ -158,7 +182,8 @@ def _archive_upload(settings: Settings, job_id: str, stem: str, exts) -> Path | 
     archive_dir = settings.uploads_dir / "_archive"
     try:
         archive_dir.mkdir(parents=True, exist_ok=True)
-        dest = archive_dir / f"{stem} - {job_id}{existing.suffix}"
+        # Keep the (possibly name-prefixed) basename, append the job id for identifiability.
+        dest = archive_dir / f"{existing.stem} - {job_id}{existing.suffix}"
         shutil.move(str(existing), str(dest))
         return dest
     except OSError:  # archiving is post-confirmation bookkeeping — never fatal
@@ -167,53 +192,61 @@ def _archive_upload(settings: Settings, job_id: str, stem: str, exts) -> Path | 
 
 # --- cover letter (av3 cover) ---------------------------------------------------
 
-def job_cover_upload_path(settings: Settings, job_id: str, ext: str = ".docx") -> Path:
-    """Where a job's upload-ready cover letter lives — ``<uploads>/<job_id>/Cover Letter<ext>``
-    (generic basename; the ATS never sees the per-posting source name)."""
-    return _upload_path(settings, job_id, _COVER_UPLOAD_STEM, ext)
+def job_cover_upload_path(
+    settings: Settings, job_id: str, ext: str = ".docx", name: str = ""
+) -> Path:
+    """Where a job's upload-ready cover letter lives —
+    ``<uploads>/<job_id>/[<Name> ]Cover Letter<ext>`` (the ATS never sees the per-posting source name)."""
+    return _upload_path(settings, job_id, _COVER_UPLOAD_STEM, ext, name)
 
 
 def existing_job_cover(settings: Settings, job_id: str) -> Path | None:
-    """The job's assigned cover letter (``<uploads>/<job_id>/Cover Letter.*``) or ``None`` — the
+    """The job's assigned cover letter (``<uploads>/<job_id>/*Cover Letter.*``) or ``None`` — the
     per-job contract the apply worker reads (file existence = "assigned"). Benign no-attach."""
     return _existing_upload(settings, job_id, _COVER_UPLOAD_STEM, _COVER_LETTER_EXTS)
 
 
-def assign_cover_letter(settings: Settings, job_id: str, source: Path | str) -> Path:
-    """Copy a hand-authored letter into the job folder as the generic ``Cover Letter<ext>``
+def assign_cover_letter(
+    settings: Settings, job_id: str, source: Path | str, name: str = ""
+) -> Path:
+    """Copy a hand-authored letter into the job folder as ``[<Name> ]Cover Letter<ext>``
     (``av3 cover`` — the per-job "write one per job" step). Content preserved; only the upload
     basename is normalized. Replaces any prior assignment. Raises ``FileNotFoundError`` if missing."""
-    return _assign_upload(settings, job_id, source, _COVER_UPLOAD_STEM)
+    return _assign_upload(settings, job_id, source, _COVER_UPLOAD_STEM, name)
 
 
 def archive_cover_letter(settings: Settings, job_id: str) -> Path | None:
-    """On a confirmed APPLIED, move the cover to ``<uploads>/_archive/Cover Letter - <job_id><ext>``.
+    """On a confirmed APPLIED, move the cover to ``<uploads>/_archive/<basename> - <job_id><ext>``.
     Returns the archive path, or ``None`` if there was nothing to archive (or the move failed)."""
     return _archive_upload(settings, job_id, _COVER_UPLOAD_STEM, _COVER_LETTER_EXTS)
 
 
 # --- résumé (av3 resume) --------------------------------------------------------
 
-def job_resume_upload_path(settings: Settings, job_id: str, ext: str = ".pdf") -> Path:
-    """Where a job's upload-ready résumé lives — ``<uploads>/<job_id>/Resume<ext>`` (generic
-    basename; the ATS never sees ``Joseph_Lira_Resume_Solutions_Engineer.docx``)."""
-    return _upload_path(settings, job_id, _RESUME_UPLOAD_STEM, ext)
+def job_resume_upload_path(
+    settings: Settings, job_id: str, ext: str = ".pdf", name: str = ""
+) -> Path:
+    """Where a job's upload-ready résumé lives — ``<uploads>/<job_id>/[<Name> ]Resume<ext>``
+    (the ATS never sees ``Joseph_Lira_Resume_Solutions_Engineer.docx``)."""
+    return _upload_path(settings, job_id, _RESUME_UPLOAD_STEM, ext, name)
 
 
 def existing_job_resume(settings: Settings, job_id: str) -> Path | None:
-    """The job's manually-assigned résumé (``<uploads>/<job_id>/Resume.*``) or ``None``. Takes
+    """The job's manually-assigned résumé (``<uploads>/<job_id>/*Resume.*``) or ``None``. Takes
     precedence over the optimize-generated PDF in the worker — a hand-crafted résumé per posting."""
     return _existing_upload(settings, job_id, _RESUME_UPLOAD_STEM, _RESUME_EXTS)
 
 
-def assign_resume(settings: Settings, job_id: str, source: Path | str) -> Path:
-    """Copy a hand-crafted résumé into the job folder as the generic ``Resume<ext>`` (``av3
+def assign_resume(
+    settings: Settings, job_id: str, source: Path | str, name: str = ""
+) -> Path:
+    """Copy a hand-crafted résumé into the job folder as ``[<Name> ]Resume<ext>`` (``av3
     resume``). Same per-job model as the cover letter. Raises ``FileNotFoundError`` if missing."""
-    return _assign_upload(settings, job_id, source, _RESUME_UPLOAD_STEM)
+    return _assign_upload(settings, job_id, source, _RESUME_UPLOAD_STEM, name)
 
 
 def archive_resume(settings: Settings, job_id: str) -> Path | None:
-    """On a confirmed APPLIED, move the résumé to ``<uploads>/_archive/Resume - <job_id><ext>``.
+    """On a confirmed APPLIED, move the résumé to ``<uploads>/_archive/<basename> - <job_id><ext>``.
     Only acts on a manually-assigned résumé (the optimize PDF / global résumé are left in place)."""
     return _archive_upload(settings, job_id, _RESUME_UPLOAD_STEM, _RESUME_EXTS)
 

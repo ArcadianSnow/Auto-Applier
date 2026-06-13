@@ -154,6 +154,13 @@ upload under those exact basenames). Extended the per-job model to it:
   `test_cover_library.py` (résumé section), `test_cli_cover.py` (`av3 resume`), `test_apply_worker.py`
   (precedence + archive). 1037 green.
 
+**Name-prefixed basenames (user request).** The upload basename is `<Full Name> <Stem><ext>` —
+`Joseph Lira Resume.pdf` / `Joseph Lira Cover Letter.docx` — pulled from the fact bank
+(`profile/master.json` `contact.name`) by the CLI. The name is NOT a templating tell (it's the
+applicant's own), so it stays consistent with the anti-detection goal while looking like a normal
+upload. No name in the fact bank → bare generic stem. Lookup globs `*<stem><ext>` so it finds the file
+regardless of the prefix; the name is sanitized for illegal filename chars. 1042 green.
+
 > Note: the OPTIMIZE-generated résumé still uploads as `{job_id}.pdf` (a numeric tell) when no manual
 > résumé is assigned. The manual go-live path (`av3 queue` + `av3 resume`) avoids it; if the auto
 > optimize→apply path is ever used for real, normalize that upload basename too (copy to a generic name

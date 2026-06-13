@@ -607,6 +607,19 @@ def queue_cmd(job_ids, shortlist_name, mark_all) -> None:
         sys.exit(1)
 
 
+def _applicant_name(settings) -> str:
+    """The applicant's name from the fact bank (for the upload basename), or "" if unavailable.
+
+    Defensive: a missing/partial ``profile/master.json`` must not break ``av3 cover``/``av3
+    resume`` — we just fall back to the bare generic basename."""
+    try:
+        from auto_applier.resume.factbank import FactBank
+        bank = FactBank.load(settings.data_dir / "profile" / "master.json")
+        return (bank.contact.name or "").strip()
+    except Exception:  # noqa: BLE001 — name is a nicety; absence is not an error
+        return ""
+
+
 @cli.command("cover")
 @click.argument("job_id")
 @click.argument("source", required=False, type=click.Path(exists=False))
@@ -645,7 +658,7 @@ def cover_cmd(job_id, source) -> None:
         return
 
     try:
-        dest = assign_cover_letter(settings, job_id, source)
+        dest = assign_cover_letter(settings, job_id, source, name=_applicant_name(settings))
     except FileNotFoundError as exc:
         click.echo(f"  x FAIL {exc}", err=True)
         sys.exit(2)
@@ -690,7 +703,7 @@ def resume_cmd(job_id, source) -> None:
         return
 
     try:
-        dest = assign_resume(settings, job_id, source)
+        dest = assign_resume(settings, job_id, source, name=_applicant_name(settings))
     except FileNotFoundError as exc:
         click.echo(f"  x FAIL {exc}", err=True)
         sys.exit(2)
