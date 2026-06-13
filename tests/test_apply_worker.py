@@ -669,6 +669,62 @@ def test_records_per_job_cover_letter_path_when_present(settings, conn):
     assert apps[0].cover_letter_path == str(cover)
 
 
+def _recording_cover_driver(seen: dict, *, status=ApplicationStatus.APPLIED) -> DriverEntry:
+    """A fake driver that records the cover_letter_path kwarg it was handed."""
+
+    async def prepare(*_a, **kw):
+        seen["cover_letter_path"] = kw.get("cover_letter_path")
+        return _make_outcome(status=status)
+
+    return DriverEntry(listing_from_job=lambda j: j, prepare=prepare)
+
+
+def test_passes_per_job_cover_letter_to_driver(settings, conn):
+    """The optimize-generated cover (.txt) is handed to the driver for upload, not just
+    recorded — BUILD 1 wired cover_letter_path through driver.prepare."""
+    job = _seed_queued_lever(conn, company="acmeco", source_job_id="cov-1")
+    cover = generated_cover_letter_path(settings, job.id)
+    cover.parent.mkdir(parents=True, exist_ok=True)
+    cover.write_text("Dear team", encoding="utf-8")
+
+    seen: dict = {}
+    worker = _build_worker(settings, conn, driver=_recording_cover_driver(seen))
+    asyncio.run(worker.run_once())
+
+    assert seen["cover_letter_path"] == str(cover)
+
+
+def test_manual_cover_letter_used_when_no_optimize_cover(settings, conn):
+    """Manual-queue path: no per-job optimize .txt, but a hand-authored letter matching
+    the company exists in cover_letters_dir → it's uploaded AND recorded on the row."""
+    job = _seed_queued_lever(conn, company="Hightouch", source_job_id="cov-2")
+    d = settings.cover_letters_dir
+    d.mkdir(parents=True, exist_ok=True)
+    letter = d / "hightouch.docx"
+    letter.write_text("Dear Hightouch", encoding="utf-8")
+
+    seen: dict = {}
+    worker = _build_worker(settings, conn, driver=_recording_cover_driver(seen))
+    asyncio.run(worker.run_once())
+
+    assert seen["cover_letter_path"] == str(letter)
+    apps = ApplicationRepo(conn).list_by_job(job.id)
+    assert apps[0].cover_letter_path == str(letter)
+
+
+def test_no_cover_letter_anywhere_passes_empty(settings, conn):
+    """No optimize cover and no manual-library match → driver gets '' (no attach)."""
+    job = _seed_queued_lever(conn, company="Nowhere", source_job_id="cov-3")
+
+    seen: dict = {}
+    worker = _build_worker(settings, conn, driver=_recording_cover_driver(seen))
+    asyncio.run(worker.run_once())
+
+    assert seen["cover_letter_path"] == ""
+    apps = ApplicationRepo(conn).list_by_job(job.id)
+    assert apps[0].cover_letter_path == ""
+
+
 def test_failed_recovery_records_per_job_resume_path(settings, conn):
     """A driver crash routes the job to REVIEW with a FAILED Application row carrying the
     per-job résumé path, so dashboard triage shows which résumé it would have used."""

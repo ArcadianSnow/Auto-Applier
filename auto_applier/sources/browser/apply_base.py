@@ -39,6 +39,7 @@ __all__ = [
     "ApplyOutcome",
     "CustomQuestion",
     "any_required_unresolved",
+    "attach_cover_letter",
     "check_auth_wall",
     "fill_resolutions",
     "human_type",
@@ -151,6 +152,30 @@ async def human_type(page, selector: str, text: str) -> bool:
         await el.type(ch)
         await asyncio.sleep(random.uniform(0.03, 0.12))
     return True
+
+
+async def attach_cover_letter(page, selector: str, path: str) -> bool:
+    """Attach a cover-letter file to a native file input, defensively.
+
+    Greenhouse renders a hidden ``input#cover_letter`` (``class="visually-hidden"``,
+    ``accept=".pdf,.doc,.docx,.txt,.rtf"``) parallel to ``#resume`` and behind the visible
+    "Attach" button — ``set_input_files`` works on it DIRECTLY, no click needed (same shape
+    as the résumé upload; confirmed live on Hightouch 2026-06-13). A ``.docx`` cover letter
+    is accepted as-is, so no PDF render is required.
+
+    Returns True iff a file was attached. A missing input or a failed upload returns False
+    (observable, never fatal): the cover letter is supplementary, so a failure must not break
+    the apply — the worker still records ``filled["cover_letter"]=False`` and proceeds."""
+    if not path:
+        return False
+    el = await page.query_selector(selector)
+    if el is None:
+        return False
+    try:
+        await el.set_input_files(path)
+        return True
+    except Exception:  # noqa: BLE001 — supplementary upload; failure is observable, not fatal
+        return False
 
 
 # Value-side safety backstop for the human-attestation gate (research/automated-apply-

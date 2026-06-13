@@ -155,6 +155,7 @@ async def prepare_application(
     applicant: Applicant,
     resume_path: str,
     *,
+    cover_letter_path: str = "",
     dry_run: bool = True,
     mode: ApplyMode = ApplyMode.BROWSER_AUTO,
     confirm_timeout_s: float = 20.0,
@@ -166,6 +167,12 @@ async def prepare_application(
     exactly like the Greenhouse driver. See module docstring for the dispatch semantics;
     identical to ``greenhouse_apply.prepare_application`` including the §8b downgrade
     when a required custom question lacks a confident answer.
+
+    ``cover_letter_path`` is accepted so the apply worker can call every driver with the
+    same kwargs, but Lever's cover-letter input is NOT wired yet: Lever commonly uses a
+    single combined upload (résumé + optional letter) rather than a discrete ``#cover_letter``
+    field, so its selector must be scoped against a live Lever form before wiring (see
+    research/automated-apply-next-build.md). Greenhouse is the wired path today.
     """
     await page.goto(listing.apply_url, wait_until="domcontentloaded")
     await asyncio.sleep(random.uniform(1.0, 2.5))  # let scripts (hcaptcha) load

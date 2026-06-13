@@ -42,6 +42,7 @@ get the predictable DOM and avoid iframe/SPA wrappers.
 | Phone | `#phone` | optional, `type=tel`, intl-tel-input widget |
 | Country | `#country` | optional, custom dropdown |
 | Résumé | `#resume` (`input[type=file]`) | `accept=".pdf,.doc,.docx,.txt,.rtf"` |
+| Cover letter | `#cover_letter` (`input[type=file]`, `class="visually-hidden"`) | `accept=".pdf,.doc,.docx,.txt,.rtf"`; hidden behind the "Attach" button, parallel to `#resume` |
 | Submit | `button[type=submit]` text **"Submit application"** | |
 
 These IDs are consistent across Greenhouse companies (verified pattern; matches what autofill extensions
@@ -49,7 +50,12 @@ like JobWizard key on via the `greenhouse.io` / `grnh.se` domain).
 
 **File upload.** Native `<input type=file id="resume">` is present → `page.set_input_files('#resume', path)`
 works directly. The visible UI also offers **"Attach" / "Dropbox" / "Google Drive" / "Enter manually"**
-buttons; ignore those and target the underlying native input. Greenhouse parses the résumé but does **not**
+buttons; ignore those and target the underlying native input. **The cover letter is the SAME pattern**
+(confirmed live on Hightouch 2026-06-13): a hidden `#cover_letter` file input sits behind its own "Attach"
+button, so `set_input_files('#cover_letter', path)` works directly — no click. `.docx` uploads as-is (the
+accept list includes it), so no PDF render is needed. The driver wires this via
+`apply_base.attach_cover_letter` (defensive: missing input or error → observable False, never fatal —
+a cover letter is supplementary). See BUILD 1 in `automated-apply-next-build.md`. Greenhouse parses the résumé but does **not**
 force a "correct the parsed fields" step on the candidate — parsing populates the recruiter's view, not a
 blocking candidate flow.
 

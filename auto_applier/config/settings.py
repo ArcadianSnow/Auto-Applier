@@ -335,6 +335,19 @@ class Settings(BaseModel):
         return self.data_dir / "shortlist"
 
     @property
+    def cover_letters_dir(self) -> Path:
+        """Hand-authored cover letters for the manual-queue apply path (spec §6b).
+
+        When a job reaches QUEUED_APPLY via ``av3 queue`` (no optimize-generated cover),
+        the apply worker maps ``job.company`` → a letter file here (via an optional
+        ``index.json`` then a fuzzy filename match — see
+        ``auto_applier.resume.generate.manual_cover_letter_path``) and attaches it.
+        PII-adjacent (the letters are personal), so it lives under the relocatable data
+        dir, never the repo. Absent dir = no manual cover letters (the worker falls back
+        to the optimize ``.txt`` or no letter)."""
+        return self.data_dir / "cover-letters"
+
+    @property
     def story_bank_path(self) -> Path:
         """STAR+R interview story bank (``av3 stories`` — file-grain prep library)."""
         return self.data_dir / "story_bank.json"

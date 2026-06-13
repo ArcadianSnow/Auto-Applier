@@ -260,7 +260,7 @@ class _RecordingDriver:
         return job  # we don't care about the listing shape here
 
     async def prepare(self, page, listing, applicant, resume_path, *,
-                       dry_run, mode, resolver):
+                       cover_letter_path="", dry_run, mode, resolver):
         self.called_for.append(listing.source)
         from auto_applier.sources.browser.apply_base import ApplyOutcome
         from auto_applier.sources.browser.detect import classify_captcha

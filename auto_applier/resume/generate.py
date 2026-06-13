@@ -33,6 +33,8 @@ live in the schema, spec §4).
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 from auto_applier.config.settings import Settings
@@ -49,9 +51,15 @@ __all__ = [
     "format_allowed_metrics",
     "generated_cover_letter_path",
     "generated_resume_path",
+    "manual_cover_letter_path",
     "parse_cover_letter",
     "parse_generated_resume",
 ]
+
+#: File extensions an ATS cover-letter upload accepts (Greenhouse's #cover_letter accept
+#: list). Ordered by preference when several letters share a slug — .docx is the real
+#: hand-authored content for the manual path (research/automated-apply-next-build.md).
+_COVER_LETTER_EXTS = (".docx", ".pdf", ".doc", ".txt", ".rtf")
 
 
 #: Default cover-letter target length (spec §6b: concise & tailored, ~150-250 words).
@@ -81,6 +89,83 @@ def generated_cover_letter_path(settings: Settings, job_id: str) -> Path:
     listing shows both side-by-side.
     """
     return settings.artifacts_dir / "generated" / f"{job_id}_cover.txt"
+
+
+def _cover_slug(text: str) -> str:
+    """Normalize a company name / filename stem to a comparable slug.
+
+    Lowercase, drop a leading "cover[-_ ]letter" prefix, strip common company suffixes
+    (inc/llc/ltd/corp/co), and reduce to alphanumerics. ``"Hightouch, Inc."`` and
+    ``"cover-letter-hightouch.docx"`` both → ``"hightouch"`` so a stem matches its company."""
+    s = (text or "").lower()
+    s = re.sub(r"^cover[\s_-]*letter[\s_-]*", "", s)
+    s = re.sub(r"\b(inc|llc|ltd|corp|co|company|gmbh|plc)\b", "", s)
+    return re.sub(r"[^a-z0-9]+", "", s)
+
+
+def manual_cover_letter_path(settings: Settings, company: str) -> Path | None:
+    """Resolve a hand-authored cover letter for ``company`` from ``cover_letters_dir``.
+
+    The manual-queue apply path (``av3 queue``) has no optimize-generated cover letter, so
+    the apply worker maps the job's company to a letter file the user dropped in
+    ``settings.cover_letters_dir`` (spec §6b, research/automated-apply-next-build.md):
+
+      1. An optional ``index.json`` (``{company-or-slug: filename}``) — keys are matched by
+         slug, so ``"Hightouch"`` finds ``{"hightouch": "ht.docx"}``. The mapped filename is
+         resolved relative to the dir; an absolute path is honoured.
+      2. Else a fuzzy filename match: each ``*.docx/.pdf/.doc/.txt/.rtf`` stem is slugged and
+         compared to the company slug (exact slug, then either-way containment), preferring
+         ``.docx`` (the real content) on ties.
+
+    Returns the resolved :class:`Path` (verified to exist) or ``None`` (no dir / no match /
+    empty company) — ``None`` means "no manual letter", which is a benign no-attach, never an
+    error. Pure + I/O-only-on-the-configured-dir so it's unit-testable with a tmp dir."""
+    slug = _cover_slug(company)
+    if not slug:
+        return None
+    base = settings.cover_letters_dir
+    if not base.exists():
+        return None
+
+    # 1) Explicit index.json wins.
+    index_file = base / "index.json"
+    if index_file.exists():
+        try:
+            mapping = json.loads(index_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            mapping = None
+        if isinstance(mapping, dict):
+            for key, filename in mapping.items():
+                if _cover_slug(str(key)) == slug and filename:
+                    cand = Path(str(filename))
+                    if not cand.is_absolute():
+                        cand = base / cand
+                    if cand.exists():
+                        return cand
+
+    # 2) Fuzzy filename match, preferring .docx (extension order = _COVER_LETTER_EXTS).
+    candidates: list[Path] = []
+    for ext in _COVER_LETTER_EXTS:
+        candidates.extend(sorted(base.glob(f"*{ext}")))
+    exact: list[Path] = []
+    partial: list[Path] = []
+    for cand in candidates:
+        stem_slug = _cover_slug(cand.stem)
+        if not stem_slug:
+            continue
+        if stem_slug == slug:
+            exact.append(cand)
+        elif slug in stem_slug or stem_slug in slug:
+            partial.append(cand)
+
+    def _by_ext(p: Path) -> int:
+        ext = p.suffix.lower()
+        return _COVER_LETTER_EXTS.index(ext) if ext in _COVER_LETTER_EXTS else len(_COVER_LETTER_EXTS)
+
+    for bucket in (exact, partial):
+        if bucket:
+            return sorted(bucket, key=_by_ext)[0]
+    return None
 
 
 # --------------------------------------------------------------- bank → prompt strings

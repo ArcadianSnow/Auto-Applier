@@ -2,6 +2,10 @@
 
 > Written 2026-06-13, after the field-fill overhaul (commit **20b3731**, 1004 tests green).
 > Read `automated-apply-go-live.md` first for the full backstory; this is the forward plan.
+>
+> **UPDATE 2026-06-13 — BUILD 1 (cover-letter upload) SHIPPED.** 1023 tests green. See the
+> "BUILD 1 — DONE" section below; the remaining builds (Tailscale enumerated dropdowns,
+> veteran flake, gated go-live) are unchanged.
 
 ## Where we are
 
@@ -28,36 +32,59 @@ SELECT context_json FROM events WHERE run_id=? AND stage='resolution'
 ```
 Set `AV3_DATA_DIR=C:\Users\jar85\JobSearch\av3data` for the personal search.
 
-## BUILD 1 — Cover-letter upload (biggest remaining; user-requested)
+## BUILD 1 — Cover-letter upload — DONE (2026-06-13)
 
-**DOM (confirmed live on Hightouch):** there's a hidden file input **`#cover_letter`**
-(`class="visually-hidden"`, `accept=".pdf,.doc,.docx,.txt,.rtf"`) parallel to `#resume`. It's
-already in the DOM (behind the "Attach" button visually) — **`set_input_files("#cover_letter", path)`
-works directly**, no need to click Attach. Same pattern as the existing résumé upload.
+Shipped. The bot now attaches a cover letter on Greenhouse. What landed:
 
-**Driver change (`greenhouse_apply.prepare_application`, mirror in lever/ashby):**
-- Add a `cover_letter_path: str = ""` parameter.
-- After the résumé attach, if `cover_letter_path` and `#cover_letter` exists: `set_input_files`
-  it; record `outcome.filled["cover_letter"]`. Defensive (a failure is observable, not fatal).
+**Shared helper** — `apply_base.attach_cover_letter(page, selector, path) -> bool`: defensive
+native-file-input upload. Empty path → short-circuit False (no DOM query); absent input or upload
+error → False (observable, never fatal — a cover letter is supplementary).
 
-**Worker change (`ApplyWorker._process_one`):**
-- `_artifacts_for(job)` already returns `cover_used` (the per-job optimize-generated `.txt`), but
-  the manual-queue path (`av3 queue`) has none → `cover_used=""`. So add a **job→letter map** for
-  the manual path: Joseph's 20 Solutions letters live in `JobSearch/cover-letters/*.docx`
-  (`build_solutions_cover_letters.py`), one per company. Map by `job.company` (slug/normalize) →
-  the matching `.docx`; fall back to `""` (no letter) if unmatched. Pass it to `driver.prepare`.
-- Greenhouse accepts `.docx`, so upload the `.docx` directly — no PDF render needed. (Optimize-
-  generated `.txt` cover letters: render or skip; the manual `.docx` is the real content.)
-- Decide where the map lives: simplest is a small `cover-letters/index.json` in JobSearch
-  (`{company: filename}`) that the worker reads, OR a settings-level `cover_letters_dir` + fuzzy
-  company match. Keep it in JobSearch (PII-adjacent), not the repo.
+**Greenhouse driver** (`greenhouse_apply.py`) — `_COVER_LETTER_SELECTOR = "#cover_letter"`, a new
+`cover_letter_path: str = ""` kwarg, and an `attach_cover_letter` call right after the résumé
+attach (records `outcome.filled["cover_letter"]`). DOM confirmed live on Hightouch: hidden
+`#cover_letter` (`class="visually-hidden"`, `accept=".pdf,.doc,.docx,.txt,.rtf"`) parallel to
+`#resume`; `set_input_files` works directly, no Attach-click. `.docx` uploads as-is (no PDF render).
 
-**Validate:** extend `diagnose_apply.py` to pass a `cover_letter_path` and assert `#cover_letter`
-has a file after; run on a Greenhouse form. Confirm the on-page "Cover Letter" section shows the
-attached filename (the user's Image #2 showed it empty).
+**Lever + Ashby** — accept the `cover_letter_path` kwarg (so the worker calls every driver
+uniformly) but DO NOT wire the upload yet: Lever commonly uses a single combined upload; Ashby's
+cover field is often a UUID-named custom question. Scope each on a live form before wiring (their
+docstrings say so). Greenhouse was the whole batch, so it was wired first.
 
-**Note:** Lever/Ashby cover-letter inputs differ — scope each before wiring (Lever often has a
-single combined upload; Ashby varies). Greenhouse first (the user's whole batch is Greenhouse).
+**Manual cover-letter library** — `settings.cover_letters_dir` (= `data_dir/"cover-letters"`) +
+`generate.manual_cover_letter_path(settings, company) -> Path | None`. Resolution: an optional
+`index.json` (`{company-or-slug: filename|abspath}`, keys matched by SLUG) first, then a fuzzy
+filename match (`*.docx/.pdf/.doc/.txt/.rtf`, .docx preferred on ties). `_cover_slug` lowercases,
+strips a leading `cover-letter` prefix + company suffixes (inc/llc/…), reduces to alphanumerics —
+so `"Fivetran, Inc."` finds `Fivetran`. No match / no dir / empty company → `None` (benign no-attach).
+
+**Worker** (`ApplyWorker._artifacts_for`) — when no per-job optimize `.txt` exists (the `av3 queue`
+manual path), falls back to `manual_cover_letter_path(settings, job.company)`. The resolved path is
+both uploaded (passed as `cover_letter_path` to `driver.prepare`) and recorded on the `Application`
+row. Optimize `.txt` still wins when present.
+
+**JobSearch wiring** — `av3data/cover-letters/index.json` maps the **unambiguous 1:1 companies**
+(Fivetran, Prefect, Render, dbt Labs) to absolute paths at `JobSearch/cover-letters/*.docx` (no file
+duplication; the dir holds only `index.json`, so fuzzy never auto-matches a wrong variant). The
+multi-variant companies (Databricks, Grafana Labs, Postman, Tailscale, Vanta — different role / region
+/ tier per letter) are intentionally left UNMAPPED and listed under `_unmapped_multi_variant`: the
+worker returns no-match (safe — human attaches the right letter in assisted mode) rather than guessing.
+**Decision still open for the user:** pick the single default letter per multi-variant company and add
+it to the index, OR teach the worker a company+role key (it only has `job.company` today).
+
+**Tests** — `tests/test_cover_library.py` (library + helper, 14 tests), driver-attach tests in
+`test_apply_driver.py`, worker fallback/pass-through tests in `test_apply_worker.py`. All driver
+stubs (incl. `test_session_expiry`) accept the new kwarg. 1023 green.
+
+**Validate live (still a user-watched step):** `diagnose_apply.py` was extended — it now exercises
+`manual_cover_letter_path(settings, <company>)` (2nd CLI arg, default = URL board token) and asserts
+the hidden `#cover_letter` input actually receives a file after the dry-run (read-back of
+`#cover_letter.files.length`, prints PASS/FAIL). Run watched on a real Greenhouse form to confirm the
+on-page "Cover Letter" section shows the attached filename (the user's Image #2 showed it empty):
+```
+$env:AV3_DATA_DIR='C:\Users\jar85\JobSearch\av3data'; $env:PYTHONIOENCODING='utf-8'
+python C:\Users\jar85\JobSearch\diagnose_apply.py https://job-boards.greenhouse.io/<token>/jobs/<id> <Company>
+```
 
 ## BUILD 2 — Verify the Tailscale enumerated react-selects
 

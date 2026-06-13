@@ -28,6 +28,7 @@ from auto_applier.sources.browser.apply_base import (
     ApplyOutcome,
     CustomQuestion,
     any_required_unresolved,
+    attach_cover_letter,
     check_auth_wall,
     fill_phone,
     fill_resolutions,
@@ -57,6 +58,9 @@ _FIELD_SELECTORS = {
     "phone": "#phone",
 }
 _RESUME_SELECTOR = "#resume"
+#: Hidden file input parallel to #resume, behind the visible "Attach" button. Accepts
+#: .pdf/.doc/.docx/.txt/.rtf; set_input_files works directly (confirmed live 2026-06-13).
+_COVER_LETTER_SELECTOR = "#cover_letter"
 _SUBMIT_SELECTOR = "button[type=submit]"
 
 
@@ -167,6 +171,7 @@ async def prepare_application(
     applicant: Applicant,
     resume_path: str,
     *,
+    cover_letter_path: str = "",
     dry_run: bool = True,
     mode: ApplyMode = ApplyMode.BROWSER_AUTO,
     confirm_timeout_s: float = 20.0,
@@ -229,6 +234,13 @@ async def prepare_application(
             outcome.filled["resume"] = True
         except Exception:  # noqa: BLE001 — mid-form break → fail fast to REVIEW
             outcome.filled["resume"] = False
+
+    # Attach the cover letter (hidden #cover_letter file input, parallel to #resume).
+    # Supplementary — a failure is observable, never fatal (see attach_cover_letter).
+    if cover_letter_path:
+        outcome.filled["cover_letter"] = await attach_cover_letter(
+            page, _COVER_LETTER_SELECTOR, cover_letter_path
+        )
 
     outcome.custom_questions = await discover_custom_questions(page)
 

@@ -108,6 +108,7 @@ from auto_applier.resume.factbank import FactBank
 from auto_applier.resume.generate import (
     generated_cover_letter_path,
     generated_resume_path,
+    manual_cover_letter_path,
 )
 from auto_applier.resume.salary import (
     build_market_source,
@@ -534,6 +535,7 @@ class ApplyWorker:
             listing,
             self._applicant,
             resume_used,
+            cover_letter_path=cover_used,
             dry_run=self._dry_run,
             mode=self._effective_mode(),
             resolver=self._resolver,
@@ -622,13 +624,20 @@ class ApplyWorker:
           * **résumé**: the per-job PDF when it exists, else the single global
             ``resume.pdf`` the worker was constructed with — covers a job that reached
             QUEUED_APPLY before optimize ran, or a manual re-queue.
-          * **cover letter**: the per-job ``.txt`` when it exists, else ``""`` (an empty
-            path means "no generated cover letter to record").
+          * **cover letter**: the per-job optimize ``.txt`` when it exists; else a
+            hand-authored letter resolved from ``settings.cover_letters_dir`` by company
+            (the manual-queue path — ``av3 queue`` jobs never ran optimize, so they have
+            no generated ``.txt``); else ``""`` (no cover letter to attach/record). See
+            ``auto_applier.resume.generate.manual_cover_letter_path``.
         """
         pdf = generated_resume_path(self._settings, job.id)
         cover = generated_cover_letter_path(self._settings, job.id)
         resume_used = str(pdf) if pdf.exists() else self._resume_path
-        cover_used = str(cover) if cover.exists() else ""
+        if cover.exists():
+            cover_used = str(cover)
+        else:
+            manual = manual_cover_letter_path(self._settings, job.company)
+            cover_used = str(manual) if manual else ""
         return resume_used, cover_used
 
     # -- recovery + telemetry ----------------------------------------------

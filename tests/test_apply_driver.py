@@ -116,6 +116,41 @@ def test_dry_run_classifies_fills_and_does_not_submit():
     assert outcome.auto_eligible is True
 
 
+def test_dry_run_attaches_cover_letter_to_cover_input():
+    """When a cover_letter_path is supplied, the driver uploads it to the hidden
+    #cover_letter input (parallel to #resume) and records filled['cover_letter']."""
+    html = '<form>...</form>'
+    page = FakePage(html, [], [])
+    applicant = Applicant("Pat", "Doe", "pat@example.com", "555-1234")
+
+    outcome = asyncio.run(
+        prepare_application(
+            page, _listing(), applicant,
+            resume_path="/tmp/resume.pdf",
+            cover_letter_path="/tmp/cover.docx",
+            dry_run=True,
+        )
+    )
+
+    assert outcome.filled["cover_letter"] is True
+    assert page.elements["#cover_letter"].files == "/tmp/cover.docx"
+
+
+def test_dry_run_no_cover_letter_key_when_path_empty():
+    """No cover_letter_path → the driver never touches #cover_letter (no filled key)."""
+    page = FakePage('<form>...</form>', [], [])
+    applicant = Applicant("Pat", "Doe", "pat@example.com", "555-1234")
+
+    outcome = asyncio.run(
+        prepare_application(
+            page, _listing(), applicant, resume_path="/tmp/resume.pdf", dry_run=True
+        )
+    )
+
+    assert "cover_letter" not in outcome.filled
+    assert "#cover_letter" not in page.elements
+
+
 def test_dry_run_visible_challenge_not_auto_eligible():
     html = '<iframe title="recaptcha challenge expires in two minutes"></iframe>'
     page = FakePage(html, scripts=[], questions=[])

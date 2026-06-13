@@ -160,6 +160,7 @@ async def prepare_application(
     applicant: Applicant,
     resume_path: str,
     *,
+    cover_letter_path: str = "",
     dry_run: bool = True,
     mode: ApplyMode = ApplyMode.BROWSER_AUTO,
     confirm_timeout_s: float = 20.0,
@@ -176,6 +177,11 @@ async def prepare_application(
          onClick handler issue the XHR.
       4. Confirmation: no URL transition. ``detect_confirmation`` matches the in-place
          "Application submitted" panel via the success-text regex.
+
+    ``cover_letter_path`` is accepted for a uniform worker call but NOT wired: Ashby's
+    cover-letter field varies per form config (often a custom UUID-named file question that
+    flows through custom-Q discovery, not a stable system field), so it must be scoped on a
+    live form before wiring (research/automated-apply-next-build.md). Greenhouse is wired today.
     """
     await page.goto(listing.apply_url, wait_until="domcontentloaded")
     # SPA needs render + a moment for invisible reCAPTCHA to attach.
