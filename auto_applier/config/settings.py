@@ -335,17 +335,18 @@ class Settings(BaseModel):
         return self.data_dir / "shortlist"
 
     @property
-    def cover_letters_dir(self) -> Path:
-        """Hand-authored cover letters for the manual-queue apply path (spec §6b).
+    def uploads_dir(self) -> Path:
+        """Per-job, upload-ready application files (spec §6b, anti-detection §8c).
 
-        When a job reaches QUEUED_APPLY via ``av3 queue`` (no optimize-generated cover),
-        the apply worker maps ``job.company`` → a letter file here (via an optional
-        ``index.json`` then a fuzzy filename match — see
-        ``auto_applier.resume.generate.manual_cover_letter_path``) and attaches it.
-        PII-adjacent (the letters are personal), so it lives under the relocatable data
-        dir, never the repo. Absent dir = no manual cover letters (the worker falls back
-        to the optimize ``.txt`` or no letter)."""
-        return self.data_dir / "cover-letters"
+        Each job's files live under ``uploads_dir / <job_id>/`` with **generic basenames**
+        (e.g. ``Cover Letter.docx``) — Playwright uploads a file under its basename, so a
+        per-posting name like ``CoverLetter_Tailscale_SE_Commercial.docx`` is a mass-apply
+        fingerprint; the per-job identity lives in the folder path, not the uploaded name.
+        ``av3 cover`` writes here; the apply worker reads here; on a confirmed APPLIED the
+        worker moves the file to ``uploads_dir / "_archive"`` with the job id appended. See
+        ``auto_applier.resume.generate`` (job_cover_upload_path / existing_job_cover /
+        assign_cover_letter / archive_cover_letter)."""
+        return self.artifacts_dir / "uploads"
 
     @property
     def story_bank_path(self) -> Path:

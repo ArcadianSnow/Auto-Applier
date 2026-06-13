@@ -601,9 +601,56 @@ def queue_cmd(job_ids, shortlist_name, mark_all) -> None:
         conn.close()
     click.echo(f"\nqueued={queued_n} already={already_n} errors={error_n}")
     if queued_n:
-        click.echo("Next: `av3 apply --once --dry-run` (dress rehearsal) before any real submit.")
+        click.echo("Next: `av3 cover <id> <letter>` to assign a cover letter, then "
+                   "`av3 apply --once --dry-run` (dress rehearsal) before any real submit.")
     if error_n:
         sys.exit(1)
+
+
+@cli.command("cover")
+@click.argument("job_id")
+@click.argument("source", required=False, type=click.Path(exists=False))
+def cover_cmd(job_id, source) -> None:
+    """Assign a hand-authored cover letter to a job (per posting, not per company).
+
+    `av3 cover <job_id> <letter.docx>` copies your letter into the job's upload folder under
+    the GENERIC name `Cover Letter<ext>` — the apply worker uploads it from there, and an ATS
+    only ever sees "Cover Letter.docx" (a per-posting source filename like
+    `CoverLetter_Tailscale_SE_Commercial.docx` would be a mass-apply fingerprint). The letter's
+    content is unchanged; only the upload name is normalized. Re-running replaces it.
+
+    `av3 cover <job_id>` (no source) just shows the job's currently-assigned cover, if any.
+    On a confirmed APPLIED the worker moves the file to `uploads/_archive` with the job id
+    appended. See research/automated-apply-next-build.md (BUILD 1.1).
+    """
+    from auto_applier.resume.generate import assign_cover_letter, existing_job_cover
+
+    settings = load_settings()
+    conn = init_app_db(settings.app_db_path)
+    try:
+        job = JobRepo(conn).get(job_id)
+    finally:
+        conn.close()
+    if job is None:
+        click.echo(f"  x FAIL job {job_id} not found", err=True)
+        sys.exit(2)
+
+    if not source:
+        current = existing_job_cover(settings, job_id)
+        if current is None:
+            click.echo(f"{job_id}  {job.company} — {job.title}\n  no cover letter assigned "
+                       f"(assign with: av3 cover {job_id} <letter.docx>)")
+        else:
+            click.echo(f"{job_id}  {job.company} — {job.title}\n  cover: {current}")
+        return
+
+    try:
+        dest = assign_cover_letter(settings, job_id, source)
+    except FileNotFoundError as exc:
+        click.echo(f"  x FAIL {exc}", err=True)
+        sys.exit(2)
+    click.echo(f"  + assigned {job_id}  {job.company} — {job.title}")
+    click.echo(f"    {source}\n      -> {dest}  (uploads as {dest.name!r})")
 
 
 @cli.command()

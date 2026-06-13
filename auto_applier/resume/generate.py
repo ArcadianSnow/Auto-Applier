@@ -33,8 +33,7 @@ live in the schema, spec §4).
 
 from __future__ import annotations
 
-import json
-import re
+import shutil
 from pathlib import Path
 
 from auto_applier.config.settings import Settings
@@ -47,19 +46,27 @@ __all__ = [
     "DEFAULT_COVER_TARGET_WORDS",
     "ResumeGenerator",
     "CoverLetterGenerator",
+    "archive_cover_letter",
+    "assign_cover_letter",
     "build_bank_facts",
+    "existing_job_cover",
     "format_allowed_metrics",
     "generated_cover_letter_path",
     "generated_resume_path",
-    "manual_cover_letter_path",
+    "job_cover_upload_path",
     "parse_cover_letter",
     "parse_generated_resume",
 ]
 
 #: File extensions an ATS cover-letter upload accepts (Greenhouse's #cover_letter accept
-#: list). Ordered by preference when several letters share a slug — .docx is the real
-#: hand-authored content for the manual path (research/automated-apply-next-build.md).
+#: list). A hand-authored letter keeps its extension; .docx is the usual real content.
 _COVER_LETTER_EXTS = (".docx", ".pdf", ".doc", ".txt", ".rtf")
+
+#: The generic basename the cover letter is uploaded under. Playwright sends a file by its
+#: BASENAME, so this is what the ATS sees — a per-posting filename
+#: (``CoverLetter_Tailscale_SE_Commercial.docx``) is a mass-apply fingerprint; this is what a
+#: normal applicant uploads. Per-job identity lives in the folder path, not the name (§8c).
+_COVER_UPLOAD_STEM = "Cover Letter"
 
 
 #: Default cover-letter target length (spec §6b: concise & tailored, ~150-250 words).
@@ -91,81 +98,79 @@ def generated_cover_letter_path(settings: Settings, job_id: str) -> Path:
     return settings.artifacts_dir / "generated" / f"{job_id}_cover.txt"
 
 
-def _cover_slug(text: str) -> str:
-    """Normalize a company name / filename stem to a comparable slug.
-
-    Lowercase, drop a leading "cover[-_ ]letter" prefix, strip common company suffixes
-    (inc/llc/ltd/corp/co), and reduce to alphanumerics. ``"Hightouch, Inc."`` and
-    ``"cover-letter-hightouch.docx"`` both → ``"hightouch"`` so a stem matches its company."""
-    s = (text or "").lower()
-    s = re.sub(r"^cover[\s_-]*letter[\s_-]*", "", s)
-    s = re.sub(r"\b(inc|llc|ltd|corp|co|company|gmbh|plc)\b", "", s)
-    return re.sub(r"[^a-z0-9]+", "", s)
+def _job_upload_dir(settings: Settings, job_id: str) -> Path:
+    """Per-job upload folder: ``artifacts/uploads/<job_id>/``."""
+    return settings.uploads_dir / job_id
 
 
-def manual_cover_letter_path(settings: Settings, company: str) -> Path | None:
-    """Resolve a hand-authored cover letter for ``company`` from ``cover_letters_dir``.
+def job_cover_upload_path(settings: Settings, job_id: str, ext: str = ".docx") -> Path:
+    """Where a job's upload-ready cover letter lives — ``<uploads>/<job_id>/Cover Letter<ext>``.
 
-    The manual-queue apply path (``av3 queue``) has no optimize-generated cover letter, so
-    the apply worker maps the job's company to a letter file the user dropped in
-    ``settings.cover_letters_dir`` (spec §6b, research/automated-apply-next-build.md):
+    The basename is the GENERIC ``Cover Letter`` (Playwright uploads by basename, so this is
+    what the ATS sees — never the per-posting source name). ``ext`` is normalized to lead with
+    a dot; default ``.docx`` (the usual hand-authored format)."""
+    if ext and not ext.startswith("."):
+        ext = "." + ext
+    return _job_upload_dir(settings, job_id) / f"{_COVER_UPLOAD_STEM}{ext}"
 
-      1. An optional ``index.json`` (``{company-or-slug: filename}``) — keys are matched by
-         slug, so ``"Hightouch"`` finds ``{"hightouch": "ht.docx"}``. The mapped filename is
-         resolved relative to the dir; an absolute path is honoured.
-      2. Else a fuzzy filename match: each ``*.docx/.pdf/.doc/.txt/.rtf`` stem is slugged and
-         compared to the company slug (exact slug, then either-way containment), preferring
-         ``.docx`` (the real content) on ties.
 
-    Returns the resolved :class:`Path` (verified to exist) or ``None`` (no dir / no match /
-    empty company) — ``None`` means "no manual letter", which is a benign no-attach, never an
-    error. Pure + I/O-only-on-the-configured-dir so it's unit-testable with a tmp dir."""
-    slug = _cover_slug(company)
-    if not slug:
+def existing_job_cover(settings: Settings, job_id: str) -> Path | None:
+    """The job's assigned cover letter if one exists, else ``None``.
+
+    Looks for ``<uploads>/<job_id>/Cover Letter.*`` across the accepted extensions (preferring
+    ``.docx``). ``None`` means "no manual cover assigned" — a benign no-attach, never an error.
+    This is the per-job contract the apply worker reads (file existence = "assigned")."""
+    folder = _job_upload_dir(settings, job_id)
+    if not folder.exists():
         return None
-    base = settings.cover_letters_dir
-    if not base.exists():
-        return None
-
-    # 1) Explicit index.json wins.
-    index_file = base / "index.json"
-    if index_file.exists():
-        try:
-            mapping = json.loads(index_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            mapping = None
-        if isinstance(mapping, dict):
-            for key, filename in mapping.items():
-                if _cover_slug(str(key)) == slug and filename:
-                    cand = Path(str(filename))
-                    if not cand.is_absolute():
-                        cand = base / cand
-                    if cand.exists():
-                        return cand
-
-    # 2) Fuzzy filename match, preferring .docx (extension order = _COVER_LETTER_EXTS).
-    candidates: list[Path] = []
     for ext in _COVER_LETTER_EXTS:
-        candidates.extend(sorted(base.glob(f"*{ext}")))
-    exact: list[Path] = []
-    partial: list[Path] = []
-    for cand in candidates:
-        stem_slug = _cover_slug(cand.stem)
-        if not stem_slug:
-            continue
-        if stem_slug == slug:
-            exact.append(cand)
-        elif slug in stem_slug or stem_slug in slug:
-            partial.append(cand)
-
-    def _by_ext(p: Path) -> int:
-        ext = p.suffix.lower()
-        return _COVER_LETTER_EXTS.index(ext) if ext in _COVER_LETTER_EXTS else len(_COVER_LETTER_EXTS)
-
-    for bucket in (exact, partial):
-        if bucket:
-            return sorted(bucket, key=_by_ext)[0]
+        cand = folder / f"{_COVER_UPLOAD_STEM}{ext}"
+        if cand.exists():
+            return cand
     return None
+
+
+def assign_cover_letter(settings: Settings, job_id: str, source: Path | str) -> Path:
+    """Copy a hand-authored letter into the job folder as the generic ``Cover Letter<ext>``.
+
+    The per-job "write one per job" step (``av3 cover``). ``source`` is the user's real letter
+    (e.g. ``CoverLetter_Tailscale_SE_Commercial.docx``); its CONTENT is preserved, only the
+    upload basename is normalized. Replaces any prior assignment for this job (incl. one under a
+    different extension). Returns the destination path. Raises ``FileNotFoundError`` if ``source``
+    doesn't exist (the CLI surfaces it)."""
+    src = Path(source)
+    if not src.exists():
+        raise FileNotFoundError(f"cover letter not found: {src}")
+    folder = _job_upload_dir(settings, job_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    # Clear any prior assignment (possibly a different extension) so there's exactly one.
+    for ext in _COVER_LETTER_EXTS:
+        prior = folder / f"{_COVER_UPLOAD_STEM}{ext}"
+        if prior.exists():
+            prior.unlink()
+    dest = job_cover_upload_path(settings, job_id, src.suffix)
+    shutil.copyfile(src, dest)
+    return dest
+
+
+def archive_cover_letter(settings: Settings, job_id: str) -> Path | None:
+    """Move a confirmed-used cover letter to the archive, appending the job id to the name.
+
+    Called after a positive ``APPLIED`` confirmation: the live upload stays generic, but the
+    archived copy is identifiable — ``<uploads>/_archive/Cover Letter - <job_id><ext>``. Returns
+    the archive path, or ``None`` if there was no cover to archive. Defensive: a move failure
+    returns ``None`` (the apply already succeeded; archiving is bookkeeping, never fatal)."""
+    cover = existing_job_cover(settings, job_id)
+    if cover is None:
+        return None
+    archive_dir = settings.uploads_dir / "_archive"
+    try:
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        dest = archive_dir / f"{_COVER_UPLOAD_STEM} - {job_id}{cover.suffix}"
+        shutil.move(str(cover), str(dest))
+        return dest
+    except OSError:
+        return None
 
 
 # --------------------------------------------------------------- bank → prompt strings

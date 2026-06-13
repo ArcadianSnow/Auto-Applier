@@ -1,98 +1,105 @@
-"""Manual cover-letter library + the shared attach helper (BUILD 1, spec §6b).
+"""Per-job cover-letter upload model + the shared attach helper (BUILD 1.1, spec §6b/§8c).
 
 Covers:
-  * ``manual_cover_letter_path`` — index.json match, fuzzy filename match, .docx
-    preference on ties, company-suffix/slug normalization, and the no-match → None path
-    (the manual-queue apply path maps job.company → a hand-authored letter file).
-  * ``attach_cover_letter`` — uploads via a native file input, defensively (absent input
-    or upload error → False, never raises; an empty path → False with no query).
+  * ``assign_cover_letter`` — copies a hand-authored letter into the job folder under the
+    GENERIC basename ``Cover Letter<ext>`` (anti-detection: the ATS only ever sees a generic
+    name, never the per-posting source filename), preserving content + extension, replacing
+    any prior assignment.
+  * ``existing_job_cover`` — the per-job lookup the apply worker uses (file existence =
+    "assigned"); ``None`` when nothing is assigned.
+  * ``archive_cover_letter`` — moves a confirmed-used letter to ``uploads/_archive`` with the
+    job id appended; ``None`` when there's nothing to archive.
+  * ``attach_cover_letter`` — defensive native file upload (absent input / error → False).
 """
 
 from __future__ import annotations
 
 import asyncio
 
-from auto_applier.resume.generate import _cover_slug, manual_cover_letter_path
+from auto_applier.resume.generate import (
+    archive_cover_letter,
+    assign_cover_letter,
+    existing_job_cover,
+    job_cover_upload_path,
+)
 from auto_applier.sources.browser.apply_base import attach_cover_letter
 
 
-# --------------------------------------------------------------- manual_cover_letter_path
+# --------------------------------------------------------------- per-job assign / lookup
 
-def _dir(settings):
-    d = settings.cover_letters_dir
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def test_returns_none_when_dir_absent(settings):
-    # cover_letters_dir not created → no manual letters configured.
-    assert manual_cover_letter_path(settings, "Hightouch") is None
+def _src(tmp_path, name="CoverLetter_Tailscale_SE_Commercial.docx", body="Dear Tailscale"):
+    p = tmp_path / name
+    p.write_text(body, encoding="utf-8")
+    return p
 
 
-def test_returns_none_for_empty_company(settings):
-    _dir(settings)
-    assert manual_cover_letter_path(settings, "") is None
-    assert manual_cover_letter_path(settings, "   ") is None
+def test_none_when_unassigned(settings):
+    assert existing_job_cover(settings, "job-1") is None
 
 
-def test_fuzzy_filename_match(settings):
-    d = _dir(settings)
-    (d / "hightouch.docx").write_text("letter", encoding="utf-8")
-    (d / "tailscale.docx").write_text("letter", encoding="utf-8")
+def test_assign_copies_under_generic_name(settings, tmp_path):
+    src = _src(tmp_path)
+    dest = assign_cover_letter(settings, "job-1", src)
 
-    got = manual_cover_letter_path(settings, "Hightouch, Inc.")
-    assert got == d / "hightouch.docx"
-
-
-def test_fuzzy_match_strips_cover_letter_prefix(settings):
-    d = _dir(settings)
-    (d / "cover-letter-grafana.docx").write_text("x", encoding="utf-8")
-    assert manual_cover_letter_path(settings, "Grafana Labs") == d / "cover-letter-grafana.docx"
-
-
-def test_index_json_overrides_fuzzy(settings):
-    d = _dir(settings)
-    # A file whose stem does NOT match the company; only the index maps it.
-    (d / "ht-final-v2.docx").write_text("x", encoding="utf-8")
-    (d / "index.json").write_text('{"Hightouch": "ht-final-v2.docx"}', encoding="utf-8")
-
-    assert manual_cover_letter_path(settings, "hightouch") == d / "ht-final-v2.docx"
+    # Uploaded basename is generic (NOT the per-posting source name) — the anti-detection point.
+    assert dest.name == "Cover Letter.docx"
+    assert dest == job_cover_upload_path(settings, "job-1", ".docx")
+    assert dest.parent == settings.uploads_dir / "job-1"
+    # Content preserved.
+    assert dest.read_text(encoding="utf-8") == "Dear Tailscale"
+    # And the lookup the worker uses finds it.
+    assert existing_job_cover(settings, "job-1") == dest
 
 
-def test_index_json_missing_file_falls_through_to_fuzzy(settings):
-    d = _dir(settings)
-    (d / "hightouch.docx").write_text("x", encoding="utf-8")
-    # index points at a file that doesn't exist → ignore it, fall back to fuzzy.
-    (d / "index.json").write_text('{"hightouch": "does-not-exist.docx"}', encoding="utf-8")
-
-    assert manual_cover_letter_path(settings, "Hightouch") == d / "hightouch.docx"
+def test_assign_preserves_extension(settings, tmp_path):
+    src = _src(tmp_path, name="letter.pdf", body="pdf-bytes")
+    dest = assign_cover_letter(settings, "job-2", src)
+    assert dest.name == "Cover Letter.pdf"
+    assert existing_job_cover(settings, "job-2") == dest
 
 
-def test_prefers_docx_over_pdf_on_tie(settings):
-    d = _dir(settings)
-    (d / "acme.pdf").write_text("x", encoding="utf-8")
-    (d / "acme.docx").write_text("x", encoding="utf-8")
-    assert manual_cover_letter_path(settings, "Acme") == d / "acme.docx"
+def test_reassign_replaces_prior_even_across_extension(settings, tmp_path):
+    first = assign_cover_letter(settings, "job-3", _src(tmp_path, name="a.docx", body="first"))
+    assert first.exists()
+    # Re-assign with a DIFFERENT extension — the old one must be gone (exactly one cover).
+    second = assign_cover_letter(settings, "job-3", _src(tmp_path, name="b.pdf", body="second"))
+    assert second.name == "Cover Letter.pdf"
+    assert not first.exists()
+    folder = settings.uploads_dir / "job-3"
+    covers = [p for p in folder.iterdir() if p.stem == "Cover Letter"]
+    assert len(covers) == 1 and covers[0] == second
 
 
-def test_no_match_returns_none(settings):
-    d = _dir(settings)
-    (d / "hightouch.docx").write_text("x", encoding="utf-8")
-    assert manual_cover_letter_path(settings, "Snowflake") is None
+def test_assign_missing_source_raises(settings, tmp_path):
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        assign_cover_letter(settings, "job-4", tmp_path / "nope.docx")
 
 
-def test_malformed_index_json_falls_through(settings):
-    d = _dir(settings)
-    (d / "acme.docx").write_text("x", encoding="utf-8")
-    (d / "index.json").write_text("{not valid json", encoding="utf-8")
-    assert manual_cover_letter_path(settings, "Acme") == d / "acme.docx"
+def test_per_job_isolation(settings, tmp_path):
+    a = assign_cover_letter(settings, "job-A", _src(tmp_path, name="a.docx", body="A"))
+    b = assign_cover_letter(settings, "job-B", _src(tmp_path, name="b.docx", body="B"))
+    assert a != b
+    assert existing_job_cover(settings, "job-A").read_text(encoding="utf-8") == "A"
+    assert existing_job_cover(settings, "job-B").read_text(encoding="utf-8") == "B"
 
 
-def test_cover_slug_normalization():
-    assert _cover_slug("Hightouch, Inc.") == "hightouch"
-    assert _cover_slug("cover-letter-grafana") == "grafana"
-    assert _cover_slug("Acme LLC") == "acme"
-    assert _cover_slug("") == ""
+# --------------------------------------------------------------- archive
+
+def test_archive_moves_and_appends_job_id(settings, tmp_path):
+    assign_cover_letter(settings, "job-5", _src(tmp_path, body="keep me"))
+    dest = archive_cover_letter(settings, "job-5")
+
+    assert dest is not None
+    assert dest.parent == settings.uploads_dir / "_archive"
+    assert dest.name == "Cover Letter - job-5.docx"
+    assert dest.read_text(encoding="utf-8") == "keep me"
+    # Live copy is gone (moved, not copied).
+    assert existing_job_cover(settings, "job-5") is None
+
+
+def test_archive_none_when_nothing_assigned(settings):
+    assert archive_cover_letter(settings, "job-6") is None
 
 
 # --------------------------------------------------------------- attach_cover_letter
@@ -140,5 +147,4 @@ def test_attach_cover_letter_empty_path_short_circuits():
 
 def test_attach_cover_letter_swallows_upload_error():
     page = _Page(_FileEl(raises=True))
-    # A failed upload is observable (False), never fatal.
     assert asyncio.run(attach_cover_letter(page, "#cover_letter", "/tmp/x.docx")) is False

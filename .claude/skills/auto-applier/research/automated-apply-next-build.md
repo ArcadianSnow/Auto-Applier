@@ -3,13 +3,16 @@
 > Written 2026-06-13, after the field-fill overhaul (commit **20b3731**, 1004 tests green).
 > Read `automated-apply-go-live.md` first for the full backstory; this is the forward plan.
 >
-> **UPDATE 2026-06-13 — BUILD 1, 2, 3 all resolved. 1026 tests green.**
+> **UPDATE 2026-06-13 — BUILD 1, 1.1, 2, 3 all resolved. 1029 tests green.**
 > - BUILD 1 (cover-letter upload) SHIPPED + validated live (Tailscale). Merged to master + pushed.
+> - BUILD 1.1 (per-job cover model) REPLACED the company-index: per-posting letters via `av3 cover`
+>   → `artifacts/uploads/<job_id>/Cover Letter<ext>` (generic upload basename = anti-detection),
+>   archived on confirmed APPLIED. Company-index machinery removed. See "BUILD 1.1".
 > - BUILD 2 (enumerated react-selects) CLOSED as no-fix-needed: the bails are honest RESOLVER
 >   decisions, not a filler miss (proven via the resolver-detail dump). See "BUILD 2 RESULT".
 > - BUILD 3 (veteran_status) FIXED: a `_DECLINE_SYNONYMS` contraction gap ("don't"), not a flake.
-> The only thing left before go-live is the gated, watched `--no-dry-run` itself (+ the open user
-> decision on multi-variant cover-letter defaults).
+> Left before go-live: the gated watched `--no-dry-run`; per-job `av3 cover` assignment for the jobs
+> you queue; (follow-up) extend the generic-filename model to the résumé.
 
 ## Where we are
 
@@ -55,36 +58,24 @@ uniformly) but DO NOT wire the upload yet: Lever commonly uses a single combined
 cover field is often a UUID-named custom question. Scope each on a live form before wiring (their
 docstrings say so). Greenhouse was the whole batch, so it was wired first.
 
-**Manual cover-letter library** — `settings.cover_letters_dir` (= `data_dir/"cover-letters"`) +
-`generate.manual_cover_letter_path(settings, company) -> Path | None`. Resolution: an optional
-`index.json` (`{company-or-slug: filename|abspath}`, keys matched by SLUG) first, then a fuzzy
-filename match (`*.docx/.pdf/.doc/.txt/.rtf`, .docx preferred on ties). `_cover_slug` lowercases,
-strips a leading `cover-letter` prefix + company suffixes (inc/llc/…), reduces to alphanumerics —
-so `"Fivetran, Inc."` finds `Fivetran`. No match / no dir / empty company → `None` (benign no-attach).
+**Manual cover-letter library — ⚠️ SUPERSEDED by BUILD 1.1 (below).** The first cut resolved a
+letter by `job.company` (a slug-keyed `index.json` in `cover_letters_dir`). That model couldn't
+disambiguate companies with multiple per-posting letters, so it was REPLACED by the per-job model
+(`av3 cover` + `artifacts/uploads/<job_id>/Cover Letter<ext>`). `cover_letters_dir`,
+`manual_cover_letter_path`, `_cover_slug`, and the JobSearch `index.json` were all removed. The
+worker (`_artifacts_for`) now reads `existing_job_cover(settings, job.id)` (manual, generic-named) →
+optimize `.txt` → `""`; **no per-company fallback**. See BUILD 1.1 for the full design.
 
-**Worker** (`ApplyWorker._artifacts_for`) — when no per-job optimize `.txt` exists (the `av3 queue`
-manual path), falls back to `manual_cover_letter_path(settings, job.company)`. The resolved path is
-both uploaded (passed as `cover_letter_path` to `driver.prepare`) and recorded on the `Application`
-row. Optimize `.txt` still wins when present.
+**Tests** — `tests/test_cover_library.py` (per-job assign/lookup/archive + the attach helper),
+`tests/test_cli_cover.py` (`av3 cover`), driver-attach tests in `test_apply_driver.py`, worker
+per-job + archive-on-APPLIED tests in `test_apply_worker.py`. All driver stubs (incl.
+`test_session_expiry`) accept the `cover_letter_path` kwarg.
 
-**JobSearch wiring** — `av3data/cover-letters/index.json` maps the **unambiguous 1:1 companies**
-(Fivetran, Prefect, Render, dbt Labs) to absolute paths at `JobSearch/cover-letters/*.docx` (no file
-duplication; the dir holds only `index.json`, so fuzzy never auto-matches a wrong variant). The
-multi-variant companies (Databricks, Grafana Labs, Postman, Tailscale, Vanta — different role / region
-/ tier per letter) are intentionally left UNMAPPED and listed under `_unmapped_multi_variant`: the
-worker returns no-match (safe — human attaches the right letter in assisted mode) rather than guessing.
-**Decision still open for the user:** pick the single default letter per multi-variant company and add
-it to the index, OR teach the worker a company+role key (it only has `job.company` today).
-
-**Tests** — `tests/test_cover_library.py` (library + helper, 14 tests), driver-attach tests in
-`test_apply_driver.py`, worker fallback/pass-through tests in `test_apply_worker.py`. All driver
-stubs (incl. `test_session_expiry`) accept the new kwarg. 1023 green.
-
-**Validate live (still a user-watched step):** `diagnose_apply.py` was extended — it now exercises
-`manual_cover_letter_path(settings, <company>)` (2nd CLI arg, default = URL board token) and asserts
-the hidden `#cover_letter` input actually receives a file after the dry-run (read-back of
-`#cover_letter.files.length`, prints PASS/FAIL). Run watched on a real Greenhouse form to confirm the
-on-page "Cover Letter" section shows the attached filename (the user's Image #2 showed it empty):
+**Validate live (still a user-watched step):** `diagnose_apply.py` attaches a throwaway file and
+asserts the hidden `#cover_letter` input receives it (the input vanishes post-attach — it reads the
+visible filename instead; see the post-attach DOM swap below). Run watched on a real Greenhouse form
+to confirm the on-page "Cover Letter" section shows the attached filename (the user's Image #2 showed
+it empty):
 ```
 $env:AV3_DATA_DIR='C:\Users\jar85\JobSearch\av3data'; $env:PYTHONIOENCODING='utf-8'
 python C:\Users\jar85\JobSearch\diagnose_apply.py https://job-boards.greenhouse.io/<token>/jobs/<id> <Company>
@@ -110,6 +101,46 @@ Three findings to know:
    to their OWN careers host** (SumUp→sumup.com, Fivetran→fivetran.com, Databricks→databricks.com) — no
    Greenhouse form at that URL at all (0 controls). Those jobs can't auto-apply via the greenhouse driver;
    a discovery/routing follow-up (detect the redirect, mark for assisted) is worth a future ticket.
+
+## BUILD 1.1 — Per-job cover-letter architecture (SUPERSEDES the BUILD 1 company index)
+
+**Why this replaces the first cut.** BUILD 1's first commit resolved a cover letter by
+`job.company` (a slug-keyed `index.json` in `cover_letters_dir`). That's the WRONG model: the
+letters are hand-authored **per posting** (role/region/tier vary), so a per-company default can't
+disambiguate Databricks ×5, Grafana ×3, etc. The user flagged it: *"the method was write one per job,
+not pick a global company one."* Correct — go pure per-job, no global defaults.
+
+**The anti-detection insight (the real reason it matters).** Playwright `set_input_files(path)` sends
+the file under its **basename**. A file literally named `CoverLetter_Tailscale_SE_Commercial.docx` is a
+fingerprint — it reveals templated, per-company mass-applying. A normal applicant uploads
+`Cover Letter.docx`. So the upload filename must be **generic**, and the per-posting identity must live
+in the folder path / archive, never in the uploaded basename.
+
+**Storage contract (file-existence is the contract, like the optimize artifacts):**
+- Live, ready-to-upload: `artifacts/uploads/<job_id>/Cover Letter<ext>` — folder keyed by job id,
+  **generic basename**. Content is the user's hand-written letter; only the filename is normalized.
+- Archived after confirmed use: `artifacts/uploads/_archive/Cover Letter - <job_id><ext>` — job id
+  appended so the archive is identifiable; the *live* upload never carries it.
+
+**Commands:**
+- `av3 cover <job_id> <source_letter>` — copies the chosen letter into the job folder as
+  `Cover Letter<ext>` (order-independent with `av3 queue`; this is the per-job "write one per job"
+  step). Overwrites an existing assignment for that job. (Auto-pipeline analog: the optimize stage
+  already writes a per-job cover after scoring — same per-job contract, different producer.)
+
+**Worker (`ApplyWorker._artifacts_for` + `_process_one`):**
+- Cover source order: per-job `artifacts/uploads/<job_id>/Cover Letter.*` (manual, generic) →
+  optimize `{job_id}_cover.txt` → `""`. **No company fallback** (removed `cover_letters_dir`,
+  `manual_cover_letter_path`, the index). Pass the resolved path to `driver.prepare(cover_letter_path=…)`.
+- On a **confirmed `APPLIED`** (real run only): move the live file to
+  `artifacts/uploads/_archive/Cover Letter - <job_id><ext>` and record THAT path on the `Application`
+  row (the row points at the kept file). Non-APPLIED (assisted/review) leaves the file in the job folder
+  — it isn't "confirmed used" yet, and assisted still needs it available.
+
+**Follow-up (not in this build):** the RÉSUMÉ has the identical filename tell (`{job_id}.pdf` /
+`Joseph_Lira_Resume_Solutions_Engineer.pdf`). The same per-job-folder + generic-basename pattern should
+extend to it (e.g. `artifacts/uploads/<job_id>/Resume<ext>` or a real-name basename). Scoped out here to
+keep the résumé path stable; do it next with the same mechanism.
 
 ## BUILD 2 — Verify the Tailscale enumerated react-selects
 

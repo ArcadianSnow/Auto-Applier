@@ -106,9 +106,10 @@ from auto_applier.resume.answer_resolver import (
 )
 from auto_applier.resume.factbank import FactBank
 from auto_applier.resume.generate import (
+    archive_cover_letter,
+    existing_job_cover,
     generated_cover_letter_path,
     generated_resume_path,
-    manual_cover_letter_path,
 )
 from auto_applier.resume.salary import (
     build_market_source,
@@ -554,6 +555,18 @@ class ApplyWorker:
             # No state transition (we never went to APPLYING) — job stays in QUEUED_APPLY.
             return None
 
+        # On a confirmed APPLIED, archive the (generic-named) cover letter — move it to
+        # uploads/_archive with the job id appended, and record the ARCHIVE path on the row so
+        # it points at the kept file (BUILD 1.1). The live upload already happened in
+        # driver.prepare; archiving is post-confirmation bookkeeping and never fatal. A
+        # non-APPLIED outcome (assisted/review) leaves the file in the job folder — it isn't
+        # "confirmed used" yet and assisted still needs it.
+        cover_for_row = cover_used
+        if outcome.status is ApplicationStatus.APPLIED and cover_used:
+            archived = archive_cover_letter(self._settings, job.id)
+            if archived is not None:
+                cover_for_row = str(archived)
+
         # Write the Application row first so a follow-up state transition crash still
         # leaves a record of *what was attempted* (useful for the dashboard's
         # "what happened to this job?" view).
@@ -564,7 +577,7 @@ class ApplyWorker:
                 mode=outcome.mode,
                 status=attempted_status,
                 generated_resume_path=resume_used,
-                cover_letter_path=cover_used,
+                cover_letter_path=cover_for_row,
                 submitted_at=utcnow_iso() if outcome.submitted else "",
             )
         )
@@ -624,20 +637,20 @@ class ApplyWorker:
           * **résumé**: the per-job PDF when it exists, else the single global
             ``resume.pdf`` the worker was constructed with — covers a job that reached
             QUEUED_APPLY before optimize ran, or a manual re-queue.
-          * **cover letter**: the per-job optimize ``.txt`` when it exists; else a
-            hand-authored letter resolved from ``settings.cover_letters_dir`` by company
-            (the manual-queue path — ``av3 queue`` jobs never ran optimize, so they have
-            no generated ``.txt``); else ``""`` (no cover letter to attach/record). See
-            ``auto_applier.resume.generate.manual_cover_letter_path``.
+          * **cover letter**: the per-job manually-assigned letter
+            (``artifacts/uploads/<job_id>/Cover Letter.*`` via ``av3 cover``, generic basename
+            for upload) when present; else the optimize-generated ``.txt``; else ``""`` (no
+            cover to attach/record). **No per-company fallback** — letters are per posting (see
+            ``auto_applier.resume.generate.existing_job_cover`` / BUILD 1.1).
         """
         pdf = generated_resume_path(self._settings, job.id)
-        cover = generated_cover_letter_path(self._settings, job.id)
         resume_used = str(pdf) if pdf.exists() else self._resume_path
-        if cover.exists():
-            cover_used = str(cover)
+        manual_cover = existing_job_cover(self._settings, job.id)
+        if manual_cover is not None:
+            cover_used = str(manual_cover)
         else:
-            manual = manual_cover_letter_path(self._settings, job.company)
-            cover_used = str(manual) if manual else ""
+            optimize_cover = generated_cover_letter_path(self._settings, job.id)
+            cover_used = str(optimize_cover) if optimize_cover.exists() else ""
         return resume_used, cover_used
 
     # -- recovery + telemetry ----------------------------------------------

@@ -694,26 +694,60 @@ def test_passes_per_job_cover_letter_to_driver(settings, conn):
     assert seen["cover_letter_path"] == str(cover)
 
 
-def test_manual_cover_letter_used_when_no_optimize_cover(settings, conn):
-    """Manual-queue path: no per-job optimize .txt, but a hand-authored letter matching
-    the company exists in cover_letters_dir → it's uploaded AND recorded on the row."""
-    job = _seed_queued_lever(conn, company="Hightouch", source_job_id="cov-2")
-    d = settings.cover_letters_dir
-    d.mkdir(parents=True, exist_ok=True)
-    letter = d / "hightouch.docx"
-    letter.write_text("Dear Hightouch", encoding="utf-8")
+def test_manual_per_job_cover_uploaded_then_archived_on_applied(settings, conn, tmp_path):
+    """Per-job manual cover (av3 cover): the worker uploads the generic-named file from the
+    job folder, and on a confirmed APPLIED moves it to uploads/_archive and records THAT path
+    on the row (BUILD 1.1 lifecycle)."""
+    from auto_applier.resume.generate import (
+        assign_cover_letter, existing_job_cover, job_cover_upload_path,
+    )
+
+    job = _seed_queued_lever(conn, company="Tailscale", source_job_id="cov-2")
+    src = tmp_path / "CoverLetter_Tailscale_SE_Commercial.docx"
+    src.write_text("Dear Tailscale", encoding="utf-8")
+    upload_path = assign_cover_letter(settings, job.id, src)
+    assert upload_path == job_cover_upload_path(settings, job.id, ".docx")
 
     seen: dict = {}
     worker = _build_worker(settings, conn, driver=_recording_cover_driver(seen))
     asyncio.run(worker.run_once())
 
-    assert seen["cover_letter_path"] == str(letter)
+    # Driver was handed the live (generic-named) upload path...
+    assert seen["cover_letter_path"] == str(upload_path)
+    # ...and after APPLIED the file is archived (moved) with the job id appended.
+    assert existing_job_cover(settings, job.id) is None
+    archived = settings.uploads_dir / "_archive" / f"Cover Letter - {job.id}.docx"
+    assert archived.exists()
     apps = ApplicationRepo(conn).list_by_job(job.id)
-    assert apps[0].cover_letter_path == str(letter)
+    assert apps[0].cover_letter_path == str(archived)
+
+
+def test_manual_cover_not_archived_when_not_applied(settings, conn, tmp_path):
+    """A non-APPLIED outcome (assisted) leaves the cover in the job folder — not yet
+    confirmed used — and records the upload path."""
+    from auto_applier.resume.generate import assign_cover_letter, existing_job_cover
+
+    job = _seed_queued_lever(conn, company="Tailscale", source_job_id="cov-2b")
+    src = tmp_path / "letter.docx"
+    src.write_text("Dear Tailscale", encoding="utf-8")
+    upload_path = assign_cover_letter(settings, job.id, src)
+
+    seen: dict = {}
+    worker = _build_worker(
+        settings, conn,
+        driver=_recording_cover_driver(seen, status=ApplicationStatus.ASSISTED_PENDING),
+    )
+    asyncio.run(worker.run_once())
+
+    assert seen["cover_letter_path"] == str(upload_path)
+    assert existing_job_cover(settings, job.id) == upload_path  # still there
+    assert not (settings.uploads_dir / "_archive").exists()
+    apps = ApplicationRepo(conn).list_by_job(job.id)
+    assert apps[0].cover_letter_path == str(upload_path)
 
 
 def test_no_cover_letter_anywhere_passes_empty(settings, conn):
-    """No optimize cover and no manual-library match → driver gets '' (no attach)."""
+    """No manual cover and no optimize cover → driver gets '' (no attach)."""
     job = _seed_queued_lever(conn, company="Nowhere", source_job_id="cov-3")
 
     seen: dict = {}
