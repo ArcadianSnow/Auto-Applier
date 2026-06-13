@@ -45,6 +45,7 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
 | Manual / human-apply mode (`av3 shortlist`/`applied`/`pass`, job-family classifier, DECIDED→APPLIED) | `research/manual-apply-mode.md` |
 | Application copilot (`av3 ask`, `/copilot`, the evidence audit / honesty gate, sensitive routing) | `research/application-copilot.md` |
 | **Automated apply GO-LIVE** — first real `--no-dry-run` submissions, blockers (human-attestation gate, hand-crafted résumé), why Solutions roles assist-pend, the watched plan | `research/automated-apply-go-live.md` |
+| **Automated apply NEXT BUILD** — forward plan after the field-fill overhaul: cover-letter upload (`#cover_letter`), Tailscale enumerated dropdowns, the diagnostic validation path | `research/automated-apply-next-build.md` |
 | Answer resolver / sensitive fields / salary | `docs/v3-architecture.md` §8b, §8d |
 | Telemetry (relay + Turso) / observability | `docs/v3-architecture.md` §9 |
 
