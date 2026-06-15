@@ -159,3 +159,32 @@ locally) and regenerated the 3 problem letters. It FIXED the Databricks meta-res
 letter) but ERRORED with empty bodies on 2 of 3 (new reliability failure) and STILL produced
 aspirational filler + "leveraging". A bigger model does not solve the voice problem and costs
 reliability + speed. Reverted to qwen3:8b. The ceiling is not primarily a model-size problem.
+
+## The re-drain, the empty/non-letter skip, and the gen-cover-v5 dead-end (2026-06-15)
+
+After v4 was committed (4c98165), re-drained ALL existing DECIDED letters (deleted the 466 autogen
+ones, state-gated to PROTECT the 4 QUEUED_APPLY hand-authored letters, then `av3 cover
+--generate-all`). Outcome over ~530 DECIDED jobs scoring >=8: **343 generated / 122 guard-skip /
+1 invalid / 64 "errors"**.
+
+- **64 "errors" were non-letter JSON, not crashes.** qwen3:8b returns an error-shaped / empty object
+  for some odd JDs (a Grafana-Tempo posting thick with Prometheus config where "job" is a required
+  label -> `{"error": "...'job' is required."}`). `parse_cover_letter` only reads "body", so it
+  raised "body is empty" -> ERROR -> the drain exited 1 (and the daily refresh would too). FIX
+  (committed b9867ff): `generate_one` catches `ValueError` separately and routes an all-attempts-empty
+  result to `SKIPPED_INVALID` (clean skip, exit 0); a real transport error still -> ERROR.
+- **122 guard-skips = qwen3 REACHING for the JD's tech.** The flagged terms were all tech the bank
+  lacks (Snowflake x15, Machine Learning x11, dbt, Spark, Airflow, BigQuery, PyTorch, C++, Kubernetes,
+  Kafka). v4's "name the technologies that matter to THIS role" + "reference JD requirements" pushed
+  qwen3 to name the role's stack, which the fabrication guard correctly caught.
+- **gen-cover-v5 (REVERTED).** Tried anchoring tech-naming to the bank ("name ONLY bank tech, NEVER
+  the role's missing tech"). It OVER-constrained: far-from-bank jobs returned EMPTY instead of
+  recovering, AND a known-good generator (Zapier Sales Engineer, which generated fine under v4)
+  regressed to empty. v5 cut coverage with no quality gain -> reverted. v4 stands.
+
+**CONCLUSION (stop here).** For a job needing tech he lacks, there is no good honest letter qwen3 can
+write — letterless (guard-skip) is the CORRECT outcome (a fit signal), not a bug to prompt around.
+Final state: ~343 clean v4 letters for reasonable-fit jobs + ~187 honestly letterless (need missing
+tech). The user chose "drafts OK", so v4 (more drafts, with far-from-bank filler) is kept over v5
+(fewer, "cleaner" by omission). Do NOT keep stacking tech-discipline prompt rules — the fabrication
+guard already enforces honesty, and more constraints only push qwen3 from guard-skip into empty.
