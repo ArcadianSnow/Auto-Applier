@@ -24,6 +24,7 @@ from auto_applier.resume.cover_autogen import (
     SKIPPED_DEGENERATE,
     SKIPPED_EXISTING,
     SKIPPED_GUARD,
+    SKIPPED_INVALID,
     SKIPPED_NO_DESCRIPTION,
     _strip_ai_tells,
     backfill,
@@ -49,6 +50,28 @@ _HAPPY_BODY = (
 # Claims Kubernetes/Terraform — neither in the bank → guard flags → not written.
 _FABRICATED_BODY = (
     "I have deep Kubernetes and Terraform expertise running production clusters."
+)
+# The monotone "I did X. I did Y. I did Z." list the user rejected (every sentence opens with
+# "I"); only bank-supported tech so the fab guard passes — the *voice* backstop is what flags it.
+_MONOTONE_BODY = (
+    "I worked in SQL Server and Python at Acme for five years.\n\n"
+    "I refactored the billing database. I owned the SQL Server backups. "
+    "I built ETL pipelines in Python. I tuned the database for the team.\n\n"
+    "I would welcome the chance to talk."
+)
+# The same facts, varied openers (At/My/That lead most sentences) — the draft to prefer.
+_VARIED_BODY = (
+    "At Acme I spent five years refactoring the billing database in SQL Server.\n\n"
+    "My Python ETL pipelines replaced a manual export, and the SQL Server backups I "
+    "owned ran clean for three years. That work maps to what your team needs.\n\n"
+    "I would welcome the chance to talk."
+)
+# qwen3 sometimes role-plays the recruiter instead of writing the letter (Databricks, 2026-06-15).
+# Passes the fab guard (no fabricated tech) and isn't degenerate — the meta-response guard rejects it.
+_META_BODY = (
+    "Joseph, your resume is impressive, but we need to see more about your experience "
+    "with distributed systems and query optimization. Could you please provide "
+    "additional details on these areas?"
 )
 
 
@@ -325,7 +348,7 @@ def test_backfill_empty_when_nothing_qualifies(settings, conn):
 # --------------------------------------------------------------- voice contract
 
 def test_cover_prompt_enforces_no_ai_tells_voice():
-    assert GENERATE_COVER_LETTER.version == "gen-cover-v3"
+    assert GENERATE_COVER_LETTER.version == "gen-cover-v4"
     sys = GENERATE_COVER_LETTER.system.lower()
     assert "em-dash" in sys
     assert "excited" in sys and "thrilled" in sys      # categorical "excited" family ban
@@ -333,12 +356,16 @@ def test_cover_prompt_enforces_no_ai_tells_voice():
     assert "rule of three" in sys
     # anti-overclaim: the prompt must forbid inventing soft experience the bank lacks
     assert "overclaim" in sys or "do not claim" in sys
-    # v3: sentence-opening variety (no run of "I ...")
-    assert "consecutive sentences with 'i'" in sys
-    # v3: don't parrot the JD's marketing adjectives back
+    # v4: kill the robotic "I did X. I did Y." list — at most one "I" opener, with a
+    # concrete BAD/GOOD rhythm example (qwen3 follows examples better than abstract rules)
+    assert "do not write a list" in sys
+    assert "begin with the word 'i'" in sys
+    assert "bad" in sys and "good" in sys
+    # v4: don't parrot the JD's marketing adjectives back
     assert "parrot" in sys and "scalable" in sys
-    # v3: exactly three blank-line-separated paragraphs (no dense block)
+    # v4: exactly three paragraphs, at most two accomplishments (a letter, not a résumé)
     assert "exactly three short paragraphs" in sys
+    assert "at most two" in sys
 
 
 def test_trim_jd_for_cover_caps_big_jd_at_word_boundary():
@@ -422,6 +449,89 @@ def test_ensure_paragraphs_splits_a_dense_block_into_three():
     # too short to regroup meaningfully → untouched
     short = "I built A. I would welcome a talk."
     assert _ensure_paragraphs(short) == short
+
+
+def test_excessive_i_openings_flags_the_i_list_voice():
+    from auto_applier.resume.cover_autogen import _excessive_i_openings, _i_opening_ratio
+
+    monotone = "I built A. I designed B. I implemented C. I shipped D. I tested E."
+    assert _excessive_i_openings(monotone)
+    assert _i_opening_ratio(monotone) == 1.0
+    # "In/It/If" openers are NOT "I" openers — they read as varied, good
+    varied = ("At Acme I led the work. In practice it shipped on time. "
+              "My team owned the rollout. I would welcome a talk.")
+    assert not _excessive_i_openings(varied)
+    assert _i_opening_ratio(varied) == 0.25  # only the last sentence opens with "I"
+    # three "I" openers in a row trips it even in a short letter
+    run3 = "My role grew fast. I built A. I designed B. I shipped C."
+    assert _excessive_i_openings(run3)
+    # one or two "I" openers in a normal letter is fine
+    assert not _excessive_i_openings(
+        "At Acme, I built data systems. The work shipped. I would welcome a talk."
+    )
+    assert not _excessive_i_openings("")  # empty isn't "monotone"
+
+
+def test_generate_one_prefers_the_less_monotone_draft(settings):
+    # First draft is the monotone "I did X. I did Y. I did Z." list the user rejects; the
+    # generator must regenerate (no_think) and keep the varied second draft. Both bodies claim
+    # only bank-supported tech, so the fab guard passes either — the voice backstop decides.
+    llm = _SeqCoverLLM([_MONOTONE_BODY, _VARIED_BODY])
+    res = asyncio.run(generate_one(
+        settings, _job(), bank=_bank(), generator=CoverLetterGenerator(llm),
+        name="Joseph Lira",
+    ))
+    assert res.status == GENERATED
+    assert llm.calls == 2  # the monotone first draft triggered the retry
+    txt = "\n".join(p.text for p in Document(res.path).paragraphs)
+    assert "At Acme I spent five years" in txt  # the varied draft is the one that shipped
+
+
+def test_generate_one_keeps_monotone_draft_if_retry_is_no_better(settings):
+    # If both drafts are monotone (qwen3 just won't vary on this JD), still ship a letter —
+    # a monotone-but-honest letter beats none. The voice backstop never *skips* like degeneracy.
+    llm = _SeqCoverLLM([_MONOTONE_BODY, _MONOTONE_BODY])
+    res = asyncio.run(generate_one(
+        settings, _job("mono"), bank=_bank(), generator=CoverLetterGenerator(llm),
+        name="Joseph Lira",
+    ))
+    assert res.status == GENERATED
+    assert existing_job_cover(settings, "mono") is not None
+
+
+def test_is_meta_response_flags_recruiter_reply_not_normal_letter():
+    from auto_applier.resume.cover_autogen import _is_meta_response
+
+    assert _is_meta_response(_META_BODY, "Joseph Lira")                       # the live hallucination
+    assert _is_meta_response("Joseph Lira: thanks for applying.", "Joseph Lira")  # name as greeting
+    assert _is_meta_response("Tell us more about your experience with Spark.", "Joseph Lira")
+    # a normal letter that says "your team / your platform" (refers to the COMPANY) is fine
+    assert not _is_meta_response(
+        "At Acme I built ETL pipelines. This fits your team's focus on data quality. "
+        "I'd welcome a talk.", "Joseph Lira")
+    assert not _is_meta_response(_HAPPY_BODY, "Joseph Lira")
+    assert not _is_meta_response("", "Joseph Lira")
+
+
+def test_generate_one_skips_a_meta_response(settings):
+    # The "Joseph, your resume is impressive..." recruiter-reply hallucination passes the fab
+    # guard and isn't degenerate, so a dedicated guard must reject it — never ship a non-letter.
+    llm = _CoverLLM(body=_META_BODY)
+    res = _gen_one(settings, _job("meta"), llm)
+    assert res.status == SKIPPED_INVALID
+    assert existing_job_cover(settings, "meta") is None  # nothing shipped
+    assert llm.calls == 2  # regenerated once, still meta → rejected
+
+
+def test_generate_one_regenerates_past_a_meta_response(settings):
+    # A meta first draft must trigger the retry and be replaced by the real second draft.
+    llm = _SeqCoverLLM([_META_BODY, _HAPPY_BODY])
+    res = asyncio.run(generate_one(
+        settings, _job("metaretry"), bank=_bank(), generator=CoverLetterGenerator(llm),
+        name="Joseph Lira",
+    ))
+    assert res.status == GENERATED
+    assert llm.calls == 2
 
 
 def test_is_degenerate_flags_runaway_and_repetition():

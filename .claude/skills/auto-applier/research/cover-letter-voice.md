@@ -1,6 +1,7 @@
 # Cover-letter voice — the canonical definition (BUILD 5)
 
-**Status:** DEFINED 2026-06-15. Encoded in `GENERATE_COVER_LETTER` (`gen-cover-v3`) +
+**Status:** DEFINED 2026-06-15, refined same day to `gen-cover-v4` (the I-list fix — see the
+v4 section at the bottom). Encoded in `GENERATE_COVER_LETTER` (`gen-cover-v4`) +
 the deterministic backstops in `auto_applier/resume/cover_autogen.py`. This is the
 single source of truth for what a generated cover letter must sound like.
 
@@ -23,7 +24,7 @@ Not a brochure. Honest before helpful. Short, varied sentences. No AI tells.
 | 4 | **Anti-overclaim / honesty** — never claim an experience, responsibility, domain, skill, or soft capability the bank doesn't show | prompt (the guard only vets *technical* claims, so the prompt is the ONLY thing stopping invented *soft* claims) | prompt — the honesty crux |
 | 5 | **No buzzwords** (leverage, synergy, proven track record, spearheaded, "I'm confident my", …) | prompt list | prompt |
 | 6 | **No rule of three** — no stacked triple adjectives/phrases | prompt | prompt |
-| 7 | **Vary sentence openings** — avoid runs of "I built… I designed… I engineered…" | prompt | **soft** — qwen3 only partially honors it; the residual I-runs are fact-dense, not rhetorical filler, so acceptable. NOT a hard guarantee |
+| 7 | **Vary sentence openings** — no monotone "I did X. I did Y. I did Z." run; at most ~one sentence opens with "I" | prompt (hard cap + BAD/GOOD example) + `_excessive_i_openings` scores the draft and `generate_one` keeps the **less-monotone of two attempts** | **HARD-ish (v4)** — was the user's explicit complaint (v3 shipped 6 "I [verb]" sentences in a row). v4 + the backstop fixed it; a monotone letter is never *skipped* (still honest), just deprioritized vs the retry |
 | 8 | **Don't parrot the JD's marketing adjectives** (scalable, robust, seamless, innovative, cutting-edge, world-class) as descriptions of the company/role/needs/your contribution. A bank fact that literally contains the word (e.g. "scalable upsert frameworks across 190+ tables") is the one allowed use | prompt | mostly works; an occasional "scalable data pipelines" still slips. Minor |
 | 9 | **Exactly 3 short paragraphs** (hook / 1-2 accomplishments / short close) | prompt + `_ensure_paragraphs` deterministic regroup when the model returns one block | HARD — the backstop splits a dense block (first=hook, last=close, rest=middle), only when the model didn't paragraph it itself |
 | 10 | **Concise (150-250 words)** — length is room to drift | prompt | prompt |
@@ -110,3 +111,51 @@ over-length + 10 list-dump letters, then `av3 cover --generate-all` regenerated 
 guard active. A few far-from-bank ML/FD JDs (Mistral, some elevenlabs) repeatedly hit the guard
 and end up letterless — that is the correct outcome (qwen3:8b can't write a tight honest letter
 for them; better none than a wall of text).
+
+## v4 (2026-06-15, session 2): the I-list fix, the parroting trap, and the qwen3:8b ceiling
+
+User feedback on a shipped v3 letter: *"I am not sure this is my voice as it just keeps saying
+I did this I did this I did this."* The v3 prompt ALREADY told the model to vary openings and
+use "one or two accomplishments" — qwen3 ignored both and crammed 6 "I [verb]" sentences into
+paragraph 2. **Same lesson as third-person and degeneracy: soft style rules don't hold with
+qwen3:8b at greedy temp 0; they need deterministic teeth.**
+
+What v4 changed:
+- **Prompt:** hard "at most ONE sentence may begin with 'I'" cap; "AT MOST TWO accomplishments
+  (two, not six; a letter, not a résumé)"; "pick the OPENING by relevance to THIS job so letters
+  don't all start the same way"; "plain words, not a spec sheet" (no parenthetical tech dumps, no
+  colon feature-lists); "the close makes no new claim".
+- **Backstop:** `_excessive_i_openings` (>60% of a multi-sentence letter opens with "I", OR 3+ in
+  a row) + `generate_one` now does **best-of-two**, keeping the draft with the lowest
+  `(degenerate, third_person, i_ratio)` key. Monotony never *skips* a letter (still honest); it
+  just prefers the better retry.
+
+**TRAP — a concrete GOOD example gets copied verbatim.** v4's first cut put a concrete GOOD
+example built from his real facts in the prompt ("At Neurolens I rebuilt a legacy SQL authoring
+tool…"). qwen3 then opened EVERY letter with that exact sentence — a worse, role-blind canned
+opening. Fix: the GOOD example must be a **non-copyable placeholder skeleton**
+(`<At <company>>, <the most role-relevant thing he did>…`) + the explicit relevance rule. After
+that, openings diverged correctly by role. **Never put copy-pasteable real content in a prompt
+example for a weak local model.**
+
+**The qwen3:8b voice ceiling — stop prompt-stacking here.** After 3 prompt iterations the
+residuals on FAR-FROM-BANK roles (Solutions/Sales/AI Engineer) did not converge; each fix traded
+for a regression elsewhere: aspirational filler the anti-overclaim rule can't kill ("I am eager
+to…", "positions me to contribute…"), banned buzzwords reappearing ("dynamic", "fast-paced",
+"leverage") despite the explicit ban, spec-sheet density only partly suppressed. These
+concentrate on roles he's a weak fit for anyway. Treat them as hand-edit drafts; do NOT keep
+stacking prompt rules (diminishing returns, model-capability bound).
+
+**NEW failure mode — meta-response hallucination (NEEDS a guard, not yet built).** On the
+Databricks "Database Engine Internals" JD, qwen3:8b returned, as the letter body: *"Joseph, your
+resume is impressive, but we need to see more about your experience with distributed systems…
+Could you please provide additional details?"* — it role-played the recruiter. This PASSES every
+current guard (no fabricated tech, not over-length, doesn't open with He/His — it opens "Joseph,")
+and **would ship**. Needed: a deterministic guard that rejects a body addressing the candidate by
+name, asking the candidate questions, or written in second person ("your resume") → SKIPPED.
+
+**qwen3:14b experiment — don't swap.** Temporarily set `ollama_model` to qwen3:14b (pulled
+locally) and regenerated the 3 problem letters. It FIXED the Databricks meta-response (real
+letter) but ERRORED with empty bodies on 2 of 3 (new reliability failure) and STILL produced
+aspirational filler + "leveraging". A bigger model does not solve the voice problem and costs
+reliability + speed. Reverted to qwen3:8b. The ceiling is not primarily a model-size problem.

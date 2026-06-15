@@ -6,7 +6,7 @@ mode, where the user applies externally and just wants a tailored letter sitting
 every strong job. It:
 
   1. generates the same guarded cover-letter body (:class:`CoverLetterGenerator` + the
-     ``gen-cover-v2`` no-AI-tells prompt + the :func:`vet_cover_letter` fabrication guard), and
+     ``gen-cover-v4`` no-AI-tells prompt + the :func:`vet_cover_letter` fabrication guard), and
   2. renders it to a real Word **.docx** at the per-job upload path
      (``uploads/<job_id>/[<Name> ]Cover Letter.docx``) — ``.docx`` because the user pastes /
      uploads into web fields where markdown wouldn't render ([[feedback_paste_docs_as_docx]]),
@@ -52,6 +52,7 @@ __all__ = [
     "SKIPPED_GUARD",
     "SKIPPED_NO_DESCRIPTION",
     "SKIPPED_DEGENERATE",
+    "SKIPPED_INVALID",
     "ERROR",
     "backfill",
     "generate_one",
@@ -64,6 +65,7 @@ SKIPPED_EXISTING = "skipped_existing"        # a cover already exists (no-clobbe
 SKIPPED_GUARD = "skipped_guard"              # fabrication guard flagged unsupported claims; not written
 SKIPPED_NO_DESCRIPTION = "skipped_no_description"  # no JD text to tailor against; LLM not called
 SKIPPED_DEGENERATE = "skipped_degenerate"    # model produced runaway/repetitive output; not written
+SKIPPED_INVALID = "skipped_invalid"          # model returned a non-letter (meta / recruiter-reply hallucination); not written
 ERROR = "error"                              # generation or render raised
 
 
@@ -75,7 +77,7 @@ _DASH_AS_PAUSE = re.compile(r"[ \t]*[—–][ \t]*")
 def _strip_ai_tells(body: str) -> str:
     """Deterministic backstop for the #1 AI tell: em/en dashes.
 
-    The ``gen-cover-v2`` prompt forbids them, but a local model drifts — so we also strip
+    The ``gen-cover-v4`` prompt forbids them, but a local model drifts — so we also strip
     them mechanically here, replacing a dash-as-pause with a comma. This GUARANTEES no dash
     ever ships regardless of model behavior (the user is adamant). It only touches dashes;
     the rest of the no-AI-tells voice (excited/buzzwords/rule-of-three) stays prompt-driven,
@@ -125,6 +127,81 @@ def _ensure_paragraphs(body: str) -> str:
     hook, close = sentences[0], sentences[-1]
     middle = " ".join(sentences[1:-1])
     return f"{hook}\n\n{middle}\n\n{close}"
+
+
+# A sentence-initial standalone "I" — matches "I", "I've", "I built", "I also..."; does NOT
+# match "In"/"It"/"If"/"After"/"At" (the word boundary fails on "In", which is a *good*,
+# varied opener). Sentences are capitalized after the split, so a case-sensitive "I" is right.
+_I_OPENER = re.compile(r"I\b")
+
+
+def _i_sentence_flags(body: str) -> list[bool]:
+    sentences = [s.strip() for s in _SENTENCE_SPLIT.split((body or "").strip()) if s.strip()]
+    return [bool(_I_OPENER.match(s)) for s in sentences]
+
+
+def _i_opening_ratio(body: str) -> float:
+    """Fraction of sentences that begin with the word 'I'. 0.0 for an empty body — used as the
+    monotony score so :func:`generate_one` can prefer the less-I-heavy of two drafts."""
+    flags = _i_sentence_flags(body)
+    return (sum(flags) / len(flags)) if flags else 0.0
+
+
+def _excessive_i_openings(body: str) -> bool:
+    """True if the draft is the monotone 'I did X. I did Y. I did Z.' résumé-in-prose the user
+    rejected (2026-06-15: "it just keeps saying I did this I did this"): over 60% of a
+    multi-sentence letter opens with 'I', OR three-plus 'I' openers in an unbroken run. The
+    gen-cover-v4 prompt caps I-openers ("at most one sentence may begin with 'I'"), but soft
+    style rules don't hold with qwen3 at greedy temp 0 — same lesson as third-person and
+    degeneracy — so this gives the rule deterministic teeth. Unlike the degeneracy gate it
+    never *skips* a letter (a monotone letter is still honest and usable); it only nudges
+    generate_one toward the better of its two drafts."""
+    flags = _i_sentence_flags(body)
+    n = len(flags)
+    if n < 3:
+        return False  # too short to read as a "list"
+    if n >= 4 and (sum(flags) / n) > 0.6:  # most of a multi-sentence letter opens with "I"
+        return True
+    run = best = 0
+    for f in flags:
+        run = run + 1 if f else 0
+        best = max(best, run)
+    return best >= 3  # three "I" openers in a row reads as a list even in a short letter
+
+
+# qwen3:8b occasionally returns, as the "letter body", a META response — it role-plays the
+# recruiter/evaluator instead of writing the candidate's letter. Observed live 2026-06-15 on the
+# Databricks "Database Engine Internals" JD: "Joseph, your resume is impressive, but we need to
+# see more about your experience with distributed systems... Could you please provide additional
+# details?". This PASSES every other guard (no fabricated tech, short, opens "Joseph," not
+# "He/His") and would SHIP. A real cover letter is written BY the candidate (first person about
+# his own work), never addressed TO him by name, never asks him questions, never refers to "your
+# resume". Detection is narrow to avoid false-flagging a normal "your team / your platform"
+# (which correctly refers to the COMPANY).
+_META_MARKERS = (
+    "your resume", "your résumé", "your application", "your candidacy", "your background",
+    "provide additional details", "provide more details", "we need to see",
+    "we would like to see", "we'd like to see", "could you please provide",
+    "tell us more about your", "more about your experience",
+)
+
+
+def _is_meta_response(body: str, name: str) -> bool:
+    """True if the body is a recruiter/evaluator meta-response or otherwise not a letter the
+    candidate wrote about himself — addresses him by name as a greeting, or uses evaluator
+    phrasing aimed at him ('your resume', 'provide additional details')."""
+    text = (body or "").strip()
+    if not text:
+        return False
+    low = text.lower()
+    head = low[:48]
+    n = (name or "").strip().lower()
+    greet_forms: list[str] = []
+    if n:
+        greet_forms += [n + ",", n + ":", n.split()[0] + ",", n.split()[0] + ":"]
+    if any(head.startswith(g) for g in greet_forms):  # "Joseph," / "Joseph Lira:" — a letter is never TO him
+        return True
+    return any(m in low for m in _META_MARKERS)
 
 
 # The prompt targets 150-250 words; 250 words is ~1700 chars, and a live batch of 458 letters
@@ -282,7 +359,15 @@ async def generate_one(
     # both rescues those slow JDs (~2s vs a 180s timeout) and regenerates a fresh first-person
     # draft. The default first attempt keeps thinking on, matching the bulk of letters.
     voice_name = (bank.contact.name if (bank and bank.contact) else "") or name
-    body = ""
+    # Best-of-two. A draft can be (a) degenerate (never shippable), (b) third-person or a
+    # monotone "I did X. I did Y." list (shippable but a voice defect — worth a retry), or
+    # (c) clean. Keep the BEST draft across attempts (clean > monotone/third-person >
+    # degenerate) rather than blindly the last one, so the no_think retry can only improve the
+    # result, never replace a good draft with a worse one. The retry also rescues a first
+    # attempt that errored (a JD whose reasoning blew past the Ollama read timeout) and drops
+    # qwen3 thinking (~2s vs a 180s timeout).
+    best_body = ""
+    best_key: tuple[int, int, float] | None = None  # (unshippable, third_person, i_ratio); lower=better
     last_exc: Exception | None = None
     for attempt in range(2):
         try:
@@ -297,18 +382,36 @@ async def generate_one(
             last_exc = exc
             continue  # retry once (the no_think attempt is fast and usually succeeds)
         last_exc = None
-        body = _strip_ai_tells(raw)  # deterministic em/en-dash backstop before guard + render
-        # A clean draft wins. A third-person or runaway/repetitive draft → regenerate (the
-        # retry drops qwen3 thinking). Some JDs make qwen3 loop regardless (Mistral FD-ML,
-        # 2026-06-15) — if the final draft is still degenerate it's rejected below, never shipped.
-        if not _opens_in_third_person(body, voice_name) and not _is_degenerate(body):
+        cand = _strip_ai_tells(raw)  # deterministic em/en-dash backstop before scoring
+        # `unshippable` = degenerate OR a meta/non-letter response — both can never ship, so they
+        # rank below any real draft; a monotone or third-person draft is shippable but defective.
+        unshippable = 1 if (_is_degenerate(cand) or _is_meta_response(cand, voice_name)) else 0
+        key = (
+            unshippable,
+            1 if _opens_in_third_person(cand, voice_name) else 0,
+            _i_opening_ratio(cand),
+        )
+        if best_key is None or key < best_key:
+            best_body, best_key = cand, key
+        # A clean draft (shippable, first person, not a monotone I-list) ends the loop; otherwise
+        # fall through to the no_think retry, which may produce a less-defective draft.
+        if key[0] == 0 and key[1] == 0 and not _excessive_i_openings(cand):
             break
-    if last_exc is not None:
-        return CoverAutogenResult(job.id, ERROR, f"generation failed: {last_exc}")
+    body = best_body
+    if not body:
+        return CoverAutogenResult(
+            job.id, ERROR,
+            f"generation failed: {last_exc}" if last_exc else "no draft produced",
+        )
     if _is_degenerate(body):
         return CoverAutogenResult(
             job.id, SKIPPED_DEGENERATE,
             f"model produced runaway/repetitive output ({len(body)} chars); letter not written",
+        )
+    if _is_meta_response(body, voice_name):
+        return CoverAutogenResult(
+            job.id, SKIPPED_INVALID,
+            "model returned a meta/recruiter-style response, not a cover letter; not written",
         )
     body = _ensure_paragraphs(body)  # guarantee hook/body/close shape if the model ran it together
     guard = vet_cover_letter(body, bank, vocabulary)
@@ -391,9 +494,9 @@ async def backfill(
             settings, job, bank=bank, generator=generator, name=name, vocabulary=vocabulary
         )
         results.append(res)
-        # GENERATED / SKIPPED_GUARD / SKIPPED_DEGENERATE / ERROR all mean the LLM was invoked →
-        # consume a slot. SKIPPED_NO_DESCRIPTION short-circuits before the LLM, so it's free.
-        if res.status in (GENERATED, SKIPPED_GUARD, SKIPPED_DEGENERATE, ERROR):
+        # GENERATED / SKIPPED_GUARD / SKIPPED_DEGENERATE / SKIPPED_INVALID / ERROR all mean the
+        # LLM was invoked → consume a slot. SKIPPED_NO_DESCRIPTION short-circuits before the LLM.
+        if res.status in (GENERATED, SKIPPED_GUARD, SKIPPED_DEGENERATE, SKIPPED_INVALID, ERROR):
             generated += 1
 
     return results
