@@ -270,6 +270,16 @@ def test_generate_one_llm_error_is_isolated(settings):
     assert existing_job_cover(settings, "err") is None
 
 
+def test_generate_one_empty_body_skips_invalid_not_error(settings):
+    # qwen3 sometimes returns non-letter JSON (an error shape / empty body) for odd JDs
+    # (Grafana Tempo, 2026-06-15 -> {"error": "...'job' is required."}). parse_cover_letter
+    # raises "body is empty"; that's a content non-letter, NOT a transport crash, so it must be a
+    # clean skip (drain stays exit 0) rather than an ERROR that fails the daily refresh.
+    res = _gen_one(settings, _job("empty"), _CoverLLM(body=""))
+    assert res.status == SKIPPED_INVALID
+    assert existing_job_cover(settings, "empty") is None
+
+
 # --------------------------------------------------------------- dash strip (the #1 AI tell)
 
 def test_strip_ai_tells_replaces_dashes():

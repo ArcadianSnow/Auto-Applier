@@ -378,7 +378,13 @@ async def generate_one(
                 title=job.title,
                 no_think=attempt > 0,
             )
-        except Exception as exc:  # noqa: BLE001 — one job's failure must not kill a batch
+        except ValueError:
+            # parse rejected the reply: empty body OR non-letter JSON. qwen3 sometimes returns
+            # an error-shaped / empty object for an odd JD (e.g. a Grafana-Tempo posting thick
+            # with Prometheus config where "job" is a required label, 2026-06-15). That is a
+            # CONTENT non-letter, not a transport crash — fall through to a clean skip, not ERROR.
+            continue
+        except Exception as exc:  # noqa: BLE001 — a real LLM/transport failure (timeout, conn)
             last_exc = exc
             continue  # retry once (the no_think attempt is fast and usually succeeds)
         last_exc = None
@@ -399,9 +405,12 @@ async def generate_one(
             break
     body = best_body
     if not body:
+        if last_exc is not None:               # a real transport/LLM failure → ERROR (exit 1)
+            return CoverAutogenResult(job.id, ERROR, f"generation failed: {last_exc}")
+        # both attempts returned a non-letter (empty / error-shaped JSON) → clean skip, not a crash
         return CoverAutogenResult(
-            job.id, ERROR,
-            f"generation failed: {last_exc}" if last_exc else "no draft produced",
+            job.id, SKIPPED_INVALID,
+            "model returned no usable letter body (empty / non-letter JSON) after 2 attempts; not written",
         )
     if _is_degenerate(body):
         return CoverAutogenResult(
