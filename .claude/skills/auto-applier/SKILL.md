@@ -41,6 +41,7 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
 | Prior art — other auto-apply tools/repos, methodologies, what we adopt + smoketests (reCAPTCHA v3 score, JobSpy) | `research/prior-art-and-methodology.md` |
 | ATS market share by segment + what tier v3 can reach + source prioritization | `research/ats-market-landscape.md` |
 | How to stop résumé fabrication (the guard) | `research/fabrication-guard.md` |
+| Cover-letter voice / no-AI-tells rules / cover autogen (BUILD 5, `av3 cover --generate[-all]`) | `research/cover-letter-voice.md` (+ `research/automated-apply-next-build.md` BUILD 5) |
 | Résumé model (fact bank → per-job generation) | `docs/v3-architecture.md` §6b |
 | Manual / human-apply mode (`av3 shortlist`/`applied`/`pass`, job-family classifier, DECIDED→APPLIED) | `research/manual-apply-mode.md` |
 | Application copilot (`av3 ask`, `/copilot`, the evidence audit / honesty gate, sensitive routing) | `research/application-copilot.md` |

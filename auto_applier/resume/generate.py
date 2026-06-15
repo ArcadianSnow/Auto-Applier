@@ -82,6 +82,28 @@ _RESUME_UPLOAD_STEM = "Resume"
 #: outcome feedback loop (v3.1) revises this from response-rate data.
 DEFAULT_COVER_TARGET_WORDS = 200
 
+# A cover letter references only 1-2 JD requirements, and those are front-loaded (role
+# summary + responsibilities + top requirements come first; boilerplate/EEO/benefits trail).
+# So we send only the JD head: it costs almost nothing in relevance and keeps a very large
+# JD under the Ollama read-timeout ceiling. qwen3:8b reasoning on a ~8K-char JD blew past 180s
+# (Cockroach Labs, 2026-06-15) and the job fell out letterless; trimming to the head fixes that.
+_COVER_JD_MAX_CHARS = 4000
+
+
+def _trim_jd_for_cover(job_description: str) -> str:
+    """Return the JD head, capped at :data:`_COVER_JD_MAX_CHARS`, cut at a whitespace
+    boundary so we never split a word. Short JDs pass through unchanged."""
+    jd = job_description or ""
+    if len(jd) <= _COVER_JD_MAX_CHARS:
+        return jd
+    head = jd[:_COVER_JD_MAX_CHARS]
+    cut = head.rfind("\n")
+    if cut < _COVER_JD_MAX_CHARS // 2:        # no late newline → fall back to a space
+        cut = head.rfind(" ")
+    if cut > 0:
+        head = head[:cut]
+    return head.rstrip() + "\n\n[...]"
+
 
 # --------------------------------------------------------------- canonical paths
 
@@ -461,14 +483,23 @@ class CoverLetterGenerator:
         job_description: str,
         company: str,
         title: str,
+        no_think: bool = False,
     ) -> str:
-        """Return the cover letter body (no salutation, no signature)."""
+        """Return the cover letter body (no salutation, no signature).
+
+        ``no_think`` appends qwen3's ``/no_think`` switch to disable its chain-of-thought for
+        this call. A few reasoning-heavy JDs (Mistral Forward-Deployed-ML, ~4.5K ch) make qwen3
+        think past the 180s Ollama read timeout and fail; ``/no_think`` returns the same letter
+        in ~2s. Used as the fail-safe second attempt in :func:`cover_autogen.generate_one`, not
+        the default (the default keeps thinking on, matching the bulk of generated letters)."""
         prompt = GENERATE_COVER_LETTER.format(
             bank_facts=build_bank_facts(bank),
             target_words=self._target_words,
             company=company or "the company",
             title=title or "the role",
-            job_description=job_description,
+            job_description=_trim_jd_for_cover(job_description),
         )
+        if no_think:
+            prompt += "\n\n/no_think"
         payload = await self._llm.complete_json(prompt, system=GENERATE_COVER_LETTER.system)
         return parse_cover_letter(payload)

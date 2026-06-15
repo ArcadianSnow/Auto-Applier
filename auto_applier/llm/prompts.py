@@ -120,7 +120,7 @@ GENERATE_RESUME = PromptTemplate(
 # ============================================================ generate cover letter (spec §6b)
 
 GENERATE_COVER_LETTER = PromptTemplate(
-    version="gen-cover-v2",
+    version="gen-cover-v3",
     system=(
         "You write a tailored cover letter for a specific job using facts from the "
         "candidate's structured fact bank. Default target length: concise (150-250 "
@@ -138,8 +138,12 @@ GENERATE_COVER_LETTER = PromptTemplate(
         "honest one. When in doubt, leave it out.\n\n"
         "VOICE (hard constraints — this candidate rejects letters that read as "
         "AI-written):\n"
-        "  - Write in his plain, direct, first-person voice. Short declarative "
-        "    sentences. Sound like a competent person talking, not a brochure.\n"
+        "  - Write in his plain, direct voice. Short declarative sentences. Sound "
+        "    like a competent person talking, not a brochure.\n"
+        "  - FIRST PERSON throughout ('I built...', 'At Acme, I...'). NEVER write the "
+        "    candidate's name as a subject or refer to him in the third person ('He "
+        "    has...', 'Joseph has...'); the very first sentence MUST start with 'I' "
+        "    or 'At/When/After <company>, I'.\n"
         "  - NEVER use an em-dash (—) or en-dash (–). Use a period, comma, or "
         "    'and'/'but' instead. This is the #1 tell; a single dash fails the letter.\n"
         "  - NEVER use the words 'excited', 'thrilled', 'passionate', 'delighted', or "
@@ -155,7 +159,19 @@ GENERATE_COVER_LETTER = PromptTemplate(
         "  - Avoid the rule of three: do not stack three adjectives or three "
         "    parallel phrases for rhetoric (e.g. 'scalable, reliable, and "
         "    maintainable'), and do not pile up a run of short 'I am X' sentences. "
-        "    One or two concrete points beats three vague ones.\n\n"
+        "    One or two concrete points beats three vague ones.\n"
+        "  - VARY sentence openings. Do NOT begin consecutive sentences with 'I', "
+        "    and NEVER start three sentences in a row with 'I' — a run of 'I "
+        "    built... I designed... I engineered...' reads as a robotic list and is "
+        "    itself a tell. Recast at least one per paragraph so the project, the "
+        "    result, or 'When/After/At <company>' is the subject.\n"
+        "  - Do NOT parrot the JD's marketing adjectives (scalable, robust, "
+        "    seamless, innovative, cutting-edge, world-class, best-in-class) as "
+        "    descriptions of the company, the role, its needs, or your proposed "
+        "    contribution. Name the concrete thing instead (say 'data pipelines', "
+        "    not 'scalable data pipelines'). A bank fact that literally contains the "
+        "    word, e.g. 'scalable upsert frameworks across 190+ tables', is the ONE "
+        "    allowed use; echoing the JD's adjectives back as filler is not.\n\n"
         "Output ONE JSON object with this exact shape and nothing else (no prose, no "
         "code fences, no preamble):\n"
         '{\n'
@@ -164,7 +180,9 @@ GENERATE_COVER_LETTER = PromptTemplate(
         "Rules:\n"
         "  - No salutation ('Dear Hiring Manager,') and no closing signature — the "
         "    renderer/apply driver wraps those.\n"
-        "  - Three short paragraphs is a good default: hook, relevant experience, fit + close.\n"
+        "  - Write EXACTLY three short paragraphs, each separated by a blank line "
+        "    (\\n\\n): (1) a concrete hook, (2) one or two specific relevant "
+        "    accomplishments, (3) a short plain close. Do not return one dense block.\n"
         "  - Reference 1-2 specific JD requirements and how the candidate's bank facts meet them.\n"
         "  - If a JD requirement has no bank support, do not address it — silence beats fabrication."
     ),

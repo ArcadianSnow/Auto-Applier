@@ -667,8 +667,8 @@ def _cover_generate_all(settings, *, min_score, limit) -> None:
 
     from auto_applier.llm.complete import build_default
     from auto_applier.resume.cover_autogen import (
-        ERROR, GENERATED, SKIPPED_EXISTING, SKIPPED_GUARD, SKIPPED_NO_DESCRIPTION,
-        backfill,
+        ERROR, GENERATED, SKIPPED_DEGENERATE, SKIPPED_EXISTING, SKIPPED_GUARD,
+        SKIPPED_NO_DESCRIPTION, backfill,
     )
     from auto_applier.resume.factbank import FactBank
 
@@ -688,19 +688,23 @@ def _cover_generate_all(settings, *, min_score, limit) -> None:
     skipped_guard = [r for r in results if r.status == SKIPPED_GUARD]
     skipped_existing = [r for r in results if r.status == SKIPPED_EXISTING]
     skipped_nodesc = [r for r in results if r.status == SKIPPED_NO_DESCRIPTION]
+    skipped_degen = [r for r in results if r.status == SKIPPED_DEGENERATE]
     errored = [r for r in results if r.status == ERROR]
 
     for r in gen:
         click.echo(f"  + {r.job_id}  {r.detail}\n      -> {r.path}")
     for r in skipped_guard:
         click.echo(f"  ~ guard-skip {r.job_id}  {r.detail}")
+    for r in skipped_degen:
+        click.echo(f"  ~ degenerate-skip {r.job_id}  {r.detail}")
     for r in errored:
         click.echo(f"  x error {r.job_id}  {r.detail}", err=True)
 
     click.echo(
         f"\ncover autogen (score >= {floor:g}): generated={len(gen)} "
         f"existing={len(skipped_existing)} guard_skipped={len(skipped_guard)} "
-        f"no_desc={len(skipped_nodesc)} errors={len(errored)}"
+        f"degenerate_skipped={len(skipped_degen)} no_desc={len(skipped_nodesc)} "
+        f"errors={len(errored)}"
     )
     if not results:
         click.echo(f"  (no DECIDED jobs scored >= {floor:g} — nothing to do)")

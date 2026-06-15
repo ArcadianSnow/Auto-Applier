@@ -294,7 +294,7 @@ per-company "why interested" essays, and hand-authored cover letters for compani
 updated resolver + EEO data take effect immediately (editable install). Confirm EEO now fills real
 values, AU/CA work-auth is correct, preferred-last-name + how-heard + relocate-to-US fill.
 
-## BUILD 5 — Cover letter ready for every strong job (BUILT 2026-06-15, awaiting voice sign-off)
+## BUILD 5 — Cover letter ready for every strong job (COMPLETE 2026-06-15: voice defined + backlog drained)
 
 User directive: "every job scored decently should have a cover letter written and ready, just in
 case." Decided params (AskUserQuestion 2026-06-14): **scope = strong matches (score ≥ 8.0)**;
@@ -366,9 +366,65 @@ Shipped (1078+ green). What landed in the repo (PII-free):
   3.5) until the voice is approved — bounded with `--limit 25` so the 1PM task never balloons. The
   one-time 525 backlog drain is a deliberate `av3 cover --generate-all` the user kicks off.
 
-**Open (the user's calls, morning of 2026-06-15):** (1) approve the voice (or request changes — e.g. ban
-"scalable", force 3-paragraph breaks); (2) kick the one-time backlog drain; (3) then uncomment the refresh
-step. Until (1), nothing bulk runs.
+### VOICE DEFINED + DRAINED (2026-06-15, gen-cover-v3) — the user delegated the voice and authorized both steps
+
+User: *"define the voice. The other 2 steps can be done."* So the voice was defined (not gated), the
+generator hardened, verified live on 3 jobs, the backlog drained, and the daily incremental enabled.
+**Canonical voice spec: `.claude/skills/auto-applier/research/cover-letter-voice.md`.** 1084 green.
+
+What changed `gen-cover-v2 → gen-cover-v3` + `cover_autogen.py`:
+- **First person mandate** (prompt) + **`_opens_in_third_person` → regenerate once** (`generate_one`).
+  Cockroach's first draft opened "Joseph Lira has built…" (third person, ~25% rate); now negligible.
+- **`_ensure_paragraphs`** deterministic hook/body/close regroup when the model returns one dense block
+  (qwen3 honored "exactly three paragraphs" only ~1/3 of the time). Leaves model-paragraphed bodies alone.
+- **No-parrot rule** (don't echo JD adjectives like "scalable" as filler; allow the one bank-fact use
+  "scalable upsert frameworks across 190+ tables") + **sentence-variety** rule (soft; qwen3 only partly
+  honors — residual "I built…I designed…" left as his plain style, not contorted).
+- **"Big-JD timeout" was really qwen3 DEGENERATION (root cause corrected via measurement):** with thinking
+  ON + a 600s timeout, the Mistral FD-ML JD ran 328s and emitted **208,079 chars** — a repetition loop;
+  /no_think loops too (~20K). The 180s "timeout" was the loop being cut off. RAISING the timeout makes it
+  worse. Three layers: (1) `_trim_jd_for_cover` (4000-char head) fixes genuinely-slow JDs (Cockroach
+  8015ch >180s→3.7s); (2) `/no_think` retry (`generate_one` 2nd attempt) — a coin-flip on looping JDs
+  (CLEAN Montreal in ~2s, degenerate Singapore), kept because it recovers the clean ones fast; (3)
+  **`_is_degenerate` guard** (>3500 chars OR a sentence repeated 3+ times) → `SKIPPED_DEGENERATE`, the
+  real safety net (the fab guard PASSES a degenerate letter since every repeated claim is bank-supported).
+- New tests: `_trim_jd_for_cover`, `_opens_in_third_person`, third-person regenerate, `_ensure_paragraphs`,
+  no_think-on-timeout fallback, `_is_degenerate`, degenerate-rejection. 1087 green (target).
+
+**DRAIN RESULT (`av3 cover --generate-all`, 2026-06-15):** `generated=449 existing=3 guard_skipped=71
+no_desc=0 errors=2`. The **71 guard-skips are the fabrication guard working** — jobs wanting
+Snowflake/AWS/Kubernetes/Airflow/dbt/Go etc. NOT in his bank; a faithful letter can't be written, so none
+was (fail-closed). The 2 errors were the Mistral FD-ML degenerations.
+
+**POST-DRAIN SWEEP (the drain ran BEFORE the degeneracy guard existed):** `_is_degenerate` over every
+`uploads/<id>/*Cover Letter.docx` (BODY only — exclude name/contact/greeting/closing, ~120 ch) found
+27 bad letters (17 over-length/loops up to 4368 ch + 10 list-dumps of 13-26 distinct sentences, several
+UNDER the length cap — which is why the sentence-count check was added). Deleted them, re-ran
+`av3 cover --generate-all` twice with the guard active. **FINAL STATE (verified): 465 clean letters on
+disk, 0 degenerate** (body median 733 ch, p99 1294, max 1847). ~57 honest no-fits (guard-skip, tech not
+in bank), ~8 far-from-bank ML/FD JDs left letterless (qwen3 can't write them tightly — correct). The
+degeneracy guard (`_MAX_COVER_CHARS=2000`, `_MAX_COVER_SENTENCES=12`, any-sentence-repeated) is the only
+thing between a qwen3 loop and a shipped monstrosity (the fab guard passes them — all claims are real).
+
+Residuals (documented, NOT solved — see the voice spec): far-from-bank **overclaim** risk on
+Solutions/Value-Engineer roles — the tech-only guard can't catch a soft word like "ROI" (Joseph has
+finance-adjacent bank facts so it's a stretch of a real area, not invention; the honest "experiences
+align with their need for X" bridge is the right pattern). Skim far-from-bank letters before sending.
+
+Live: backlog drained via `av3 cover --generate-all` (525 strong jobs lacking a letter; hand-authored
+letters untouched). Daily-refresh step 3.5 (`--generate-all --limit 25`) is now LIVE (was commented out).
+
+## BUILD 6 (queued) — assisted mode DRAFTS freeform answers (design correction 2026-06-15)
+
+The user clarified that "assisted" means **the AI drafts the freeform/essay answer (why-company,
+open-ended fields) and he spot-checks before submitting** — NOT leave-it-blank. This REVERSES the
+WS1 record ("the LLM never free-writes essays — he confirmed", in `project_automated_apply_golive`),
+which was a misread of his intent. WS1's bail-blank is correct ONLY for the AUTO-submit path (never
+auto-submit an AI essay). The fix: in ASSISTED mode, route open-ended prompts to the honesty-audited
+copilot (`copilot.py` / `av3 ask`) to DRAFT an answer and flag it `needs_review` (pre-filled for the
+human to edit), instead of bailing blank. **Prereq:** confirm the copilot handles open-ended prompts
+without the original negation bug (it once generated "Not interested in a Solutions Engineer role").
+The honesty floor still holds — the draft is evidence-audited and the human is the submit gate.
 
 ## THEN — the gated go-live (unchanged)
 

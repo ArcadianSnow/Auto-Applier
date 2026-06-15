@@ -51,6 +51,7 @@ __all__ = [
     "SKIPPED_EXISTING",
     "SKIPPED_GUARD",
     "SKIPPED_NO_DESCRIPTION",
+    "SKIPPED_DEGENERATE",
     "ERROR",
     "backfill",
     "generate_one",
@@ -62,6 +63,7 @@ GENERATED = "generated"                      # wrote a fresh .docx
 SKIPPED_EXISTING = "skipped_existing"        # a cover already exists (no-clobber); LLM not called
 SKIPPED_GUARD = "skipped_guard"              # fabrication guard flagged unsupported claims; not written
 SKIPPED_NO_DESCRIPTION = "skipped_no_description"  # no JD text to tailor against; LLM not called
+SKIPPED_DEGENERATE = "skipped_degenerate"    # model produced runaway/repetitive output; not written
 ERROR = "error"                              # generation or render raised
 
 
@@ -83,6 +85,80 @@ def _strip_ai_tells(body: str) -> str:
     s = re.sub(r"[ \t]+([,.;:])", r"\1", s)     # no space before punctuation
     s = re.sub(r",\s*,", ",", s)                # collapse a doubled comma
     return s
+
+
+def _opens_in_third_person(body: str, name: str) -> bool:
+    """True if the letter opens by naming the candidate or using 'He/His' as the subject.
+
+    qwen3:8b occasionally drifts into third person on far-from-bank roles (observed on the
+    Cockroach 'Value Engineer' JD, 2026-06-15: "Joseph Lira has built..."). A first-person
+    letter always opens with 'I' or 'At/When/After <company>, I', so a name/He/His opener is
+    an unambiguous, cheaply-detectable defect — :func:`generate_one` regenerates once on it."""
+    head = (body or "").lstrip()[:80].lower()
+    if not head:
+        return False
+    candidates = ["he ", "his "]
+    n = (name or "").strip().lower()
+    if n:
+        candidates.append(n)            # full name as the opening subject
+        candidates.append(n.split()[0] + " ")  # just the first name
+    return any(head.startswith(c) for c in candidates)
+
+
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def _ensure_paragraphs(body: str) -> str:
+    """Guarantee the hook / body / close 3-paragraph shape when the model returned one block.
+
+    qwen3 honors the prompt's 'exactly three paragraphs' instruction only ~1/3 of the time
+    (observed 2026-06-15). So if the body has no blank-line break and enough sentences,
+    regroup deterministically: first sentence = the hook, last = the close, the rest = the
+    middle. Content-preserving — it only inserts paragraph breaks at sentence boundaries, and
+    leaves a body the model already paragraphed (or one too short to split) untouched."""
+    text = (body or "").strip()
+    if not text or "\n\n" in text:
+        return text  # already paragraphed (or empty) — respect what the model produced
+    sentences = [s.strip() for s in _SENTENCE_SPLIT.split(text) if s.strip()]
+    if len(sentences) < 4:
+        return text  # too short for a meaningful hook/body/close
+    hook, close = sentences[0], sentences[-1]
+    middle = " ".join(sentences[1:-1])
+    return f"{hook}\n\n{middle}\n\n{close}"
+
+
+# The prompt targets 150-250 words; 250 words is ~1700 chars, and a live batch of 458 letters
+# put p95 at 1669 and p99 at 3101. So a body over ~2000 chars is over-target — either a qwen3
+# repetition loop (the Mistral JDs ran to 20K-208K chars) or padded/doubled output. 2000 cleanly
+# separates the 94% normal (<1500) tail from the runaway/padded ones without clipping a real letter.
+_MAX_COVER_CHARS = 2000
+# The clean samples have 5-7 sentences; a body with 13+ substantial sentences is a list-dump
+# ("I built... I designed... I implemented..." ×24), not a letter — qwen3's other failure mode on
+# far-from-bank ML/FD roles (unique sentences, so the repeat check misses it). 12 is ~2x the
+# largest legitimate letter, so it never clips a real one.
+_MAX_COVER_SENTENCES = 12
+
+
+def _is_degenerate(body: str) -> bool:
+    """True if the model produced runaway / padded / repetitive / list-dump output. qwen3 +
+    greedy (temp 0) decoding can loop, repeating a sentence many times (Mistral JDs, 2026-06-15:
+    20K-208K chars; milder doubled-sentence padding to ~3K chars), OR dump a wall of 24 distinct
+    'I've done X' sentences. The fabrication guard passes all of these (every claim is
+    bank-supported) and the dash/paragraph backstops don't check length, so this is the only
+    thing standing between a degenerate generation and a shipped monstrosity. Caught by
+    over-length OR too many sentences OR a substantial sentence repeated."""
+    text = (body or "").strip()
+    if len(text) > _MAX_COVER_CHARS:
+        return True
+    sentences = [p.strip() for p in _SENTENCE_SPLIT.split(text) if len(p.strip()) > 20]
+    if len(sentences) > _MAX_COVER_SENTENCES:   # a wall of 13+ sentences is a list-dump, not a letter
+        return True
+    seen: dict[str, int] = {}
+    for s in sentences:
+        seen[s] = seen.get(s, 0) + 1
+        if seen[s] >= 2:               # the same real sentence twice → padded/looping
+            return True
+    return False
 
 
 @dataclass
@@ -199,17 +275,42 @@ async def generate_one(
             job.id, SKIPPED_NO_DESCRIPTION, "job has no description to tailor against"
         )
 
-    try:
-        body = await generator.generate(
-            bank=bank,
-            job_description=job.description,
-            company=job.company,
-            title=job.title,
+    # Generate, with one fail-safe second attempt. The retry serves two cases: (a) the first
+    # draft opened in the third person (a clear defect the voice prompt mostly but not always
+    # prevents), and (b) the first attempt errored — most often a JD whose qwen3 reasoning blew
+    # past the Ollama read timeout. The retry drops qwen3's thinking (`no_think=True`), which
+    # both rescues those slow JDs (~2s vs a 180s timeout) and regenerates a fresh first-person
+    # draft. The default first attempt keeps thinking on, matching the bulk of letters.
+    voice_name = (bank.contact.name if (bank and bank.contact) else "") or name
+    body = ""
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        try:
+            raw = await generator.generate(
+                bank=bank,
+                job_description=job.description,
+                company=job.company,
+                title=job.title,
+                no_think=attempt > 0,
+            )
+        except Exception as exc:  # noqa: BLE001 — one job's failure must not kill a batch
+            last_exc = exc
+            continue  # retry once (the no_think attempt is fast and usually succeeds)
+        last_exc = None
+        body = _strip_ai_tells(raw)  # deterministic em/en-dash backstop before guard + render
+        # A clean draft wins. A third-person or runaway/repetitive draft → regenerate (the
+        # retry drops qwen3 thinking). Some JDs make qwen3 loop regardless (Mistral FD-ML,
+        # 2026-06-15) — if the final draft is still degenerate it's rejected below, never shipped.
+        if not _opens_in_third_person(body, voice_name) and not _is_degenerate(body):
+            break
+    if last_exc is not None:
+        return CoverAutogenResult(job.id, ERROR, f"generation failed: {last_exc}")
+    if _is_degenerate(body):
+        return CoverAutogenResult(
+            job.id, SKIPPED_DEGENERATE,
+            f"model produced runaway/repetitive output ({len(body)} chars); letter not written",
         )
-    except Exception as exc:  # noqa: BLE001 — one job's failure must not kill a batch
-        return CoverAutogenResult(job.id, ERROR, f"generation failed: {exc}")
-
-    body = _strip_ai_tells(body)  # deterministic em/en-dash backstop before guard + render
+    body = _ensure_paragraphs(body)  # guarantee hook/body/close shape if the model ran it together
     guard = vet_cover_letter(body, bank, vocabulary)
     if not guard.ok:
         terms = ", ".join(sorted({f.claim for f in guard.findings})) or "unsupported claim"
@@ -290,9 +391,9 @@ async def backfill(
             settings, job, bank=bank, generator=generator, name=name, vocabulary=vocabulary
         )
         results.append(res)
-        # GENERATED / SKIPPED_GUARD / ERROR all mean the LLM was invoked → consume a slot.
-        # SKIPPED_NO_DESCRIPTION short-circuits before the LLM, so it's free.
-        if res.status in (GENERATED, SKIPPED_GUARD, ERROR):
+        # GENERATED / SKIPPED_GUARD / SKIPPED_DEGENERATE / ERROR all mean the LLM was invoked →
+        # consume a slot. SKIPPED_NO_DESCRIPTION short-circuits before the LLM, so it's free.
+        if res.status in (GENERATED, SKIPPED_GUARD, SKIPPED_DEGENERATE, ERROR):
             generated += 1
 
     return results

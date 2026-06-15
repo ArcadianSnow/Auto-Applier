@@ -21,6 +21,7 @@ from auto_applier.llm.prompts import GENERATE_COVER_LETTER
 from auto_applier.resume.cover_autogen import (
     ERROR,
     GENERATED,
+    SKIPPED_DEGENERATE,
     SKIPPED_EXISTING,
     SKIPPED_GUARD,
     SKIPPED_NO_DESCRIPTION,
@@ -66,6 +67,39 @@ class _CoverLLM:
         self.calls += 1
         if self._raise is not None:
             raise self._raise
+        return {"body": self._body}
+
+
+class _SeqCoverLLM:
+    """Returns a scripted sequence of bodies (last one repeats) so the third-person
+    regenerate path can be driven deterministically."""
+
+    def __init__(self, bodies: list[str]):
+        self._bodies = list(bodies)
+        self.calls = 0
+
+    async def complete_json(self, prompt: str, *, system: str = "") -> dict:
+        body = self._bodies[min(self.calls, len(self._bodies) - 1)]
+        self.calls += 1
+        return {"body": body}
+
+
+class _FlakyCoverLLM:
+    """Raises on the first call (a timeout), succeeds on the second — drives the no_think
+    fail-safe retry. Records each prompt so the test can prove '/no_think' is appended only
+    on the retry."""
+
+    def __init__(self, body: str = _HAPPY_BODY, exc: Exception | None = None):
+        self._body = body
+        self._exc = exc or RuntimeError("ReadTimeout")
+        self.calls = 0
+        self.prompts: list[str] = []
+
+    async def complete_json(self, prompt: str, *, system: str = "") -> dict:
+        self.calls += 1
+        self.prompts.append(prompt)
+        if self.calls == 1:
+            raise self._exc
         return {"body": self._body}
 
 
@@ -291,7 +325,7 @@ def test_backfill_empty_when_nothing_qualifies(settings, conn):
 # --------------------------------------------------------------- voice contract
 
 def test_cover_prompt_enforces_no_ai_tells_voice():
-    assert GENERATE_COVER_LETTER.version == "gen-cover-v2"
+    assert GENERATE_COVER_LETTER.version == "gen-cover-v3"
     sys = GENERATE_COVER_LETTER.system.lower()
     assert "em-dash" in sys
     assert "excited" in sys and "thrilled" in sys      # categorical "excited" family ban
@@ -299,3 +333,106 @@ def test_cover_prompt_enforces_no_ai_tells_voice():
     assert "rule of three" in sys
     # anti-overclaim: the prompt must forbid inventing soft experience the bank lacks
     assert "overclaim" in sys or "do not claim" in sys
+    # v3: sentence-opening variety (no run of "I ...")
+    assert "consecutive sentences with 'i'" in sys
+    # v3: don't parrot the JD's marketing adjectives back
+    assert "parrot" in sys and "scalable" in sys
+    # v3: exactly three blank-line-separated paragraphs (no dense block)
+    assert "exactly three short paragraphs" in sys
+
+
+def test_trim_jd_for_cover_caps_big_jd_at_word_boundary():
+    from auto_applier.resume.generate import _COVER_JD_MAX_CHARS, _trim_jd_for_cover
+
+    short = "We need a SQL Server DBA."
+    assert _trim_jd_for_cover(short) == short        # short JD passes through untouched
+
+    big = ("word " * 4000).strip()                   # ~20k chars, well over the cap
+    trimmed = _trim_jd_for_cover(big)
+    assert trimmed.endswith("[...]")                 # marked as truncated
+    assert len(trimmed) <= _COVER_JD_MAX_CHARS + 8   # body capped (plus the short marker)
+    assert "wordword" not in trimmed                 # cut at a whitespace boundary, no split word
+
+
+def test_opens_in_third_person_detects_name_and_pronoun():
+    from auto_applier.resume.cover_autogen import _opens_in_third_person
+
+    assert _opens_in_third_person("Joseph Lira has built data systems.", "Joseph Lira")
+    assert _opens_in_third_person("Joseph has built data systems.", "Joseph Lira")
+    assert _opens_in_third_person("He has built data systems.", "Joseph Lira")
+    assert _opens_in_third_person("His work spans SQL.", "Joseph Lira")
+    assert not _opens_in_third_person("I built data systems.", "Joseph Lira")
+    assert not _opens_in_third_person("At Acme, I built data systems.", "Joseph Lira")
+    assert not _opens_in_third_person("", "Joseph Lira")
+
+
+def test_generate_one_regenerates_past_a_third_person_opening(settings):
+    # First draft opens in the third person (a defect); generate_one must regenerate once
+    # and accept the first-person second draft. Both bodies claim only bank-supported tech.
+    third = ("Joseph Lira has worked in SQL Server and Python at Acme.\n\n"
+             "He refactored the billing database.\n\nGlad to talk.")
+    llm = _SeqCoverLLM([third, _HAPPY_BODY])
+    res = asyncio.run(generate_one(
+        settings, _job(), bank=_bank(), generator=CoverLetterGenerator(llm),
+        name="Joseph Lira",
+    ))
+    assert res.status == GENERATED
+    assert llm.calls == 2  # one retry consumed the third-person draft
+
+
+def test_generate_one_retries_without_thinking_after_a_timeout(settings):
+    # First attempt errors (simulating a JD whose reasoning blew past the read timeout); the
+    # fail-safe second attempt drops qwen3 thinking via /no_think and succeeds.
+    llm = _FlakyCoverLLM()
+    res = asyncio.run(generate_one(
+        settings, _job("slow"), bank=_bank(), generator=CoverLetterGenerator(llm),
+        name="Joseph Lira",
+    ))
+    assert res.status == GENERATED
+    assert llm.calls == 2
+    assert "/no_think" not in llm.prompts[0]   # first attempt keeps thinking on
+    assert "/no_think" in llm.prompts[1]        # the retry drops it
+
+
+def test_generate_one_rejects_degenerate_output(settings):
+    # qwen3 can loop and repeat a sentence hundreds of times (Mistral JDs, 2026-06-15). The
+    # claims are all bank-supported so the fab guard would pass it — the degeneracy gate must
+    # reject it first so a 10K-char monstrosity never ships as a "ready" letter.
+    runaway = "I built a data pipeline in SQL Server and Python. " * 200
+    llm = _CoverLLM(body=runaway)
+    res = _gen_one(settings, _job("loop"), llm)
+    assert res.status == SKIPPED_DEGENERATE
+    assert existing_job_cover(settings, "loop") is None  # nothing shipped
+    assert llm.calls == 2  # regenerated once, still degenerate → rejected
+
+
+def test_ensure_paragraphs_splits_a_dense_block_into_three():
+    from auto_applier.resume.cover_autogen import _ensure_paragraphs
+
+    dense = "I built A. I designed B. I engineered C. I would welcome a talk."
+    parts = _ensure_paragraphs(dense).split("\n\n")
+    assert len(parts) == 3
+    assert parts[0] == "I built A."            # hook = first sentence
+    assert parts[2] == "I would welcome a talk."  # close = last sentence
+    assert parts[1] == "I designed B. I engineered C."  # middle = the rest
+
+    # a body the model already paragraphed is left exactly as-is
+    para = "One.\n\nTwo two.\n\nThree."
+    assert _ensure_paragraphs(para) == para
+    # too short to regroup meaningfully → untouched
+    short = "I built A. I would welcome a talk."
+    assert _ensure_paragraphs(short) == short
+
+
+def test_is_degenerate_flags_runaway_and_repetition():
+    from auto_applier.resume.cover_autogen import _is_degenerate
+
+    assert not _is_degenerate(_HAPPY_BODY)                 # a real letter is fine
+    assert _is_degenerate("I built a data pipeline. " * 200)  # absurd length (qwen3 loop)
+    # same substantial sentence repeated → looping, even under the length cap
+    loop = "I designed scalable upsert frameworks across many tables. " * 4
+    assert _is_degenerate(loop)
+    # a wall of 13+ DISTINCT substantial sentences is a list-dump, not a letter
+    dump = " ".join(f"I built a distinct data system numbered {i} for the team." for i in range(15))
+    assert _is_degenerate(dump)
+    assert not _is_degenerate("")                          # empty isn't "degenerate"
