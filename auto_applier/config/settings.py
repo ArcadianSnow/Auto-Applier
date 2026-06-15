@@ -315,6 +315,13 @@ class Settings(BaseModel):
     #: bail-to-assisted default. (User-directed 2026-06-14; the real anti-bot path is untouched.)
     attest_human: bool = False
 
+    #: Score floor for cover-letter autogen (``av3 cover --generate-all``; BUILD 5). A strong
+    #: match (total ≥ this) gets a tailored, guard-checked .docx letter written and ready "just
+    #: in case", written into ``uploads/<job_id>/`` only if one isn't already there (a manual
+    #: ``av3 cover`` always wins — autogen only fills the gap). Default 8.0 = the user's "scored
+    #: decently" bar; the CLI ``--min-score`` overrides per-run. (User-directed 2026-06-14.)
+    cover_autogen_min_score: float = 8.0
+
     # --- derived paths (system of record + observability spine, spec §4) ---
     @property
     def app_db_path(self) -> Path:

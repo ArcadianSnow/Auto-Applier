@@ -620,25 +620,152 @@ def _applicant_name(settings) -> str:
         return ""
 
 
+def _cover_generate_one(settings, job_id: str, *, force: bool) -> None:
+    """`av3 cover --generate <job_id>` — autogen ONE tailored .docx letter (BUILD 5).
+
+    Builds the local LLM + fact bank, generates a guarded letter, and writes it to the
+    per-job upload folder. Won't overwrite an existing letter unless ``force``."""
+    import asyncio
+
+    from auto_applier.llm.complete import build_default
+    from auto_applier.resume.cover_autogen import ERROR, GENERATED, generate_one
+    from auto_applier.resume.factbank import FactBank
+    from auto_applier.resume.generate import CoverLetterGenerator
+
+    conn = init_app_db(settings.app_db_path)
+    try:
+        job = JobRepo(conn).get(job_id)
+    finally:
+        conn.close()
+    if job is None:
+        click.echo(f"  x FAIL job {job_id} not found", err=True)
+        sys.exit(2)
+
+    bank = FactBank.load(settings.data_dir / "profile" / "master.json")
+    generator = CoverLetterGenerator(build_default(settings))
+    res = asyncio.run(generate_one(
+        settings, job, bank=bank, generator=generator,
+        name=_applicant_name(settings), force=force,
+    ))
+
+    if res.status == GENERATED:
+        click.echo(f"  + generated {job_id}  {job.company} — {job.title}")
+        click.echo(f"      -> {res.path}")
+    else:
+        click.echo(f"  ~ {res.status} {job_id}  {res.detail}",
+                   err=(res.status == ERROR))
+    if res.status == ERROR:
+        sys.exit(1)
+
+
+def _cover_generate_all(settings, *, min_score, limit) -> None:
+    """`av3 cover --generate-all` — backfill letters for strong jobs lacking one (BUILD 5).
+
+    The daily-refresh auto-trigger AND the manual backfill are this one mechanism. Never
+    overwrites a hand-authored letter (only-missing); guard-fails leave a job letterless."""
+    import asyncio
+
+    from auto_applier.llm.complete import build_default
+    from auto_applier.resume.cover_autogen import (
+        ERROR, GENERATED, SKIPPED_EXISTING, SKIPPED_GUARD, SKIPPED_NO_DESCRIPTION,
+        backfill,
+    )
+    from auto_applier.resume.factbank import FactBank
+
+    floor = settings.cover_autogen_min_score if min_score is None else float(min_score)
+    bank = FactBank.load(settings.data_dir / "profile" / "master.json")
+    llm = build_default(settings)
+    conn = init_app_db(settings.app_db_path)
+    try:
+        results = asyncio.run(backfill(
+            settings, conn, llm=llm, bank=bank, min_score=floor,
+            name=_applicant_name(settings), limit=limit,
+        ))
+    finally:
+        conn.close()
+
+    gen = [r for r in results if r.status == GENERATED]
+    skipped_guard = [r for r in results if r.status == SKIPPED_GUARD]
+    skipped_existing = [r for r in results if r.status == SKIPPED_EXISTING]
+    skipped_nodesc = [r for r in results if r.status == SKIPPED_NO_DESCRIPTION]
+    errored = [r for r in results if r.status == ERROR]
+
+    for r in gen:
+        click.echo(f"  + {r.job_id}  {r.detail}\n      -> {r.path}")
+    for r in skipped_guard:
+        click.echo(f"  ~ guard-skip {r.job_id}  {r.detail}")
+    for r in errored:
+        click.echo(f"  x error {r.job_id}  {r.detail}", err=True)
+
+    click.echo(
+        f"\ncover autogen (score >= {floor:g}): generated={len(gen)} "
+        f"existing={len(skipped_existing)} guard_skipped={len(skipped_guard)} "
+        f"no_desc={len(skipped_nodesc)} errors={len(errored)}"
+    )
+    if not results:
+        click.echo(f"  (no DECIDED jobs scored >= {floor:g} — nothing to do)")
+    if errored:
+        sys.exit(1)
+
+
 @cli.command("cover")
-@click.argument("job_id")
+@click.argument("job_id", required=False)
 @click.argument("source", required=False, type=click.Path(exists=False))
-def cover_cmd(job_id, source) -> None:
-    """Assign a hand-authored cover letter to a job (per posting, not per company).
+@click.option("--generate", "do_generate", is_flag=True,
+              help="Auto-generate a tailored .docx cover letter for JOB_ID from the fact bank "
+                   "(guarded; won't overwrite an existing letter unless --force).")
+@click.option("--generate-all", "do_generate_all", is_flag=True,
+              help="Backfill auto-generated letters for every strong job (score >= --min-score) "
+                   "that lacks one. Reads the local LLM; never overwrites a hand-authored letter.")
+@click.option("--min-score", type=float, default=None,
+              help="Score floor for --generate-all (default: settings.cover_autogen_min_score).")
+@click.option("--limit", type=int, default=None,
+              help="Cap how many NEW letters --generate-all writes (existing letters don't count).")
+@click.option("--force", is_flag=True,
+              help="With --generate, overwrite the job's existing cover letter.")
+def cover_cmd(job_id, source, do_generate, do_generate_all, min_score, limit, force) -> None:
+    """Assign, show, or auto-generate a job's cover letter (per posting, not per company).
 
-    `av3 cover <job_id> <letter.docx>` copies your letter into the job's upload folder under
-    the GENERIC name `Cover Letter<ext>` — the apply worker uploads it from there, and an ATS
-    only ever sees "Cover Letter.docx" (a per-posting source filename like
-    `CoverLetter_Tailscale_SE_Commercial.docx` would be a mass-apply fingerprint). The letter's
-    content is unchanged; only the upload name is normalized. Re-running replaces it.
+    \b
+    Assign / show (BUILD 1.1):
+      `av3 cover <job_id> <letter.docx>`  copy your hand-authored letter into the job's upload
+          folder under the GENERIC name `Cover Letter<ext>` — the ATS only ever sees
+          "Cover Letter.docx" (a per-posting source name would be a mass-apply fingerprint).
+      `av3 cover <job_id>`                show the job's currently-assigned cover, if any.
 
-    `av3 cover <job_id>` (no source) just shows the job's currently-assigned cover, if any.
-    On a confirmed APPLIED the worker moves the file to `uploads/_archive` with the job id
-    appended. See research/automated-apply-next-build.md (BUILD 1.1).
+    \b
+    Auto-generate (BUILD 5 — "a letter ready for every strong job, just in case"):
+      `av3 cover --generate <job_id>`     write a tailored, guard-checked .docx from the fact
+          bank (skips if one exists; --force overwrites).
+      `av3 cover --generate-all`          backfill letters for every DECIDED job scoring >=
+          --min-score (default settings.cover_autogen_min_score) that lacks one. This is also
+          the daily-refresh auto-trigger. A hand-authored `av3 cover` ALWAYS wins; a guard
+          failure leaves the job letterless (never ships a fabrication).
+
+    On a confirmed APPLIED the worker moves the file to `uploads/_archive`. See
+    research/automated-apply-next-build.md (BUILD 1.1 + BUILD 5).
     """
     from auto_applier.resume.generate import assign_cover_letter, existing_job_cover
 
     settings = load_settings()
+
+    if do_generate_all:
+        _cover_generate_all(settings, min_score=min_score, limit=limit)
+        return
+
+    if do_generate:
+        if not job_id:
+            click.echo("  x FAIL --generate needs a JOB_ID "
+                       "(av3 cover --generate <job_id>)", err=True)
+            sys.exit(2)
+        _cover_generate_one(settings, job_id, force=force)
+        return
+
+    if not job_id:
+        click.echo("  x FAIL give a JOB_ID (av3 cover <job_id> [<letter>]) "
+                   "or use --generate-all", err=True)
+        sys.exit(2)
+
     conn = init_app_db(settings.app_db_path)
     try:
         job = JobRepo(conn).get(job_id)
@@ -652,7 +779,8 @@ def cover_cmd(job_id, source) -> None:
         current = existing_job_cover(settings, job_id)
         if current is None:
             click.echo(f"{job_id}  {job.company} — {job.title}\n  no cover letter assigned "
-                       f"(assign with: av3 cover {job_id} <letter.docx>)")
+                       f"(assign: av3 cover {job_id} <letter.docx>  |  autogen: "
+                       f"av3 cover --generate {job_id})")
         else:
             click.echo(f"{job_id}  {job.company} — {job.title}\n  cover: {current}")
         return

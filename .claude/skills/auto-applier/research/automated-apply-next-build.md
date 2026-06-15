@@ -294,7 +294,7 @@ per-company "why interested" essays, and hand-authored cover letters for compani
 updated resolver + EEO data take effect immediately (editable install). Confirm EEO now fills real
 values, AU/CA work-auth is correct, preferred-last-name + how-heard + relocate-to-US fill.
 
-## BUILD 5 — Cover letter ready for every strong job (PLANNED, user-greenlit 2026-06-14)
+## BUILD 5 — Cover letter ready for every strong job (BUILT 2026-06-15, awaiting voice sign-off)
 
 User directive: "every job scored decently should have a cover letter written and ready, just in
 case." Decided params (AskUserQuestion 2026-06-14): **scope = strong matches (score ≥ 8.0)**;
@@ -323,6 +323,52 @@ The generator produces a plain-text body today.
 
 **Verification:** generate ONE sample for a real ≥8.0 job, READ it, get the user's voice sign-off BEFORE
 backfilling hundreds (the no-AI-tells bar is his, and qwen3:8b prose is the risk). ~30-60s/letter locally.
+
+### BUILD 5 RESULT (2026-06-15): BUILT + tested; bulk gated on the user's voice sign-off
+
+Shipped (1078+ green). What landed in the repo (PII-free):
+- **`auto_applier/resume/cover_autogen.py`** (new): `render_cover_letter_docx` (python-docx, complete
+  letter = name/contact header + "Dear Hiring Manager," + body paras + "Sincerely,"+name; sets
+  `core_properties.author` to the applicant's name, NOT the python-docx default tell), `generate_one`
+  (no-clobber unless `force`; empty-JD short-circuit; `vet_cover_letter` fail-closed; `.docx` to
+  `job_cover_upload_path`), `backfill` (`ScoreRepo.list_ranked(min_total)` → DECIDED-only → only-missing
+  → `--limit` caps real LLM work), and **`_strip_ai_tells`** (deterministic em/en-dash → comma; the #1
+  tell can never ship regardless of model drift; newline-safe so paragraph breaks survive).
+- **`GENERATE_COVER_LETTER` → `gen-cover-v2`**: hard voice constraints (no dashes; categorical ban on
+  "excited/thrilled/passionate/delighted/enthusiasm" in ANY form — the v1 phrase-list let "excited to
+  HELP" slip; buzzword list; no rule-of-three / no "I'm confident my") AND an **anti-overclaim** clause
+  (do NOT claim experience/responsibility/domain the bank lacks — the cover guard only vets *technical*
+  claims, so the prompt is the only thing stopping invented *soft* claims).
+- **`settings.cover_autogen_min_score: float = 8.0`** (the `--min-score` default).
+- **CLI `av3 cover`** extended: `--generate <id>` (one; `--force` overwrites), `--generate-all`
+  (`--min-score`, `--limit`); `job_id` now optional; no-arg → exit 2 hint.
+- Tests: `tests/test_cover_autogen.py` (render / generate_one happy·no-clobber·force·empty·guard·error /
+  dash-strip / backfill score-floor·state·limit·only-missing / voice contract) + `tests/test_cli_cover.py`
+  (`--generate`, `--force`, `--generate-all`, arg errors).
+
+**Live samples (qwen3:8b, the real CLI path), audited 2026-06-15** — see
+`JobSearch/cover-letter-samples-REVIEW.md` for the full text + the sign-off ask:
+- cube Data Engineer (near-bank): strong, honest, all bank-grounded, no tells.
+- aircall Forward-Deployed/AI-Solutions (far-from-bank): the anti-overclaim fix WORKS — sticks to real
+  work, bridges with "These experiences align with…", does NOT invent Solutions experience. (My first
+  draft of a Solutions letter HAD invented "financial modeling / TCO models / executive presentations
+  to CTOs/CFOs" — the guard passed it because those aren't tech terms. That's the soft-fabrication gap
+  the gen-cover-v2 anti-overclaim clause closes; the cube/aircall samples are post-fix.)
+
+**Key findings for the bulk run (recorded for the go-decision):**
+- **525 strong DECIDED jobs (≥8.0) have no letter.** First unbounded `av3 cover --generate-all` ≈ 30-70
+  min of local LLM (free). Score bands: 144 at 9.x, 381 at 8.x.
+- **Large-JD timeouts.** qwen3:8b reasoning on a ~8K-char JD exceeds the 180s Ollama read timeout
+  (Cockroach Labs, 8015 ch, timed out twice). Fails safe (ERROR, no letter), but a chunk of big-JD strong
+  jobs would silently end up letterless. FOLLOW-UP: disable qwen3 "thinking" for cover-gen, or raise
+  `_OllamaJSONBackend.timeout_s`, or chunk. Small JDs are ~3-8s.
+- **Daily-refresh auto-trigger is WIRED BUT DISABLED** (commented in `JobSearch/daily-refresh.ps1`, step
+  3.5) until the voice is approved — bounded with `--limit 25` so the 1PM task never balloons. The
+  one-time 525 backlog drain is a deliberate `av3 cover --generate-all` the user kicks off.
+
+**Open (the user's calls, morning of 2026-06-15):** (1) approve the voice (or request changes — e.g. ban
+"scalable", force 3-paragraph breaks); (2) kick the one-time backlog drain; (3) then uncomment the refresh
+step. Until (1), nothing bulk runs.
 
 ## THEN — the gated go-live (unchanged)
 
