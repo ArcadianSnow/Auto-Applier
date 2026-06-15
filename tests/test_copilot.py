@@ -6,7 +6,13 @@ import asyncio
 
 import pytest
 
-from auto_applier.copilot import VERDICTS, Copilot, CopilotAnswer, audit_evidence
+from auto_applier.copilot import (
+    DRAFT_VERDICT,
+    VERDICTS,
+    Copilot,
+    CopilotAnswer,
+    audit_evidence,
+)
 from auto_applier.domain.models import Job
 from auto_applier.resume.factbank import Contact, FactBank, WorkEntry
 
@@ -248,3 +254,143 @@ def test_eeo_self_id_or_prefer_not():
 
 def test_verdicts_constant_is_closed():
     assert set(VERDICTS) == {"yes", "no", "partial"}
+
+
+# ------------------------------------------------------------------ freeform DRAFT path (BUILD 6)
+#
+# Open-ended/essay prompts are NOT yes/no screeners — the verdict prompt mis-fits them
+# (measured live: "Why Stripe?" → verdict="no" + "I'm excited" ×2). They route to the
+# freeform draft path: grounded, voice-clean, fabrication-guarded, ALWAYS needs_review.
+
+class _SeqLLM:
+    """Returns a sequence of payloads (or raises an Exception item), one per call —
+    lets a test exercise the best-of-two retry distinctly from the single-payload stub."""
+
+    def __init__(self, payloads):
+        self.payloads = list(payloads)
+        self.prompts: list[str] = []
+        self.systems: list[str] = []
+        self.calls = 0
+
+    async def complete_json(self, prompt: str, *, system: str = "") -> dict:
+        self.prompts.append(prompt)
+        self.systems.append(system)
+        p = self.payloads[min(self.calls, len(self.payloads) - 1)]
+        self.calls += 1
+        if isinstance(p, Exception):
+            raise p
+        return p
+
+
+def _draft_payload(**over) -> dict:
+    """A freeform-draft reply shape: {answer, bank_evidence, overclaim_risk, risk_note, gaps}.
+    The default answer is bank-grounded and tell-free so the clean path stays clean."""
+    base = dict(
+        answer=("At Acme Health, the month-end billing for 13 partner labs became one "
+                "idempotent orchestrator. That data work is what this role needs."),
+        bank_evidence=["Rebuilt month-end billing for 13 partner labs as one idempotent orchestrator"],
+        overclaim_risk="low",
+        risk_note="",
+        gaps=[],
+    )
+    base.update(over)
+    return base
+
+
+_WHY = "Why do you want to work here?"
+
+
+def test_open_ended_routes_to_draft_not_verdict():
+    stub = _StubLLM(payload=_draft_payload())
+    ans = _ask(Copilot(stub), _WHY)
+    assert ans.verdict == DRAFT_VERDICT
+    assert ans.verdict not in VERDICTS          # never a yes/no/partial on an essay
+    assert ans.needs_review                     # a draft is always the human's to submit
+    assert ans.long_answer.startswith("At Acme Health")
+    assert any("freeform DRAFT" in n for n in ans.audit_notes)
+
+
+def test_draft_uses_the_freeform_prompt():
+    stub = _StubLLM(payload=_draft_payload())
+    _ask(Copilot(stub), "Tell us about a challenging project you led.")
+    assert "Freeform application question" in stub.prompts[0]
+    assert "freeform" in stub.systems[0].lower()
+
+
+def test_clean_draft_is_not_flagged_high():
+    stub = _StubLLM(payload=_draft_payload())
+    ans = _ask(Copilot(stub), _WHY)
+    assert ans.overclaim_risk in ("none", "low")      # model risk preserved, not forced high
+    assert ans.unsupported_evidence == []
+    assert not any("fabrication guard" in n for n in ans.audit_notes)
+    assert not any("AI-tell" in n for n in ans.audit_notes)
+    assert stub.systems and stub.prompts                # the LLM was consulted
+    assert len(stub.prompts) == 1                       # clean first draft → no retry
+
+
+def test_draft_with_invented_tech_is_flagged_but_returned():
+    stub = _StubLLM(payload=_draft_payload(
+        answer="I deployed and operated production Kubernetes clusters across three regions.",
+        bank_evidence=["production Kubernetes administration at scale"],
+    ))
+    ans = _ask(Copilot(stub), "Describe your infrastructure experience.")
+    assert ans.verdict == DRAFT_VERDICT
+    assert ans.long_answer                                # NEVER blanked — flagged, not skipped
+    assert ans.overclaim_risk == "high"
+    assert ans.unsupported_evidence == ["production Kubernetes administration at scale"]
+    assert any("fabrication guard" in n for n in ans.audit_notes)
+
+
+def test_draft_voice_tell_flagged_and_retry_prefers_clean():
+    # 1st draft carries "excited" (a banned tell); 2nd is clean → best-of-two keeps the clean one.
+    seq = _SeqLLM([
+        _draft_payload(answer="I am excited about the opportunity to contribute here."),
+        _draft_payload(answer="At Acme Health, I rebuilt month-end billing for 13 partner labs."),
+    ])
+    ans = asyncio.run(Copilot(seq).answer(_WHY, _bank()))
+    assert seq.calls == 2                                 # retried because the first had a tell
+    assert "/no_think" in seq.prompts[1]                  # retry drops qwen3 thinking
+    assert "excited" not in ans.long_answer.lower()
+    assert not any("AI-tell" in n for n in ans.audit_notes)   # the kept draft is clean
+
+
+def test_draft_voice_tell_flagged_when_both_drafts_dirty():
+    seq = _SeqLLM([
+        _draft_payload(answer="I am excited and passionate about this role."),
+        _draft_payload(answer="I am thrilled and passionate about this role."),
+    ])
+    ans = asyncio.run(Copilot(seq).answer(_WHY, _bank()))
+    assert ans.overclaim_risk == "high"
+    assert any("AI-tell" in n for n in ans.audit_notes)
+
+
+def test_draft_strips_em_dashes():
+    stub = _StubLLM(payload=_draft_payload(
+        answer="I rebuilt billing for 13 partner labs — it became one idempotent orchestrator."))
+    ans = _ask(Copilot(stub), _WHY)
+    assert "—" not in ans.long_answer and "–" not in ans.long_answer
+
+
+def test_empty_draft_goes_to_review():
+    ans = _ask(Copilot(_StubLLM(payload=_draft_payload(answer="   "))), _WHY)
+    assert ans.verdict == "review" and ans.needs_review
+
+
+def test_draft_llm_failure_goes_to_review_never_raises():
+    ans = _ask(Copilot(_StubLLM(exc=RuntimeError("ollama down"))), _WHY)
+    assert ans.verdict == "review" and ans.needs_review
+
+
+def test_binary_screener_still_uses_verdict_path():
+    # Regression: the draft route must not swallow real screeners.
+    stub = _StubLLM(payload=_payload())
+    ans = _ask(Copilot(stub), "Do you have hands-on experience with incremental data sync?")
+    assert ans.verdict == "yes" and not ans.needs_review
+
+
+def test_sensitive_open_ended_still_routes_to_policy():
+    # "Why do you require sponsorship?" is open-ended AND sensitive — sensitive wins (no LLM).
+    stub = _StubLLM(payload=_draft_payload())
+    ans = _ask(Copilot(stub), "Why would you require visa sponsorship?")
+    assert ans.source == "policy"
+    assert stub.prompts == []

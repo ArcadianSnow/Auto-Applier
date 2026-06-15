@@ -426,6 +426,30 @@ human to edit), instead of bailing blank. **Prereq:** confirm the copilot handle
 without the original negation bug (it once generated "Not interested in a Solutions Engineer role").
 The honesty floor still holds — the draft is evidence-audited and the human is the submit gate.
 
+### BUILD 6 RESULT (2026-06-15): copilot freeform draft path SHIPPED + live-verified
+
+The copilot half (the user's live hand-apply tool — he's discovery+scoring-only) is **done**. Full
+design + rationale: `application-copilot.md` → "Freeform draft path (BUILD 6)". In short:
+
+- **Prereq measured, not assumed.** The v1 verdict path on "Why do you want to work at Stripe?"
+  returned `verdict="no"` + **"I'm excited" ×2** + `needs_review=false` — confirming the verdict
+  machinery mis-fits essays, so a dedicated draft path was built (not a reuse of `answer()`).
+- **`Copilot.answer()` routes `is_open_ended(question)` → `_draft_freeform`** (sensitive still beats
+  it; binary screeners unchanged). New prompt `COPILOT_DRAFT` (`copilot-draft-v1`) ports the
+  gen-cover-v4 voice rules + anti-fabrication, no verdict field. Best-of-two with `/no_think` retry,
+  `_strip_ai_tells` dash backstop, `_voice_violations` flagger, `vet_cover_letter` fabrication guard.
+- **Always `needs_review=True`, never blanked.** `verdict="draft"`; honesty flags (unsupported
+  evidence / guard / voice tell) raise `overclaim_risk=high` + audit notes but still return the draft
+  for the human to edit. `av3 ask` + `/copilot` "just work" (routing is inside `answer()`).
+- **Live-verified** (real bank, qwen3:8b): the Stripe bait now drafts a grounded, honest, **tell-free**
+  first-person answer; a STAR essay drafts cleanly. Tests added in `tests/test_copilot.py`.
+
+**Phase B (NOT done, deferred):** routing the resolver's open-ended bail → the copilot draft in the
+ASSISTED *apply* path needs a "fill-but-flag" `Resolution` (today `fills = value is not None and not
+needs_review`), touching the gated auto/assisted invariants behind a default-OFF flag. Deferred
+because the apply pipeline isn't the user's live use. This is the remaining BUILD 6 work if/when the
+auto/assisted browser-apply path goes live.
+
 ## THEN — the gated go-live (unchanged)
 
 Once field-fill is trusted: a **watched `av3 apply --once --limit 1 --no-dry-run`** on ONE clean

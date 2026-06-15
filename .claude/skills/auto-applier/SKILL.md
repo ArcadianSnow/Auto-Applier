@@ -44,7 +44,7 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
 | Cover-letter voice / no-AI-tells rules / cover autogen (BUILD 5, `av3 cover --generate[-all]`) | `research/cover-letter-voice.md` (+ `research/automated-apply-next-build.md` BUILD 5) |
 | Résumé model (fact bank → per-job generation) | `docs/v3-architecture.md` §6b |
 | Manual / human-apply mode (`av3 shortlist`/`applied`/`pass`, job-family classifier, DECIDED→APPLIED) | `research/manual-apply-mode.md` |
-| Application copilot (`av3 ask`, `/copilot`, the evidence audit / honesty gate, sensitive routing) | `research/application-copilot.md` |
+| Application copilot (`av3 ask`, `/copilot`, the evidence audit / honesty gate, sensitive routing, the **freeform/essay DRAFT path** for open-ended questions — BUILD 6) | `research/application-copilot.md` |
 | **Automated apply GO-LIVE** — first real `--no-dry-run` submissions, blockers (human-attestation gate, hand-crafted résumé), why Solutions roles assist-pend, the watched plan | `research/automated-apply-go-live.md` |
 | **Automated apply NEXT BUILD** — forward plan after the field-fill overhaul: cover-letter upload (`#cover_letter`), Tailscale enumerated dropdowns, the diagnostic validation path | `research/automated-apply-next-build.md` |
 | Answer resolver / sensitive fields / salary | `docs/v3-architecture.md` §8b, §8d |

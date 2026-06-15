@@ -122,6 +122,72 @@ literals — and retries. NOT string-scraping (no content guessed, only structur
 promised); unrepairable input still raises `CompletionError`. Benefits every `complete_json` caller
 (resolver tier-3, score parse, generation, stories, research, copilot).
 
+## Freeform draft path (BUILD 6, 2026-06-15) — open-ended questions
+
+> Status: **SHIPPED.** The copilot now drafts open-ended/essay answers instead of mis-firing the
+> verdict machinery. Module: `copilot.py` (`_draft_freeform` / `_flag_draft`), prompt
+> `COPILOT_DRAFT` (`copilot-draft-v1`). Surfaces: `av3 ask` + `/copilot` (no CLI/web change —
+> routing lives inside `Copilot.answer`).
+
+**Why.** The v1 copilot is a yes/no/**verdict** machine; an essay field ("Why do you want to work
+here?", "Describe a time…", any textarea) has no yes/no answer. [[feedback_assisted_means_ai_drafts_freeform]]
+established that "assisted" means the AI **drafts** the freeform answer and the human spot-checks
+before submitting — not leave-it-blank. So the resolver's bail-blank is correct ONLY for the
+AUTO-submit path; the copilot itself must draft.
+
+**Prereq, MEASURED first (root cause before fix).** `av3 ask "Why do you want to work at Stripe?"`
+on the v1 verdict path returned `verdict="no"` (meaningless on an essay), **"I'm excited about the
+opportunity" twice** (the #1 banned tell, emitted despite the prompt's own "no excited" rule), generic
+buzzword filler, and `needs_review=false` (it would pre-fill a tell-laden draft *unflagged*). That
+ruled out reusing `answer()` — a dedicated draft path was required.
+
+**The design (a freeform essay is the same shape as a cover-letter paragraph).** Grounded first-person
+prose, voice-constrained, fabrication-guarded — exactly the cover-autogen machinery. So:
+- `Copilot.answer()` detects `is_open_ended(question)` (reused from the §8b resolver) **before** the
+  verdict path and routes to `_draft_freeform`. True binary screeners are unaffected; sensitive
+  questions still short-circuit to policy first (sensitive beats open-ended — "why require
+  sponsorship?" → policy, not a draft).
+- `COPILOT_DRAFT` (`copilot-draft-v1`) ports the **gen-cover-v4 voice rules verbatim** (no em/en
+  dash; never excited/thrilled/passionate/delighted/enthusiasm; buzzword ban; no rule-of-three; no
+  "I did X. I did Y." stacking; no parenthetical tech dumps / spec-sheet recitation; plain first
+  person) + anti-fabrication (every candidate claim from the bank; for "why-company" with no real
+  company knowledge, anchor on the JD's real work + his real background, **never manufacture
+  enthusiasm**). Output is `{answer, bank_evidence[], overclaim_risk, risk_note, gaps[]}` — **no
+  verdict field** (the whole point).
+- **Best-of-two**, mirroring `cover_autogen.generate_one`: qwen3 emits banned tells even under the
+  ban, so generate, and if the draft carries a voice tell, regenerate once with `/no_think` appended
+  and keep the cleaner draft. `_strip_ai_tells` (reused from `cover_autogen`) is the deterministic
+  dash backstop. `_voice_violations` (a high-signal SUBSET of the gen-cover ban list) scores drafts
+  and flags slips.
+- **Honesty model differs from the screener.** There is no verdict to fail closed. The draft is
+  ALWAYS `needs_review=True` (assisted: the human is the submit gate) and is **never blanked** — a
+  flagged draft the human edits beats a blank he writes from scratch. `_flag_draft` attaches three
+  non-blocking flags: the bank-evidence `audit_evidence`, the `vet_cover_letter` fabrication guard on
+  the prose (FLAG, don't skip), and the deterministic voice-tell check. Any hit raises
+  `overclaim_risk=high` + an audit note; the draft is still returned. `verdict="draft"`
+  (`DRAFT_VERDICT`), so the CLI renders the answer prominently and exits 1 (review); `--save` is
+  refused on `needs_review` (a job-specific essay is not a reusable bank answer — correct).
+
+**Live verification (2026-06-15, real bank + qwen3:8b).** The Stripe bait that produced
+"verdict=no + excited×2" now returns `verdict=DRAFT`, grounded entirely in real bank facts ($40K/year
+Power BI consolidation, the zero-downtime 200GB Azure SQL refactor, HubSpot/NetSuite integration,
+66%), honest about not knowing Stripe ("I'm not sure how much of Stripe's infrastructure I'd be
+working on, but I'd be interested…"), **zero "excited"**. A STAR-style "describe a difficult problem"
+drafts a tight, concrete, tell-free answer. Adding the "plain words, not a spec sheet / no
+parenthetical tech dumps" rule (a gen-cover-v4 port) removed the residual resume-density and a
+rule-of-three on the first measured draft. Residual: some I-opener density — the documented qwen3
+voice ceiling (same as cover letters); the human edits anyway. Tests: `tests/test_copilot.py`
+(freeform section — route-not-verdict, fabrication-flagged-but-returned, voice-tell retry-prefers-
+clean, dash-strip, empty→review, binary-screener-regression, sensitive-still-policy).
+
+**Not done (Phase B, deliberately deferred — the apply-pipeline wiring).** Routing the resolver's
+open-ended bail (`answer_resolver.py:554`) to the copilot draft in ASSISTED mode needs a
+"fill-but-flag" `Resolution` (`fills = value is not None and not needs_review`, so a drafted-but-
+flagged essay can't both fill and flag today) — that touches the gated auto/assisted invariants
+(`fill_resolutions` / `any_required_unresolved`) and would be a default-OFF settings flag mirroring
+`attest_human`. Lower priority: the apply pipeline is not the user's live use (discovery+scoring-
+only; he answers screeners by hand with `av3 ask`). See `automated-apply-next-build.md` BUILD 6.
+
 ## Known limits / future work
 
 - The audit checks *evidence existence*, not *evidence relevance* — a model could cite a real
