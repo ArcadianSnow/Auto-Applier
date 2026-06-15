@@ -518,12 +518,18 @@ async def fill_resolutions(
         if not getattr(r, "fills", False):
             filled[q.field_id] = False
             continue
-        # Last-line safety: never type/select a human-affirmation. If we get here with
-        # one, classification missed an attestation gate — leave it unfilled rather than
-        # have the bot falsely attest to being human (blocker A).
+        # Last-line safety: never type/select a human-affirmation UNLESS it's the deliberate,
+        # owner-opted-in attestation fill (a HUMAN_ATTESTATION resolution with a real value —
+        # settings.attest_human). Any OTHER human-affirming value here means classification
+        # missed a gate or an LLM misfired → leave it unfilled rather than falsely attest
+        # (blocker A). The deliberate path is identified by its sensitive class, so a stray
+        # "I am a human" from some other field is still blocked.
         if affirms_human(str(getattr(r, "value", "") or "")):
-            filled[q.field_id] = False
-            continue
+            _sens = getattr(getattr(r, "sensitive", None), "value", "")
+            _deliberate = _sens == "human_attestation" and not getattr(r, "needs_review", True)
+            if not _deliberate:
+                filled[q.field_id] = False
+                continue
         sel = selector_for(q)
         if not sel:
             filled[q.field_id] = False

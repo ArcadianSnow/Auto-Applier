@@ -327,6 +327,7 @@ class ApplyWorker:
             embed_client=embed_client,
             llm_client=llm_client,
             salary_expectation=salary_expectation,
+            attest_human=settings.attest_human,
         )
 
     # -- public ------------------------------------------------------------

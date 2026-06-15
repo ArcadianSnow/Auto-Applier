@@ -308,6 +308,13 @@ class Settings(BaseModel):
     web: WebConfig = Field(default_factory=WebConfig)
     targeting: TargetingConfig = Field(default_factory=TargetingConfig)
 
+    #: Owner opt-in (default OFF): auto-fill a STATIC "which best describes you? [human/AI]"
+    #: self-ID FORM FIELD with the human option. The applicant is human, and such a field is a
+    #: routine form question, NOT a behavioural/risk-scored anti-bot challenge (CAPTCHA /
+    #: fingerprinting are classified separately and are NEVER automated through). OFF keeps the
+    #: bail-to-assisted default. (User-directed 2026-06-14; the real anti-bot path is untouched.)
+    attest_human: bool = False
+
     # --- derived paths (system of record + observability spine, spec §4) ---
     @property
     def app_db_path(self) -> Path:

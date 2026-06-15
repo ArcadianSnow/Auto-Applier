@@ -231,6 +231,99 @@ VERIFIED LIVE: veteran_status now `[committed] I don't wish to answer`; all 4 EE
 Tests: `test_apply_driver.py::test_decline_*`. (The earlier scroll/menu-wait/retry hardening stays —
 it was a separate below-the-fold concern.) 1026 green.
 
+## BUILD 4 — Tier-1 watched dry-run (2026-06-14): 8 forms, resolver fixes (1053 green)
+
+A full Tier-1 dress rehearsal ran 8 prepared Greenhouse jobs (`av3 apply --limit 8 --dry-run
+--keep-open`), watched, with per-job cover/résumé assigned via `av3 cover`/`av3 resume`. The
+cover+résumé UPLOAD worked on every job that had a letter assigned (dbt, Grafana, Tailscale-SE);
+the "missed cover" reports were all jobs with **no letter on disk** (Hightouch/PlanetScale/
+Tailscale-Impl) — not a bug. Postman was an expired posting (redirect to board search filters).
+Cresta was a clean full-auto. The real findings (ground-truthed against `events.db`
+`stage='resolution'`, then fixed in `answer_resolver.py`; all unit-tested):
+
+1. **EEO declined everywhere** — `master.json` `eeo` was `{}`. The model + `_pick_eeo` already
+   support it; this was DATA. Populated `eeo = {gender: Male, hispanic: Yes, veteran: "I am not a
+   protected veteran", disability: "No, I do not have a disability"}` (keys are label substrings
+   `_pick_eeo` matches; values land via the committer's exact/whole-word option match). EEO is
+   the user's CHOICE to disclose — stays 100% local, never mirrored (the scrubber has no field).
+2. **Work-auth not country-aware** — "eligible to work in **Australia**?" → "Yes" (WRONG);
+   "require sponsorship in **Canada**?" → "No" (WRONG). A US citizen is authorized only in the
+   US. Added `_detect_country` + `_authorized_countries` (derived from residence + work_auth,
+   NEVER defaulted): when a question NAMES a country outside the authorized set, eligibility→"No",
+   sponsorship→"Yes". Guarded to fire ONLY with a non-empty authorized set (unspecified bank can't
+   misfire) and bare "us"/"US" is excluded (collides with the pronoun "hear about us"; a missed US
+   match falls through to the already-correct residence logic). This is [[project_us_default_assumption]]
+   coming due. NOTE: only handles STANDARD polarity ("eligible?"/"require?"); the inverted
+   "authorization WITHOUT sponsorship" phrasing has no named country in the wild yet, so it's left
+   on the residence logic (documented limitation).
+3. **Preferred LAST name had no handler** → bailed (required). Added `ProfileField.PREFERRED_LAST_NAME`
+   (ordered before FIRST) → fills the legal last name (last name token; single-token name → bail).
+4. **"How did you hear about us?" bailed** — it matches the open-ended `\bhow did you\b` pattern, so
+   it required a bank match, and dbt's phrasing didn't semantically match the seeded
+   "…about this opportunity" answer (Grafana's did). Added a how-heard classifier (before the
+   essay/LLM tiers) → returns the banked referral channel ("LinkedIn"); bails if none banked.
+5. **Relocate-to-<country> didn't commit** — the bank answer was prose, never landed on the
+   react-select. Added a relocation classifier → "Yes" for the residence/authorized country (US,
+   a certainty), bail for any other country (a personal decision). Fixes relocate-to-US;
+   relocate-to-Canada correctly bails pending the user's preference.
+
+**Correct-by-design bails (left as-is, the user confirmed the gaps but these are the honesty floor):**
+years-of-experience (prose "0 years" into a range select — auto-committing a disqualifier is worse
+than assisted, BUILD 2), why-<company> essays (company-specific, never invented), and privacy/AI consent
+(bot must not auto-consent).
+
+**AI-trap "Which best describes you? / I am a human being" — RESOLVED via an owner opt-in (2026-06-14).**
+The user verified the question appears on a normal browser visit too → it's a STATIC self-ID FORM FIELD,
+not a behavioural/risk-scored anti-bot challenge (CAPTCHA/fingerprinting are a SEPARATE classifier in
+`detect.py`, still never automated). The applicant IS a human, so filling the human option is truthful.
+Implemented as `settings.attest_human` (default OFF — the safe bail stays the codebase default;
+documented invariant unchanged for everyone else). When ON: `_resolve_sensitive`'s HUMAN_ATTESTATION
+branch fills the human option (from `question.options` matching `_ATTEST_HUMAN_OPTION`, else "I am a
+human being", source USER_CONFIG); the driver's `affirms_human` backstop now lets THROUGH a deliberate
+HUMAN_ATTESTATION resolution (identified by sensitive class, not value text) while still blocking a stray
+human-affirming value from any other field (defence vs LLM misfire / classification miss preserved).
+Wired `apply_worker` → `AnswerResolver(attest_human=settings.attest_human)`; **enabled in Joseph's
+`user_config.json`**. Tests: `test_answer_resolver` (opt-in fills / default bails) +
+`test_apply_driver` (backstop allows deliberate, blocks stray). CAPTCHA/behavioural detection untouched.
+
+**Still needs the user's data to close (assisted until then):** years-of-customer-facing-experience
+(a number he'll stand behind), relocate-to-Canada preference, "used <product> before?" (bank a Y/N),
+per-company "why interested" essays, and hand-authored cover letters for companies without one on disk.
+
+**Re-verify:** the dry-run leaves all jobs in QUEUED_APPLY, so re-run the SAME watched command — the
+updated resolver + EEO data take effect immediately (editable install). Confirm EEO now fills real
+values, AU/CA work-auth is correct, preferred-last-name + how-heard + relocate-to-US fill.
+
+## BUILD 5 — Cover letter ready for every strong job (PLANNED, user-greenlit 2026-06-14)
+
+User directive: "every job scored decently should have a cover letter written and ready, just in
+case." Decided params (AskUserQuestion 2026-06-14): **scope = strong matches (score ≥ 8.0)**;
+**trigger = auto-generate during the daily refresh + a backfill command** for the existing backlog.
+
+**Reuse (already built):** `resume/generate.py` `CoverLetterGenerator` + `llm/prompts.GENERATE_COVER_LETTER`
++ the `vet_cover_letter` fabrication guard + `generated_cover_letter_path` (`generated/{job_id}_cover.txt`).
+The generator produces a plain-text body today.
+
+**To build:**
+1. **Voice enforcement** — audit `GENERATE_COVER_LETTER` against [[feedback_writing_voice_no_ai_tells]]:
+   NO em-dashes (#1), no "I'm excited to apply", no buzzwords, no rule-of-three. Bake these into the
+   prompt as hard constraints (the current prompt predates that feedback — the memory says cover letters
+   "need regen against this"). This is the quality crux; a sample MUST be read + voice-approved before bulk.
+2. **.docx render** — render the guarded letter to `<uploads>/<job_id>/Joseph Lira Cover Letter.docx`
+   (per [[feedback_paste_docs_as_docx]] — .docx, not md). python-docx (already a dep via the résumé path).
+   **Never clobber a hand-authored letter** — skip if `existing_job_cover()` already returns one (a manual
+   `av3 cover` always wins; auto-gen only fills the gap).
+3. **Guard** — run `vet_cover_letter`; any unsupported claim → DON'T ship that letter, flag (the letter is
+   "ready just in case", so a guard failure means leave it unwritten + note, never ship a fabrication).
+4. **Command** — `av3 cover --generate <job_id>` (one) + `av3 cover --generate-all [--min-score 8.0]`
+   (backfill over DECIDED jobs ≥ floor). Mirrors the existing `av3 cover` command surface.
+5. **Auto-trigger** — in the daily-refresh / scoring path, after a job lands DECIDED with score ≥ 8.0,
+   generate its letter (skip if one exists). Keep it OFF the apply pipeline (he's discovery+scoring-only).
+6. **Tests** — generation→guard→.docx→no-clobber; score-floor filter; backfill batch; trigger fires only ≥ floor.
+
+**Verification:** generate ONE sample for a real ≥8.0 job, READ it, get the user's voice sign-off BEFORE
+backfilling hundreds (the no-AI-tells bar is his, and qwen3:8b prose is the risk). ~30-60s/letter locally.
+
 ## THEN — the gated go-live (unchanged)
 
 Once field-fill is trusted: a **watched `av3 apply --once --limit 1 --no-dry-run`** on ONE clean

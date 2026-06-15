@@ -397,6 +397,24 @@ def test_fill_refuses_to_type_a_human_affirmation():
         getattr(page.elements.get("#question_att"), "selected", None) is None
 
 
+def test_attestation_backstop_allows_deliberate_optin_fill():
+    """The owner opt-in (settings.attest_human) produces a HUMAN_ATTESTATION resolution with a
+    real value; the backstop lets THAT through (the human self-ID is filled), while a stray
+    human-affirming value from a NON-attestation resolution stays blocked (above). The
+    deliberate path is identified by its sensitive class, not the value text (user 2026-06-14)."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion, fill_resolutions
+    from auto_applier.resume.answer_resolver import Resolution, ResolutionSource, SensitiveClass
+
+    q = CustomQuestion("question_att", "Which best describes you?", True, "select")
+    deliberate = Resolution(question=q, value="I am a human being",
+                            source=ResolutionSource.USER_CONFIG,
+                            sensitive=SensitiveClass.HUMAN_ATTESTATION)
+    page = FakePage("<form></form>", scripts=[], questions=[])
+    filled = asyncio.run(fill_resolutions(page, [q], [deliberate]))
+    assert filled["question_att"] is True
+    assert page.elements["#question_att"].selected == "I am a human being"
+
+
 def test_optional_unresolved_does_not_block_auto_submit():
     """Optional REVIEWs are benign — driver still attempts auto path (other checks may
     still bounce it, but resolver state shouldn't)."""

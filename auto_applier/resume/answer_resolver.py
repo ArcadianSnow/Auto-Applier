@@ -262,6 +262,7 @@ class ProfileField(str, Enum):
     GITHUB = "github"
     WEBSITE = "website"          # personal site / portfolio (NOT github)
     PREFERRED_FIRST_NAME = "preferred_first_name"
+    PREFERRED_LAST_NAME = "preferred_last_name"
     CITY = "city"
     COUNTRY = "country"
     COUNTRY_TIMEZONE = "country_timezone"
@@ -273,6 +274,9 @@ class ProfileField(str, Enum):
 _PROFILE_PATTERNS: list[tuple[ProfileField, list[str]]] = [
     (ProfileField.LINKEDIN, [r"\blinked\s?in\b"]),
     (ProfileField.GITHUB, [r"\bgit\s?hub\b"]),
+    (ProfileField.PREFERRED_LAST_NAME,
+     [r"\bpreferred (last|family|sur)\s?name\b",
+      r"\b(last|family|sur)\s?name you (go by|prefer)\b"]),
     (ProfileField.PREFERRED_FIRST_NAME,
      [r"\bpreferred (first )?name\b", r"\bnick\s?name\b",
       r"\bwhat should we call you\b", r"\bgoes by\b"]),
@@ -362,6 +366,95 @@ def _is_authorized(bank) -> bool:
     return bool(_AUTHORIZED_HINTS.search(bank.work_authorization or ""))
 
 
+# "How did you hear about us?" — a referral-source PICKER (select/combobox), NOT an essay.
+# It matches the open-ended "how did you…" pattern, so without a dedicated route it bails to
+# assisted (live dbt Labs 2026-06-14: "How did you hear about us?" bailed while Grafana's
+# "…about this opportunity" matched the seeded answer). Route it to the banked channel.
+_HOW_HEARD_PATTERNS = [
+    r"\bhear about\b",
+    r"\bhow did you (hear|find|learn|come across)\b",
+    r"\bhow.{0,15}\bhear\b",
+    r"\breferral source\b",
+    r"\bhow were you referred\b",
+]
+
+
+def _is_how_heard(label: str) -> bool:
+    return _matches_any(label or "", _HOW_HEARD_PATTERNS)
+
+
+# "Are you located in or willing to relocate to <country>?" — a yes/no the bank answered
+# with prose that never committed to the react-select (live Tailscale 2026-06-14). Handle it
+# directly: "Yes" for the residence/authorized country (a certainty), bail for any other
+# (a personal relocation decision, not ours to auto-answer).
+_RELOCATION_PATTERNS = [
+    r"\bwilling to relocate\b",
+    r"\b(open|able) to relocat",
+    r"\brelocate to\b",
+    r"\bwilling to (move|relocate)\b",
+    r"\blocated in .* relocate\b",
+]
+
+
+def _is_relocation_question(label: str) -> bool:
+    return _matches_any(label or "", _RELOCATION_PATTERNS)
+
+
+# Work-authorization geography (live 2026-06-14). A US citizen is authorized in the US but
+# NOT abroad — so "eligible to work in Australia?" is "No" and "require sponsorship in
+# Canada?" is "Yes". The old code answered off the home-country status and got both wrong.
+# We act ONLY on an EXPLICITLY named country; a generic "your country of residence" / "the
+# country of this role" keeps the residence-context behaviour. Bare "us"/"US" is excluded
+# (it collides with the pronoun "hear about us"); a missed US match just falls through to the
+# already-correct residence-context logic. Dotted "U.S." is omitted (the trailing-dot \b is
+# unreliable) for the same reason — harmless, since US falls through correctly.
+_COUNTRY_ALIASES = {
+    "united states of america": "united states", "united states": "united states",
+    "usa": "united states", "america": "united states",
+    "canada": "canada", "australia": "australia", "new zealand": "new zealand",
+    "united kingdom": "united kingdom", "england": "united kingdom",
+    "scotland": "united kingdom", "ireland": "ireland", "germany": "germany",
+    "france": "france", "netherlands": "netherlands", "singapore": "singapore",
+    "india": "india", "japan": "japan", "spain": "spain", "italy": "italy",
+    "sweden": "sweden", "switzerland": "switzerland", "mexico": "mexico",
+    "brazil": "brazil", "poland": "poland", "portugal": "portugal",
+}
+
+
+def _detect_country(label: str) -> str:
+    """The country a question EXPLICITLY names → canonical name, or "" if none. Longest
+    alias first so 'united states of america' wins over 'america'."""
+    s = (label or "").lower()
+    for alias in sorted(_COUNTRY_ALIASES, key=len, reverse=True):
+        if re.search(r"\b" + re.escape(alias) + r"\b", s):
+            return _COUNTRY_ALIASES[alias]
+    return ""
+
+
+def _canon_country(name: str) -> str:
+    """Canonicalize a fact-bank country name (relocation prefs) the same way labels resolve,
+    so 'Netherlands' / 'netherlands' / 'NL'-aliases all compare equal to a detected country."""
+    n = (name or "").strip().lower()
+    return _COUNTRY_ALIASES.get(n, n)
+
+
+def _authorized_countries(bank) -> set:
+    """Countries the user can work in without sponsorship — DERIVED, never defaulted: the
+    residence country (from contact.location) plus the US when work_authorization reads as
+    US citizen/national. Empty when nothing is known — and the callers only downgrade a named
+    country to "foreign" when this set is NON-empty, so an unknown bank can't misfire."""
+    out: set = set()
+    contact = getattr(bank, "contact", None)
+    _, _, residence = _split_location(getattr(contact, "location", "") or "")
+    rc = _COUNTRY_ALIASES.get(residence.strip().lower())
+    if rc:
+        out.add(rc)
+    wa = (getattr(bank, "work_authorization", "") or "").lower()
+    if re.search(r"\b(usa|u\.?s\.?a?|american|united states)\b", wa):
+        out.add("united states")
+    return out
+
+
 def _is_yes_no_question(question: CustomQuestion) -> bool:
     """Heuristic: does this question want a Yes/No (not a status string)? True when the
     options are a yes/no pair, or the label is phrased as a yes/no ("Are you…/Do you…")
@@ -416,6 +509,7 @@ class AnswerResolver:
         llm_client=None,
         salary_expectation: str = "",
         config: _ResolverConfig | None = None,
+        attest_human: bool = False,
     ):
         self.fact_bank = fact_bank
         self.answer_repo = answer_repo
@@ -423,6 +517,11 @@ class AnswerResolver:
         self.llm_client = llm_client
         self.salary_expectation = salary_expectation
         self.config = config or _ResolverConfig()
+        # Owner opt-in (default OFF): fill the human option on a STATIC "which best describes
+        # you? [human/AI]" self-ID FORM FIELD. The applicant is a human, and such a field is
+        # not a behavioural/risk-scored anti-bot challenge (those are CAPTCHA/fingerprint,
+        # classified separately and never automated). OFF → the safe bail-to-assisted default.
+        self.attest_human = attest_human
 
     # ---- public ----------------------------------------------------------
 
@@ -437,6 +536,15 @@ class AnswerResolver:
         profile = classify_profile_field(question.label)
         if profile is not ProfileField.NONE:
             return self._resolve_profile(question, profile)
+        # "How did you hear about us?" is a referral-source PICKER, not an essay — but it
+        # matches the open-ended "how did you…" pattern, so without this it bails. Route it
+        # to the banked channel before the essay/LLM tiers can (live dbt Labs 2026-06-14).
+        if _is_how_heard(question.label):
+            return self._resolve_how_heard(question)
+        # "located in / willing to relocate to <country>?" — Yes only for the residence/
+        # authorized country (a certainty); any other country is a personal call (assisted).
+        if _is_relocation_question(question.label):
+            return self._resolve_relocation(question)
         bank_hit = await self._resolve_from_bank(question)
         if bank_hit is not None:
             return bank_hit
@@ -469,12 +577,26 @@ class AnswerResolver:
     ) -> Resolution:
         bank = self.fact_bank
         if sensitivity is SensitiveClass.HUMAN_ATTESTATION:
-            # Always REVIEW — never a value. The bot is an automated program; the only
-            # honest answer ("AI / automated") fails the application, and ticking "human
-            # being" is a false attestation. Hand it to the human, who attests truthfully
-            # when they review + submit (assisted). This bail flows through
-            # any_required_unresolved → ASSISTED_PENDING. NEVER weaken this to raise the
-            # auto rate. (research/automated-apply-go-live.md, blocker A.)
+            # Default: REVIEW — never a value. The bot must never FALSELY attest to being
+            # human; the human attests truthfully when they review + submit (assisted).
+            # OWNER OPT-IN (settings.attest_human, user-directed 2026-06-14): a static "which
+            # best describes you? [human/AI]" FORM FIELD that every visitor sees is NOT a
+            # behavioural/risk-scored anti-bot challenge (those are CAPTCHA/fingerprint —
+            # classified separately, never automated). It's a self-ID question, and the
+            # applicant IS a human, so filling the human option is truthful. When opted in we
+            # fill it; the real anti-bot defences stay sacrosanct. (NEVER reach here for a
+            # CAPTCHA — that's a different classifier.)
+            if self.attest_human:
+                opts = getattr(question, "options", None) or []
+                human = next((o for o in opts if _ATTEST_HUMAN_OPTION.search(o or "")), "")
+                return Resolution(
+                    question=question,
+                    value=human or "I am a human being",
+                    source=ResolutionSource.USER_CONFIG,
+                    sensitive=SensitiveClass.HUMAN_ATTESTATION,
+                    note="human self-ID: owner opted in (attest_human) — filled the human "
+                         "option truthfully (static form field, not a bot-detection challenge)",
+                )
             return self._review(
                 question,
                 note="human-attestation gate — a bot must never attest to being human; "
@@ -511,6 +633,21 @@ class AnswerResolver:
             # select — live 2026-06-12 the dropdown was left blank). Map to Yes/No when the
             # question is yes/no AND we can confidently determine authorization; otherwise
             # return the status string (status selects/free-text take that).
+            # Country-aware (live 2026-06-14): a US citizen is authorized in the US but NOT
+            # abroad. When the question NAMES a country the user isn't authorized in ("eligible
+            # to work in Australia?"), the honest yes/no is "No" — the old code answered "Yes"
+            # off the home-country status. Only fires with a KNOWN authorized set (so an
+            # unspecified bank can't misfire); a generic/residence question keeps "Yes".
+            country = _detect_country(question.label)
+            authorized = _authorized_countries(bank)
+            if country and authorized and country not in authorized and _is_yes_no_question(question):
+                return Resolution(
+                    question=question,
+                    value="No",
+                    source=ResolutionSource.FACT_BANK,
+                    sensitive=SensitiveClass.WORK_AUTHORIZATION,
+                    note=f"eligibility in {country} → No (authorized only in {sorted(authorized)})",
+                )
             if _is_yes_no_question(question) and _is_authorized(bank):
                 value = "Yes"
                 note = "work-auth eligibility → Yes (authorized; from fact bank)"
@@ -525,6 +662,21 @@ class AnswerResolver:
                 note=note,
             )
         if sensitivity is SensitiveClass.SPONSORSHIP:
+            # Country-aware (live 2026-06-14): the user WILL need sponsorship anywhere they're
+            # not already authorized. When the question names such a country ("require visa
+            # sponsorship to work in Canada?") the answer is "Yes" regardless of the home-country
+            # requires_sponsorship flag (which only speaks to the residence country). Only fires
+            # with a KNOWN authorized set, so an unspecified bank can't misfire.
+            country = _detect_country(question.label)
+            authorized = _authorized_countries(bank)
+            if country and authorized and country not in authorized:
+                return Resolution(
+                    question=question,
+                    value="Yes",
+                    source=ResolutionSource.FACT_BANK,
+                    sensitive=SensitiveClass.SPONSORSHIP,
+                    note=f"sponsorship in {country} → Yes (not authorized there)",
+                )
             if bank.requires_sponsorship is None:
                 return self._review(
                     question,
@@ -582,6 +734,53 @@ class AnswerResolver:
             note=f"profile field '{field.value}' from fact bank",
         )
 
+    def _resolve_how_heard(self, question: CustomQuestion) -> Resolution:
+        """'How did you hear about us?' → the banked referral channel (a picker, not an
+        essay). Reads the seeded answer; bails if none is banked (never invents a channel)."""
+        for key in ("How did you hear about this opportunity?", question.label):
+            banked = self.answer_repo.get(key)
+            if banked is not None and banked.answer:
+                return Resolution(
+                    question=question,
+                    value=banked.answer,
+                    source=ResolutionSource.BANK,
+                    note="how-heard referral channel from answer bank",
+                )
+        return self._review(
+            question,
+            note="how-heard: no referral channel banked — seed one to auto-fill",
+        )
+
+    def _resolve_relocation(self, question: CustomQuestion) -> Resolution:
+        """'Are you located in / willing to relocate to <country>?' — answered from the user's
+        declared preferences (fact-bank ``relocation``): the residence/authorized country and
+        any ``willing`` country → 'Yes'; an ``unwilling`` country → 'No'; anything undeclared
+        bails to the human (a personal decision we never guess)."""
+        country = _detect_country(question.label)
+        if not country:
+            return self._review(
+                question,
+                note="relocation: no country named — handed to the human (assisted)",
+            )
+        prefs = getattr(self.fact_bank, "relocation", {}) or {}
+        willing = {_canon_country(c) for c in prefs.get("willing", [])}
+        unwilling = {_canon_country(c) for c in prefs.get("unwilling", [])}
+        if country in _authorized_countries(self.fact_bank) or country in willing:
+            return Resolution(
+                question=question, value="Yes", source=ResolutionSource.FACT_BANK,
+                note=f"relocation to {country}: residence/authorized or declared willing → Yes",
+            )
+        if country in unwilling:
+            return Resolution(
+                question=question, value="No", source=ResolutionSource.FACT_BANK,
+                note=f"relocation to {country}: declared unwilling → No",
+            )
+        return self._review(
+            question,
+            note=f"relocation to {country} — not in declared preferences; "
+                 f"handed to the human (assisted)",
+        )
+
     @staticmethod
     def _profile_value(field: ProfileField, contact) -> str:
         links = {k.lower(): v for k, v in (contact.links or {}).items()}
@@ -600,6 +799,12 @@ class AnswerResolver:
             return ""
         if field is ProfileField.PREFERRED_FIRST_NAME:
             return (contact.name or "").split()[0] if contact.name else ""
+        if field is ProfileField.PREFERRED_LAST_NAME:
+            # The form itself says "if your legal last name and preferred last name are the
+            # same, input your legal last name" — so the legal last name (last token) is the
+            # right fill. A single-token name has no distinct surname → "" → bails (never guess).
+            parts = (contact.name or "").split()
+            return parts[-1] if len(parts) > 1 else ""
         if field is ProfileField.CITY:
             return city
         if field is ProfileField.COUNTRY:
@@ -617,15 +822,23 @@ class AnswerResolver:
 
     async def _resolve_from_bank(self, question: CustomQuestion) -> Resolution | None:
         # Fast path: exact question text match (common when v2's flat answers.json was
-        # seeded as-is). Skips the embedding round-trip.
-        exact = self.answer_repo.get(question.label)
-        if exact is not None and exact.answer:
-            return Resolution(
-                question=question,
-                value=exact.answer,
-                source=ResolutionSource.BANK,
-                note="exact question-text match",
-            )
+        # seeded as-is). Skips the embedding round-trip. Also try the label with the trailing
+        # required-marker stripped — live Tailscale labels keep the "*" ("…before?*"), which
+        # broke an exact match against the seeded "…before?" (2026-06-15).
+        label = question.label or ""
+        keys = [label]
+        stripped = label.rstrip(" *\t")
+        if stripped and stripped != label:
+            keys.append(stripped)
+        for key in keys:
+            exact = self.answer_repo.get(key)
+            if exact is not None and exact.answer:
+                return Resolution(
+                    question=question,
+                    value=exact.answer,
+                    source=ResolutionSource.BANK,
+                    note="exact question-text match",
+                )
         if self.embed_client is None:
             return None
         # Semantic match: embed the question, cosine vs each stored vector. Bank is

@@ -60,6 +60,10 @@ class FactBank:
     requires_sponsorship: bool | None = None
     #: Voluntary EEO self-ID; blank ⇒ "prefer not to answer". Never mirrored to telemetry.
     eeo: dict[str, str] = field(default_factory=dict)
+    #: Relocation preferences for "willing to relocate to <country>?" screeners. Keys
+    #: "willing"/"unwilling" hold country names; the residence/authorized country is always
+    #: "Yes", an unwilling one is "No", anything else bails to the human (never guessed).
+    relocation: dict[str, list] = field(default_factory=dict)
 
     # -- convenience accessors used by the guard ---------------------------
     def companies(self) -> list[str]:
@@ -93,6 +97,7 @@ class FactBank:
             work_authorization=data.get("work_authorization", ""),
             requires_sponsorship=data.get("requires_sponsorship"),
             eeo=dict(data.get("eeo", {})),
+            relocation=dict(data.get("relocation", {})),
         )
 
     @classmethod

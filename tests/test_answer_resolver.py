@@ -208,6 +208,39 @@ def test_human_attestation_never_reaches_llm():
     assert llm.last_prompt == ""  # never invoked
 
 
+def test_human_attestation_opt_in_fills_human_option():
+    """Owner opt-in (attest_human, user-directed 2026-06-14): a STATIC human/AI self-ID form
+    field is filled with the human option truthfully — the applicant IS human and this is not
+    a behavioural bot-detection challenge (CAPTCHA is a separate classifier, never automated)."""
+    resolver = AnswerResolver(_bank(), answer_repo=_make_empty_repo(), attest_human=True)
+    res = asyncio.run(resolver.resolve(_q(
+        "Which of the following best describes you?", kind="select",
+        options=["I am an AI or automated program", "I am a human being"])))
+    assert res.value == "I am a human being"
+    assert res.needs_review is False
+    assert res.sensitive is SensitiveClass.HUMAN_ATTESTATION
+    assert res.source is ResolutionSource.USER_CONFIG
+
+
+def test_human_attestation_opt_in_bare_label_defaults_human_string():
+    """A react-select gate whose options aren't in the DOM at resolve time → the default
+    'I am a human being' (the committer matches it to the live option)."""
+    resolver = AnswerResolver(_bank(), answer_repo=_make_empty_repo(), attest_human=True)
+    res = asyncio.run(resolver.resolve(
+        _q("Which of the following best describes you?*", kind="select")))
+    assert res.value == "I am a human being"
+    assert res.needs_review is False
+
+
+def test_human_attestation_default_off_still_bails():
+    """Default (no opt-in) keeps the safe bail — the invariant's default is unchanged."""
+    resolver = AnswerResolver(_bank(), answer_repo=_make_empty_repo())  # attest_human defaults False
+    res = asyncio.run(resolver.resolve(_q(
+        "Which of the following best describes you?", kind="select",
+        options=["I am an AI or automated program", "I am a human being"])))
+    assert res.needs_review is True
+
+
 # ---- profile/contact fields + open-ended bail (2026-06-12 rehearsal #2) ----------
 
 def _contact_bank():
@@ -363,6 +396,151 @@ def test_sponsorship_unset_bails_to_review():
     res = asyncio.run(resolver.resolve(_q("Will you require sponsorship in the future?")))
     assert res.needs_review is True
     assert res.sensitive is SensitiveClass.SPONSORSHIP
+
+
+# ---- live 2026-06-14 dry-run fixes: country-aware work-auth, relocation, how-heard,
+#      preferred-last-name. _contact_bank() is US-authorized (Dallas + "US Citizen"). -------
+
+def test_work_auth_foreign_named_country_not_eligible():
+    """A US citizen is NOT eligible to work in a foreign country the question names — live
+    dbt Labs 2026-06-14: 'eligible to work in Australia?' wrongly answered 'Yes'."""
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q(
+        "Are you currently eligible to work in Australia for any employer?", kind="select")))
+    assert res.value == "No"
+    assert res.sensitive is SensitiveClass.WORK_AUTHORIZATION
+    assert res.needs_review is False
+
+
+def test_work_auth_home_country_named_still_yes():
+    """Naming the authorized country keeps 'Yes' (only foreign countries downgrade)."""
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q(
+        "Are you authorized to work in the United States?", kind="select")))
+    assert res.value == "Yes"
+
+
+def test_work_auth_foreign_country_no_misfire_without_known_authorization():
+    """Safety guard: an unspecified bank (empty authorized set) must NOT downgrade a named
+    country to 'No' — it falls through to the residence-context logic instead."""
+    bank = _bank(work_authorization="US citizen")  # no residence country in _bank location
+    # _bank() location is "Seattle, WA" → residence has no country alias, but "US citizen"
+    # adds the US, so Australia is correctly foreign here:
+    resolver = AnswerResolver(bank, answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q(
+        "Are you eligible to work in Australia?", kind="select")))
+    assert res.value == "No"
+
+
+def test_sponsorship_foreign_named_country_needs_yes():
+    """Sponsorship is needed anywhere the user isn't authorized — live Tailscale 2026-06-14:
+    'require sponsorship to work in Canada?' wrongly answered 'No'."""
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q(
+        "Will you now or at any point in the future require visa sponsorship to work in Canada?",
+        kind="select")))
+    assert res.value == "Yes"
+    assert res.sensitive is SensitiveClass.SPONSORSHIP
+
+
+def test_relocation_to_home_country_yes():
+    """'located in or willing to relocate to <residence country>' → 'Yes' (a certainty)."""
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q(
+        "Are you located in or willing to relocate to the United States?", kind="select")))
+    assert res.value == "Yes"
+    assert res.needs_review is False
+
+
+def test_relocation_undeclared_country_bails_to_human():
+    """A country with no declared preference is a personal decision → assisted, never guessed."""
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q(
+        "Are you located in or willing to relocate to Canada?", kind="select")))
+    assert res.needs_review is True
+
+
+def test_relocation_unwilling_country_answers_no():
+    """A declared-unwilling country → 'No' (live 2026-06-14: user won't relocate to Canada)."""
+    bank = _contact_bank()
+    bank.relocation = {"willing": ["Netherlands"], "unwilling": ["Canada"]}
+    resolver = AnswerResolver(bank, answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q(
+        "Are you located in or willing to relocate to Canada?", kind="select")))
+    assert res.value == "No"
+    assert res.needs_review is False
+
+
+def test_relocation_willing_country_answers_yes():
+    """A declared-willing country (his DAFT/NL target) → 'Yes', even though it's not residence."""
+    bank = _contact_bank()
+    bank.relocation = {"willing": ["Netherlands"], "unwilling": ["Canada"]}
+    resolver = AnswerResolver(bank, answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q(
+        "Are you willing to relocate to the Netherlands?", kind="select")))
+    assert res.value == "Yes"
+
+
+def test_how_heard_uses_banked_channel(answer_repo):
+    """'How did you hear about us?' matches the open-ended 'how did you…' pattern, so it
+    used to bail — now it returns the banked referral channel (live dbt Labs 2026-06-14)."""
+    asyncio.run(store_answer(answer_repo, embed_client=None,
+                             question="How did you hear about this opportunity?", answer="LinkedIn"))
+    resolver = AnswerResolver(_contact_bank(), answer_repo)
+    res = asyncio.run(resolver.resolve(_q("How did you hear about us?", kind="select", required=False)))
+    assert res.value == "LinkedIn"
+    assert res.source is ResolutionSource.BANK
+    assert res.needs_review is False
+
+
+def test_how_heard_bails_when_no_channel_banked():
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q("How did you hear about us?", kind="select", required=False)))
+    assert res.needs_review is True
+
+
+def test_bank_exact_match_ignores_trailing_required_marker(answer_repo):
+    """Live Tailscale labels keep the '*' required marker in the text ('…before?*'); the exact
+    bank match now strips it so a seeded '…before?' answer still hits (live 2026-06-15)."""
+    asyncio.run(store_answer(answer_repo, embed_client=None,
+                             question="Have you used Tailscale before?", answer="Yes"))
+    resolver = AnswerResolver(_contact_bank(), answer_repo)
+    res = asyncio.run(resolver.resolve(_q("Have you used Tailscale before?*", kind="combobox")))
+    assert res.value == "Yes"
+    assert res.source is ResolutionSource.BANK
+    assert res.needs_review is False
+
+
+def test_classify_preferred_last_name():
+    assert classify_profile_field(
+        "What is your preferred last name? If your legal last name and preferred last name "
+        "are the same please input your legal last name.") is ProfileField.PREFERRED_LAST_NAME
+    # The first-name variant must still classify as first name (no cross-talk).
+    assert classify_profile_field("What is your preferred first name?") \
+        is ProfileField.PREFERRED_FIRST_NAME
+
+
+def test_preferred_last_name_fills_legal_last_name():
+    """Live dbt Labs 2026-06-14: the preferred-LAST-name field had no handler and bailed."""
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q(
+        "What is your preferred last name? If your legal last name and preferred last name "
+        "are the same please input your legal last name.")))
+    assert res.value == "Lira"
+    assert res.source is ResolutionSource.PROFILE
+
+
+def test_eeo_fills_real_self_id_when_banked():
+    """Live 2026-06-14: with EEO in the bank, self-ID fills the real value (BANK), not the
+    decline default (SENSITIVE_DEFAULT)."""
+    bank = _bank(eeo={"gender": "Male", "veteran": "I am not a protected veteran",
+                      "disability": "No, I do not have a disability"})
+    resolver = AnswerResolver(bank, answer_repo=_make_empty_repo())
+    g = asyncio.run(resolver.resolve(_q("Gender", kind="select")))
+    assert g.value == "Male" and g.source is ResolutionSource.BANK
+    v = asyncio.run(resolver.resolve(_q("Veteran Status", kind="select")))
+    assert v.value == "I am not a protected veteran"
+    assert v.sensitive is SensitiveClass.EEO and v.needs_review is False
 
 
 # ---- §8d policy: EEO -------------------------------------------------------
