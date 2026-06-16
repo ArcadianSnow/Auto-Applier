@@ -1,0 +1,18 @@
+Sam Carter
+Junior Software Engineer
+sam.carter@example.com | Remote
+
+EXPERIENCE
+
+Software Engineer, Folio Apps (2022 – Present)
+- Build and maintain REST APIs in Python and Flask.
+- Fixed a caching bug that cut average page load time 20%.
+
+IT Support Technician, Lakeside Schools (2020 – 2022)
+- Provided helpdesk support for 300 staff laptops.
+
+SKILLS
+Python, Flask, REST APIs, Git, Linux
+
+EDUCATION
+A.A.S. Computer Programming, Lakeside Community College, 2020

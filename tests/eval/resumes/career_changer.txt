@@ -1,0 +1,30 @@
+Alex Nguyen
+Data Analyst → Analytics Engineer
+Chicago, IL
+Email: alex.nguyen@example.com  Phone: 312-555-0199
+linkedin.com/in/alexnguyen  •  github.com/alexn
+
+WORK EXPERIENCE
+
+Analytics Engineer | Northwind Retail | January 2023 – Present
+- Built 25 dbt models powering the executive sales dashboard.
+- Reduced data pipeline failures 60% by adding automated tests.
+
+Data Analyst | Northwind Retail | March 2021 – December 2022
+- Wrote SQL reports used by a 12-person merchandising team.
+
+Freelance Data Analyst (Contract) | Self-employed | 2020 – 2021
+- Delivered Tableau dashboards for three small e-commerce clients.
+
+Marketing Coordinator | Glenbrook Media | 2017 – 2020
+- Managed email campaigns reaching 50,000 subscribers.
+
+SKILLS
+SQL, Python, dbt, Tableau, Snowflake, Excel
+
+EDUCATION
+B.A. Economics, Loyola University Chicago, 2013 – 2017
+
+CERTIFICATIONS
+dbt Analytics Engineering Certification
+Tableau Desktop Specialist

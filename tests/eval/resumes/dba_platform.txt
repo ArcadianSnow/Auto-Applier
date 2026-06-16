@@ -1,0 +1,38 @@
+Morgan Reyes
+Senior Database Administrator
+Austin, TX | morgan.reyes@example.com | (512) 555-0142
+LinkedIn: linkedin.com/in/morganreyes | GitHub: github.com/mreyes-db
+
+SUMMARY
+Database administrator with 9 years running production SQL Server and PostgreSQL
+estates, moving toward platform and reliability engineering.
+
+EXPERIENCE
+
+Senior Database Administrator — Brightwave Logistics
+Mar 2021 – Present | Austin, TX
+- Refactored a 12 TB SQL Server warehouse, cutting nightly ETL runtime from 6 hours to 90 minutes.
+- Led the migration of 40+ production databases to Azure SQL with zero data loss.
+- Built an automated backup-verification job covering 190+ databases.
+- Mentored 3 junior DBAs on indexing and query tuning.
+
+Database Administrator — Cedar Point Health
+Jun 2017 – Feb 2021 | Dallas, TX
+- Tuned slow queries across a 200-table OLTP system, cutting average response time 35%.
+- Implemented Always On availability groups for a 99.99% uptime SLA.
+- Automated index maintenance with PowerShell, saving roughly 10 hours a week.
+
+Database Developer — Tin Roof Software
+Aug 2015 – May 2017 | Dallas, TX
+- Wrote T-SQL stored procedures and ETL packages for a retail analytics product.
+
+SKILLS
+Databases: SQL Server, Azure SQL, PostgreSQL, T-SQL
+Cloud & Tools: Azure, PowerShell, Git, Docker
+Practices: index tuning, query optimization, high availability, ETL
+
+EDUCATION
+B.S. Information Systems, University of Texas at Dallas, 2011 – 2015
+
+CERTIFICATIONS
+Microsoft Certified: Azure Database Administrator Associate

@@ -1,0 +1,19 @@
+{
+  "contact": {"name": "Alex Nguyen", "email": "alex.nguyen@example.com", "phone": "312-555-0199", "location": "Chicago, IL", "links": {"LinkedIn": "linkedin.com/in/alexnguyen", "GitHub": "github.com/alexn"}},
+  "work_history": [
+    {"company": "Northwind Retail", "title": "Analytics Engineer", "start": "2023-01", "end": "Present",
+     "bullets": ["Built 25 dbt models powering the executive sales dashboard", "Reduced data pipeline failures 60% by adding automated tests"]},
+    {"company": "Northwind Retail", "title": "Data Analyst", "start": "2021-03", "end": "2022-12",
+     "bullets": ["Wrote SQL reports used by a 12-person merchandising team"]},
+    {"company": "Self-employed", "title": "Freelance Data Analyst", "start": "2020", "end": "2021",
+     "bullets": ["Delivered Tableau dashboards for three small e-commerce clients"]},
+    {"company": "Glenbrook Media", "title": "Marketing Coordinator", "start": "2017", "end": "2020",
+     "bullets": ["Managed email campaigns reaching 50,000 subscribers"]}
+  ],
+  "education": [
+    {"institution": "Loyola University Chicago", "degree": "B.A. Economics", "field_of_study": "Economics", "start": "2013", "end": "2017"}
+  ],
+  "skills": ["SQL", "Python", "dbt", "Tableau", "Snowflake", "Excel"],
+  "certifications": ["dbt Analytics Engineering Certification", "Tableau Desktop Specialist"],
+  "allowed_metrics": ["25 dbt models", "60%", "12-person", "three small e-commerce clients", "50,000 subscribers"]
+}

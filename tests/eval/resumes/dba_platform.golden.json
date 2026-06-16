@@ -1,0 +1,23 @@
+{
+  "contact": {
+    "name": "Morgan Reyes",
+    "email": "morgan.reyes@example.com",
+    "phone": "(512) 555-0142",
+    "location": "Austin, TX",
+    "links": {"LinkedIn": "linkedin.com/in/morganreyes", "GitHub": "github.com/mreyes-db"}
+  },
+  "work_history": [
+    {"company": "Brightwave Logistics", "title": "Senior Database Administrator", "start": "2021-03", "end": "Present",
+     "bullets": ["Refactored a 12 TB SQL Server warehouse, cutting nightly ETL runtime from 6 hours to 90 minutes", "Led the migration of 40+ production databases to Azure SQL with zero data loss"]},
+    {"company": "Cedar Point Health", "title": "Database Administrator", "start": "2017-06", "end": "2021-02",
+     "bullets": ["Tuned slow queries across a 200-table OLTP system, cutting average response time 35%"]},
+    {"company": "Tin Roof Software", "title": "Database Developer", "start": "2015-08", "end": "2017-05",
+     "bullets": ["Wrote T-SQL stored procedures and ETL packages for a retail analytics product"]}
+  ],
+  "education": [
+    {"institution": "University of Texas at Dallas", "degree": "B.S. Information Systems", "field_of_study": "Information Systems", "start": "2011", "end": "2015"}
+  ],
+  "skills": ["SQL Server", "Azure SQL", "PostgreSQL", "T-SQL", "Azure", "PowerShell", "Git", "Docker", "index tuning", "query optimization", "high availability", "ETL"],
+  "certifications": ["Microsoft Certified: Azure Database Administrator Associate"],
+  "allowed_metrics": ["12 TB", "6 hours to 90 minutes", "40+ production databases", "190+ databases", "3 junior DBAs", "200-table", "35%", "99.99%", "10 hours a week"]
+}

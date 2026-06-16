@@ -1,0 +1,15 @@
+{
+  "contact": {"name": "Sam Carter", "email": "sam.carter@example.com", "phone": "", "location": "Remote", "links": {}},
+  "work_history": [
+    {"company": "Folio Apps", "title": "Software Engineer", "start": "2022", "end": "Present",
+     "bullets": ["Build and maintain REST APIs in Python and Flask", "Fixed a caching bug that cut average page load time 20%"]},
+    {"company": "Lakeside Schools", "title": "IT Support Technician", "start": "2020", "end": "2022",
+     "bullets": ["Provided helpdesk support for 300 staff laptops"]}
+  ],
+  "education": [
+    {"institution": "Lakeside Community College", "degree": "A.A.S. Computer Programming", "field_of_study": "Computer Programming", "start": "", "end": "2020"}
+  ],
+  "skills": ["Python", "Flask", "REST APIs", "Git", "Linux"],
+  "certifications": [],
+  "allowed_metrics": ["20%", "300 staff laptops"]
+}

@@ -144,8 +144,23 @@ So decompose the journey into five steps, with the LLM's autonomy bounded at eac
   "Find companies in my field" button → BACKGROUND probe (`POST /api/onboarding/seed-boards/start` +
   `/status` polling; runs off-loop via `asyncio.to_thread` so the ~1 req/s sweep never blocks and the
   user keeps onboarding) → merges verified-live boards into `targeting.*_boards`. Browser-verified
-  (live "probed N · found M" counters update, server stays responsive). **Still to do:** an
-  extraction eval harness (`tests/fixtures/resumes/*` + golden JSON).
+  (live "probed N · found M" counters update, server stays responsive).
+  **✅ Extraction eval harness SHIPPED 2026-06-16 — Direction 1 is now FULLY complete.**
+  `tests/eval/resumes/{dba_platform,early_career,career_changer}.{txt,golden.json}` (3 synthetic,
+  no-PII résumés covering grouped-skill splitting, faithfulness-under-sparsity, and 4-role /
+  same-company-two-titles / contractor completeness) + `tests/eval/test_resume_extract_quality.py`,
+  mirroring the `test_score_quality.py` pattern. The guard is two-sided: FAITHFULNESS = every
+  extracted atom (company/title/skill/cert/institution/degree/metric/name) is token-subset-grounded
+  in the source text (the fabrication-guard analog; bullets + normalized dates excluded);
+  COMPLETENESS vs golden = greedy role match (catches a DROPPED or MERGED role — the qwen3 trap) +
+  skills/metrics coverage. 5 always-run OFFLINE tests validate the golden files + the evaluator
+  (incl. a self-faithfulness check that fails if any golden atom isn't literally in its résumé, and
+  fabrication / dropped-role detectors); 1 `@pytest.mark.eval` LIVE test runs the real model and
+  pins faithful + complete with the prompt version in the failure message. Verified: golden
+  self-faithful on the first run; full suite 1178 passed / 12 deselected; **live `pytest -m eval -k
+  resume` against real qwen3:8b PASSED first attempt (22.4s)** — all 3 fixtures faithful (zero
+  invented atoms), zero dropped roles. Run after any `EXTRACT_FACTBANK`/model change:
+  `AV3_DATA_DIR=…/JobSearch/av3data pytest -m eval -k resume`.
 - **Phase B — Goal elicitation → TargetingConfig. ✅ SHIPPED 2026-06-16.** A scripted goal-elicitation
   CHAT on the targeting step: `auto_applier/onboarding_chat.py` (deterministic ordered steps roles →
   location → comp → priorities; the FLOW is scripted, the local LLM is only a bounded PARSER of each
