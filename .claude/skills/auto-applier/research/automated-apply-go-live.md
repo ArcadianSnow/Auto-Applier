@@ -459,3 +459,46 @@ will reveal which of the 5 have it (the resolver's per-question events show the 
 Build blocker A + `av3 queue`, render the résumé PDF, then run the **dry-run dress rehearsal on 5
 fresh Solutions candidates** and read the per-job results together. No real submit until the user
 watches the first one.
+
+## ⭐ FIRST REAL SUBMIT (2026-06-16) — Greenhouse emails a SECURITY CODE; auto-submit is GATED
+
+The first-ever real `av3 apply --no-dry-run --mode auto` ran on ONE isolated mid-scoring job
+(other 7 queued jobs parked QUEUED_APPLY→REVIEW via a reversible round-trip, then restored):
+**PlanetScale — Solutions Engineer** (8.75, the cleanest form of the batch). Pre-flight was watched
++ verified in a keep-open dry-run (résumé `Joseph Lira Resume.pdf` + an auto-gen cover + all 4
+custom questions all landed on the live form, conf 1.00). **Result: the application did NOT go
+through.**
+
+**What happened.** The bot filled everything and clicked submit (`outcome.submitted=True`,
+`submitted_at` recorded, status **UNCONFIRMED**, run_id `ed8307703886`, ~17s). Greenhouse did NOT
+accept it — it **emailed a one-time security code** (`Greenhouse <no-reply@us.greenhouse-mail.io>`,
+subject *"Security code for your application to PlanetScale"*: "Copy and paste this code into the
+security code field on your application: `cvBXeW0v`. After you enter the code, resubmit your
+application.") and rendered a **security-code field** on the post-submit page. So submission is
+gated behind an **emailed email-ownership / anti-bot verification step**.
+
+**System behaved CORRECTLY (no false positive):** `detect_confirmation` saw no `/confirmation` URL,
+no success text, no validation error, no recognized CAPTCHA → **UNCONFIRMED** → APPLYING→FAILED→
+REVIEW. **APPLIED was NOT set** (so it's retry-safe, no duplicate risk, doesn't count as applied),
+and the bot did NOT try to bypass the gate (it has no email access — correct per the never-bypass-
+a-verification-gate invariant). PlanetScale sits in REVIEW with an UNCONFIRMED Application row.
+
+**STRATEGIC IMPLICATION (big).** The new `job-boards.greenhouse.io` React layout gates the SUBMIT
+itself behind an emailed security code. Whether universal or anti-bot-triggered, it REQUIRES a
+human-in-the-loop email step, so **full-auto submit on Greenhouse is generally NOT achievable** —
+the realistic path is **ASSISTED**: the bot fills, the human reads the emailed code, enters it, and
+resubmits. This is broader than the "Solutions roles assist-pend on screeners" finding — the gate
+is the submit step, so it applies even to a screener-clean form like PlanetScale.
+
+**Detector gaps to fix (next build):**
+1. **Classify the email-security-code page as a verification gate → ASSISTED_PENDING** (like CAPTCHA)
+   with a note "Greenhouse emailed a security code; enter it and resubmit (assisted)". Candidate
+   patterns: "security code", "enter the code", "resubmit your application". Today it falls through
+   to generic UNCONFIRMED → the human gets no hint why.
+2. **Log the post-submit URL + a content snippet** (local event, metadata only, never PII) on every
+   real submit. The post-submit page is NOT recorded today, which made this slow to diagnose — same
+   lesson as the "nothing filled" → resolution-event logging gap.
+
+**To complete PlanetScale:** an assisted run (`av3 apply --mode assisted --keep-open` on the isolated
+job) — bot fills, Joseph enters the emailed code + submits. The code `cvBXeW0v` is likely
+attempt-bound (a fresh attempt emails a new one). Until then PlanetScale stays in REVIEW.

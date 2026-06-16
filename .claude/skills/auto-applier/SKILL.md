@@ -47,6 +47,7 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
 | Application copilot (`av3 ask`, `/copilot`, the evidence audit / honesty gate, sensitive routing, the **freeform/essay DRAFT path** for open-ended questions — BUILD 6) | `research/application-copilot.md` |
 | **Automated apply GO-LIVE** — first real `--no-dry-run` submissions, blockers (human-attestation gate, hand-crafted résumé), why Solutions roles assist-pend, the watched plan | `research/automated-apply-go-live.md` |
 | **Automated apply NEXT BUILD** — forward plan after the field-fill overhaul: cover-letter upload (`#cover_letter`), Tailscale enumerated dropdowns, the diagnostic validation path | `research/automated-apply-next-build.md` |
+| **FUTURE DIRECTIONS (v3.2+ product-ization)** — the 4 forward bets w/ pros/cons/concerns/plans: (1) conversational onboarding + goals→targeting→slugs (and the honest "can a local Ollama model do web research" answer: use the bundled 86k-company dataset, LLM bounded), (4) local-first email outcome loop (IMAP app-password), (3) Greenhouse security-code stand-down test, (2) dashboard overhaul | `research/future-directions.md` |
 | Answer resolver / sensitive fields / salary | `docs/v3-architecture.md` §8b, §8d |
 | Telemetry (relay + Turso) / observability | `docs/v3-architecture.md` §9 |
 
