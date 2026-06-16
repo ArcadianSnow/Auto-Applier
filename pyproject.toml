@@ -80,7 +80,7 @@ av3 = "auto_applier.cli.main:cli"
 include = ["auto_applier*"]
 
 [tool.setuptools.package-data]
-auto_applier = ["db/*.sql", "web/templates/*.html", "web/static/**/*"]
+auto_applier = ["db/*.sql", "web/templates/*.html", "web/static/**/*", "data/*.csv"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

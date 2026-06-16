@@ -238,6 +238,114 @@ def discover(gh_tokens: str | None, lever_sites: str | None, ashby_slugs: str | 
     sys.exit(1 if summary.board_errors else 0)
 
 
+@cli.command("seed-boards")
+@click.option("--titles", "titles", default=None,
+              help="Comma-sep title phrases for relevance (substring). "
+                   "Default: settings.targeting.titles. Ignored with --any-live.")
+@click.option("--ats", "ats_opt", default="greenhouse,lever,ashby", show_default=True,
+              help="Which ATSes to seed (comma-sep).")
+@click.option("--limit", type=int, default=200, show_default=True,
+              help="Max candidate slugs to confirm-probe this run (~1 req/s each). "
+                   "Re-run to grow the list.")
+@click.option("--name-contains", "name_contains", default=None,
+              help="Only probe companies whose name contains this (case-insensitive) — "
+                   "narrows the candidate pool before sampling.")
+@click.option("--relevant-only/--any-live", default=True, show_default=True,
+              help="Keep only boards with a posting matching your titles (default), "
+                   "or any live board.")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Probe + report, but DON'T write the boards into user_config.json.")
+@click.option("--no-cache", is_flag=True, default=False,
+              help="Ignore the probe cache (re-probe even slugs known-dead from a prior run).")
+def seed_boards(titles: str | None, ats_opt: str, limit: int, name_contains: str | None,
+                relevant_only: bool, dry_run: bool, no_cache: bool) -> None:
+    """Find company board slugs matched to YOUR targeting and add them to discovery.
+
+    Confirm-probes candidate slugs from the bundled ATS company directory (~9.9k companies,
+    MIT ats-scrapers) against the public read APIs discovery already uses, keeps the ones that
+    are live and (by default) currently have a posting matching your titles, and merges them
+    into settings.targeting.*_boards. This is what makes a NEW user's discovery return jobs in
+    their field instead of the fixed starter set. Read-only against the ATS; no login, no
+    browser, no submits. Re-run to grow the list (a probe cache skips known-dead slugs).
+    """
+    import json
+    import random as _random
+
+    from auto_applier.pipeline.seed_worker import BoardSeeder
+    from auto_applier.web.onboarding import load_user_config, save_user_config
+
+    settings = load_settings()
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+
+    def _split(s: str | None) -> list[str]:
+        return [x.strip() for x in s.split(",") if x.strip()] if s else []
+
+    ats_set = set(_split(ats_opt)) or {"greenhouse", "lever", "ashby"}
+    title_filter = _split(titles) if titles is not None else list(settings.targeting.titles)
+
+    cache_path = settings.data_dir / "ats_probe_cache.json"
+    cache: dict[str, str] = {}
+    if not no_cache and cache_path.exists():
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            cache = {}
+
+    seeder = BoardSeeder(
+        settings=settings,
+        titles=title_filter,
+        relevant_only=relevant_only,
+        ats=ats_set,
+        name_contains=name_contains,
+        limit=limit,
+        rng=_random.Random(),
+        probe_cache=cache,
+    )
+
+    filt = f"titles={title_filter}" if (relevant_only and title_filter) else "ANY live board"
+    click.echo(
+        f"Seeding boards [ats={sorted(ats_set)}] [{filt}] — confirm-probing up to "
+        f"{limit} candidate(s) at ~1 req/s..."
+    )
+    summary = seeder.run()
+
+    click.echo(
+        f"probed={summary.probed} kept={summary.kept} dead={summary.dead} "
+        f"live_empty={summary.live_empty} irrelevant={summary.live_irrelevant} "
+        f"cached_skip={summary.cached_skip} elapsed={summary.elapsed_s:.1f}s"
+    )
+    for ats, slugs in sorted(summary.added.items()):
+        shown = ", ".join(slugs[:12]) + (" …" if len(slugs) > 12 else "")
+        click.echo(f"  + {ats:11} {len(slugs)}: {shown}")
+    for note in summary.notes:
+        click.echo(f"  ! {note}")
+
+    # Persist the probe cache (politeness on re-runs) regardless of dry-run.
+    if not no_cache:
+        try:
+            cache_path.write_text(json.dumps(cache), encoding="utf-8")
+        except OSError:
+            pass
+
+    if dry_run:
+        click.echo("dry-run: boards NOT written to user_config.json.")
+        return
+    if summary.kept == 0:
+        click.echo("nothing new to add.")
+        return
+
+    merged = seeder.merged_targeting(summary)
+    cfg = load_user_config(settings.data_dir)
+    cfg.setdefault("targeting", {})
+    for key, lst in merged.items():
+        cfg["targeting"][key] = lst
+    save_user_config(settings.data_dir, cfg)
+    click.echo(
+        f"wrote {summary.kept} new board(s) into "
+        f"{settings.data_dir / 'user_config.json'} (targeting.*_boards)."
+    )
+
+
 # Compact location-priority tags for the digest line (see domain/location.py).
 _LOC_TAG = {
     0: "★EU-remote", 1: "US/remote", 2: "EU-onsite", 3: "remote-oth", 4: "onsite-oth",

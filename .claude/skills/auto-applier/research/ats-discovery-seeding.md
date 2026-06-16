@@ -187,10 +187,44 @@ The seeding research above is now **implemented and wired** (was the standing
 - **Tests:** `tests/test_discovery.py` (worker contract + scheduler wiring), 15 new,
   full suite 749 green / 11 deselected.
 
-**Not yet done (future):** open-dataset bulk seeding (OpenJobs / ats-scrapers import),
-search-engine harvest crawler, JobSpy board-board discovery, and a persisted
-`ats_boards.csv` with `last_seen_jobs`/`last_checked` decay. The config-list approach is
-the v3.0 seam; those are the Phase-2 scaling items from the section above.
+**Not yet done (future):** search-engine harvest crawler, JobSpy board-board discovery, and a
+persisted `ats_boards.csv` with `last_seen_jobs`/`last_checked` decay. (Open-dataset bulk seeding
+is now DONE — see below.)
+
+## Wired (2026-06-16) — `av3 seed-boards` (open-dataset bulk seeding, Phase-2 item closed)
+
+The "open-dataset bulk seeding" Phase-2 item is implemented. It's the **MVP unlock** for
+anyone-but-the-author: a new user no longer hand-lists board slugs, and discovery returns jobs in
+*their* field instead of the fixed `targeting.*_boards` starter set. (Ref:
+`research/future-directions.md` Direction 1, Phase C.)
+
+- **Bundled directory** — `auto_applier/data/ats_companies.csv` (`ats,name,slug`, ~9,935 companies:
+  greenhouse 4,966 / lever 2,113 / ashby 2,856), built from the MIT `kalil0321/ats-scrapers` per-ATS
+  CSVs. Shipped as package data (`pyproject` `package-data` → `data/*.csv`), so seeding has **no
+  runtime web egress** — the only network is the confirm-probe against the same public read APIs
+  discovery already uses. Loader: `auto_applier/sources/ats_directory.py`
+  (`load_ats_directory(ats=, name_contains=)` via `importlib.resources`).
+- **Seeder** — `auto_applier/pipeline/seed_worker.py` `BoardSeeder`. Reuses the discovery mechanic
+  (no reinvention): for each candidate slug (shuffled sample, bounded by `--limit`, cached) it calls
+  the SAME `Source.discover(token)` (self-throttled ~1 req/s); a board is KEPT iff it's **live** AND —
+  under the default relevant-only mode — currently has ≥1 posting whose title matches via
+  `title_matches(…, targeting.titles)`. `--any-live` keeps any live board. Verified slugs merge into
+  `targeting.*_boards` (dedup, existing kept) and persist to `user_config.json`. A probe cache
+  (`data/ats_probe_cache.json`, `ats:slug → "live"|"dead"`) skips known-dead slugs on re-runs; live
+  slugs are re-probed (their openings/relevance change). Candidates shuffled so a bounded probe is a
+  representative sample; **re-run to grow the list**.
+- **CLI** — `av3 seed-boards [--titles ..] [--ats gh,lever,ashby] [--limit N=200] [--name-contains KW]
+  [--relevant-only/--any-live] [--dry-run] [--no-cache]`. Read-only against the ATS; no login/browser/
+  submit.
+- **Honest answer to "can a local Ollama model do web research?"** — sidestepped. The slug problem is
+  solved offline by the bundled directory + the deterministic confirm-probe; **no LLM and no web search
+  are in this path.** An LLM ranker / web-search expansion remain optional future enhancements
+  (future-directions.md Direction 1, Phase D), never load-bearing.
+- **Verified (2026-06-16):** 13 unit tests (`tests/test_seed_boards.py`, injected sources, no HTTP),
+  full suite **1123 green**. Live smoke: `--any-live --limit 15` → 11 live boards kept (0 dead this
+  sample), ~15s; `--titles engineer --limit 12` → 4 kept, **7 correctly dropped as irrelevant**, 0
+  dead — the relevance filter works end-to-end against the real APIs. NOT committed (awaiting the
+  owner's go).
 
 ## Sources (verified)
 
