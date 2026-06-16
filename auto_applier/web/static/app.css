@@ -516,6 +516,38 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   opacity: 0.5; cursor: progress;
 }
 
+/* hide Alpine-gated blocks until the component initializes (no flash) */
+[x-cloak] { display: none !important; }
+
+/* ---------------- onboarding goal-elicitation chat ---------------- */
+.goal-chat-launch { margin: 0.6rem 0; display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.goal-chat {
+  margin: 0.6rem 0 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft);
+  padding: 0.7rem;
+}
+.goal-chat-log {
+  max-height: 18rem;
+  overflow-y: auto;          /* scroll, never clip the conversation */
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.2rem;
+}
+.gc-msg {
+  max-width: 85%;
+  padding: 0.45rem 0.7rem;
+  border-radius: 10px;
+  white-space: pre-wrap;     /* preserve the summary's line breaks */
+  line-height: 1.35;
+}
+.gc-bot { align-self: flex-start; background: var(--bg); border: 1px solid var(--border); }
+.gc-you { align-self: flex-end; background: var(--accent-soft); }
+.goal-chat-input { display: flex; gap: 0.5rem; margin-top: 0.6rem; }
+.goal-chat-input input { flex: 1; }
+
 /* ---------------- job detail page ---------------- */
 .job-detail .score-total {
   margin-left: 0.4rem;

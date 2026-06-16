@@ -30,6 +30,10 @@ function onboarding() {
     extractNote: '',
     seed: { status: 'idle', probed: 0, kept: 0, dead: 0, note: '', error: '' },
     _seedPoll: null,
+    goalChat: {
+      open: false, busy: false, done: false, applied: false,
+      step: null, answer: '', messages: [], draft: {},
+    },
 
     contact: { name: '', email: '', phone: '', location: '', links: {} },
     workHistory: [],
@@ -37,7 +41,7 @@ function onboarding() {
     workAuth: { work_authorization: '', requires_sponsorship: null },
     targeting: {
       titles: [], locations: [], remote_ok: true, onsite_ok: true,
-      salary_floor: null, seniority: '',
+      salary_floor: null, seniority: '', preferences: [],
     },
     targetingTitlesText: '',
     targetingLocationsText: '',
@@ -100,6 +104,7 @@ function onboarding() {
         onsite_ok: t.onsite_ok !== false,
         salary_floor: t.salary_floor ?? null,
         seniority: t.seniority || '',
+        preferences: t.preferences || [],
       };
       this.targetingTitlesText = (t.titles || []).join('\n');
       this.targetingLocationsText = (t.locations || []).join('\n');
@@ -335,10 +340,77 @@ function onboarding() {
           this.targeting.salary_floor === ''
             ? null : Number(this.targeting.salary_floor),
         seniority: this.targeting.seniority || '',
+        preferences: Array.isArray(this.targeting.preferences)
+          ? this.targeting.preferences : [],
       };
       if (await this._post('/api/onboarding/targeting', payload)) {
         this.step = 'telemetry';
       }
+    },
+
+    // ---- goal-elicitation chat (Direction 1, Phase B) ---------------------------------------
+    // A scripted Q&A that fills the targeting form for the user who isn't sure what to type. The
+    // server scripts the questions + parses each answer (LLM-as-parser, deterministic fallback);
+    // we just relay turns and, when done, drop the draft into the form for REVIEW (never auto-save).
+
+    async startGoalChat() {
+      this.goalChat = {
+        open: true, busy: true, done: false, applied: false,
+        step: null, answer: '', messages: [], draft: {},
+      };
+      await this._goalPost('');  // empty step => server returns the first question
+    },
+
+    async sendGoalAnswer() {
+      const text = (this.goalChat.answer || '').trim();
+      if (!text || this.goalChat.busy || this.goalChat.done) return;
+      this.goalChat.messages.push({ role: 'you', text });
+      const step = this.goalChat.step;
+      this.goalChat.answer = '';
+      this.goalChat.busy = true;
+      await this._goalPost(step, text);
+    },
+
+    async _goalPost(step, answer) {
+      try {
+        const r = await fetch('/api/onboarding/goal-chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ step, answer: answer || '', draft: this.goalChat.draft }),
+        });
+        if (!r.ok) {
+          const e = await r.json().catch(() => ({}));
+          this.goalChat.messages.push(
+            { role: 'bot', text: `Sorry, something went wrong: ${e.detail || r.statusText}` });
+          return;
+        }
+        const data = await r.json();
+        this.goalChat.draft = data.draft || this.goalChat.draft;
+        this.goalChat.step = data.next_step;
+        this.goalChat.done = !!data.done;
+        if (data.reply) this.goalChat.messages.push({ role: 'bot', text: data.reply });
+      } catch (e) {
+        this.goalChat.messages.push({ role: 'bot', text: `Error: ${e}` });
+      } finally {
+        this.goalChat.busy = false;
+      }
+    },
+
+    applyGoalDraft() {
+      // Drop the chat's collected draft into the targeting form for review. Mirrors the résumé
+      // prefill: fills fields, does NOT save — the user clicks Save & continue when happy.
+      const d = this.goalChat.draft || {};
+      if (Array.isArray(d.titles)) this.targetingTitlesText = d.titles.join('\n');
+      if (Array.isArray(d.locations)) this.targetingLocationsText = d.locations.join('\n');
+      this.targeting.remote_ok = d.remote_ok !== false;
+      this.targeting.onsite_ok = d.onsite_ok !== false;
+      if (d.salary_floor !== undefined && d.salary_floor !== null) {
+        this.targeting.salary_floor = d.salary_floor;
+      }
+      if (d.seniority) this.targeting.seniority = d.seniority;
+      this.targeting.preferences = Array.isArray(d.preferences) ? d.preferences : [];
+      this.goalChat.applied = true;
+      this.goalChat.open = false;
     },
 
     async saveTelemetry() {

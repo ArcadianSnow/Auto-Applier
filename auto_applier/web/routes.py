@@ -842,12 +842,69 @@ async def onboarding_targeting(request: Request) -> dict:
     # caller didn't include. Lists default to [] when the caller sends
     # them so "I cleared all titles" works.
     for k in ("titles", "locations", "remote_ok", "onsite_ok",
-              "salary_floor", "seniority"):
+              "salary_floor", "seniority", "preferences"):
         if k in payload:
             targeting[k] = payload[k]
     cfg["targeting"] = targeting
     save_user_config(web_state.settings.data_dir, cfg)
     return onboarding_status(web_state.settings.data_dir).to_dict()
+
+
+@api_router.post("/onboarding/goal-chat")
+async def onboarding_goal_chat(request: Request) -> dict:
+    """Drive the scripted goal-elicitation chat one turn at a time (Direction 1, Phase B).
+
+    Stateless: the client sends the step it's answering, the user's free-text answer, and the
+    draft-so-far; the server parses the answer into targeting fields (the LLM is a bounded parser
+    with a deterministic fallback — see :mod:`auto_applier.onboarding_chat`), merges into the draft,
+    and returns the next scripted question. Payload:
+    ``{"step": "roles"|null, "answer": "...", "draft": {...}}`` — a missing/empty ``step`` means
+    "start" and returns the first question without parsing anything.
+
+    Does NOT persist: it returns the evolving ``draft`` for the wizard to show for REVIEW; the user
+    then saves via ``/onboarding/targeting`` (the single writer), exactly like the résumé-upload
+    prefill. Reply object: ``{"reply", "next_step", "draft", "done", "updates"}``."""
+    from auto_applier.llm.complete import build_default
+    from auto_applier.onboarding_chat import (
+        apply_updates,
+        first_step,
+        next_step_after,
+        parse_answer,
+        step_for_key,
+        summarize,
+    )
+
+    payload = await _read_json_dict(request)
+    step_key = str(payload.get("step") or "")
+    answer = str(payload.get("answer") or "")
+    draft = payload.get("draft") or {}
+    if not isinstance(draft, dict):
+        raise HTTPException(status_code=400, detail="draft must be an object")
+
+    if not step_key:
+        s = first_step()
+        return {"reply": s.question, "next_step": s.key, "draft": draft,
+                "done": False, "updates": {}}
+
+    if step_for_key(step_key) is None:
+        raise HTTPException(status_code=400, detail=f"unknown step '{step_key}'")
+
+    web_state = _get_state(request)
+    # Best-effort LLM: parse_answer falls back to deterministic parsing if this is None or errors,
+    # so a missing/unreachable Ollama degrades the parse rather than breaking the chat.
+    try:
+        llm = build_default(web_state.settings)
+    except Exception:  # noqa: BLE001
+        llm = None
+
+    updates = await parse_answer(step_key, answer, llm)
+    draft = apply_updates(draft, updates)
+    nxt = next_step_after(step_key)
+    if nxt is None:
+        return {"reply": summarize(draft), "next_step": None, "draft": draft,
+                "done": True, "updates": updates}
+    return {"reply": nxt.question, "next_step": nxt.key, "draft": draft,
+            "done": False, "updates": updates}
 
 
 # -- background "find companies" (seed-boards) for the targeting step ----------------

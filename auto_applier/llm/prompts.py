@@ -458,6 +458,31 @@ EXTRACT_FACTBANK = PromptTemplate(
 )
 
 
+GOAL_ELICIT = PromptTemplate(
+    version="goal-elicit-v1",
+    system=(
+        "You turn a job-seeker's free-text answer into structured job-search targeting fields. "
+        "The flow is scripted — your ONLY job is to parse this one answer, not to ask questions, "
+        "give advice, or carry a conversation.\n\n"
+        "Rules:\n"
+        "  - Output ONE JSON object with EXACTLY the keys requested below and nothing else "
+        "(no prose, no code fences, no preamble).\n"
+        "  - Extract only what the answer states or clearly implies. Do NOT invent job titles, "
+        "companies, salary numbers, or preferences the person did not express.\n"
+        "  - If a requested field isn't addressed, use its empty value: [] for a list, \"\" for "
+        "a string, true for the remote/onsite flags only when the answer clearly indicates it.\n"
+        "  - Normalize job titles to common, searchable phrasing (e.g. 'sr be dev' → 'Senior "
+        "Backend Engineer'); split multiple titles into separate list entries.\n"
+        "  - seniority must be one of: junior, mid, senior, staff, or \"\" (unstated)."
+    ),
+    template=(
+        "Question they were asked: {question}\n\n"
+        "Their answer: {answer}\n\n"
+        "Return JSON with EXACTLY these keys:\n{fields}"
+    ),
+)
+
+
 #: All templates exported here so the eval harness can iterate them.
 ALL_TEMPLATES: tuple[PromptTemplate, ...] = (
     SCORE_JD,
@@ -468,6 +493,7 @@ ALL_TEMPLATES: tuple[PromptTemplate, ...] = (
     COPILOT_ANSWER,
     COPILOT_DRAFT,
     EXTRACT_FACTBANK,
+    GOAL_ELICIT,
 )
 
 
@@ -479,6 +505,7 @@ __all__ = [
     "EXTRACT_FACTBANK",
     "GENERATE_COVER_LETTER",
     "GENERATE_RESUME",
+    "GOAL_ELICIT",
     "SCORE_JD",
     "STAR_STORIES",
     "PromptTemplate",

@@ -144,13 +144,22 @@ So decompose the journey into five steps, with the LLM's autonomy bounded at eac
   "Find companies in my field" button → BACKGROUND probe (`POST /api/onboarding/seed-boards/start` +
   `/status` polling; runs off-loop via `asyncio.to_thread` so the ~1 req/s sweep never blocks and the
   user keeps onboarding) → merges verified-live boards into `targeting.*_boards`. Browser-verified
-  (live "probed N · found M" counters update, server stays responsive). **Still to do:** the
-  goal-elicitation chat (Phase B) and an extraction eval harness (`tests/fixtures/resumes/*` + golden
-  JSON).
-- **Phase B — Goal elicitation → TargetingConfig.** Scripted conversational step (new onboarding
-  sub-route + a small state machine). Writes `titles/locations/remote/salary_floor/seniority` + a new
-  `preferences` blob (soft signals for ranking). **Deliverable:** the chat produces the structured
-  targeting the pipeline already consumes.
+  (live "probed N · found M" counters update, server stays responsive). **Still to do:** an
+  extraction eval harness (`tests/fixtures/resumes/*` + golden JSON).
+- **Phase B — Goal elicitation → TargetingConfig. ✅ SHIPPED 2026-06-16.** A scripted goal-elicitation
+  CHAT on the targeting step: `auto_applier/onboarding_chat.py` (deterministic ordered steps roles →
+  location → comp → priorities; the FLOW is scripted, the local LLM is only a bounded PARSER of each
+  free-text answer, with a deterministic keyword/regex fallback so a missing/erroring Ollama never
+  breaks the chat — and `comp` is regex-only). `POST /api/onboarding/goal-chat` (stateless: {step,
+  answer, draft} → next question; does NOT persist — returns a DRAFT the wizard fills into the
+  targeting form for REVIEW, the existing `/onboarding/targeting` writer stays the single writer).
+  Prompt `GOAL_ELICIT` (`goal-elicit-v1`, think=False + num_predict=512 per the qwen3 finding). New
+  `TargetingConfig.preferences: list[str]` (soft signals; not yet pipeline-consumed — the forward hook
+  for Phase C's bounded ranker). Wizard: collapsible "Not sure what to target?" chat panel (Alpine,
+  scrollable log). 33 new tests; full suite **1173 green**. Live-verified through the real qwen3:8b
+  (correctly parsed target roles, both locations + remote/onsite flags, $140k floor, clean preference
+  phrases) + browser-smoked end-to-end (4-turn walk → "Use these answers" fills the form, 0 console
+  errors). **Deliverable met:** the chat produces the structured targeting the pipeline consumes.
 - **Phase C — Dataset → candidate slugs → probe → boards.** Bundle one dataset as
   `data/ats_companies.csv` (or shipped resource); deterministic filter by criteria; LLM rank over the
   finite candidate list; confirm-probe via `DiscoverWorker`; user approves; write `targeting.*_boards`.

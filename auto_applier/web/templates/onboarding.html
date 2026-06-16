@@ -145,6 +145,44 @@
         producer; salary floor filters out below-floor postings before
         scoring.
       </p>
+
+      {# goal-elicitation chat: fills the form for anyone unsure what to type #}
+      <div class="goal-chat-launch">
+        <button type="button" class="secondary-btn" x-show="!goalChat.open"
+                @click="startGoalChat()">
+          Not sure what to target? Let&rsquo;s figure it out together
+        </button>
+        <span class="muted small" x-show="goalChat.applied">
+          &check; Filled from the chat &mdash; review below before saving.
+        </span>
+      </div>
+      <div class="goal-chat" x-show="goalChat.open" x-cloak>
+        <div class="goal-chat-log">
+          <template x-for="(m, i) in goalChat.messages" :key="i">
+            <div :class="m.role === 'you' ? 'gc-msg gc-you' : 'gc-msg gc-bot'">
+              <span x-text="m.text"></span>
+            </div>
+          </template>
+          <div class="muted small" x-show="goalChat.busy">thinking&hellip;</div>
+        </div>
+        <div class="goal-chat-input" x-show="!goalChat.done">
+          <input type="text" x-model="goalChat.answer" :disabled="goalChat.busy"
+                 placeholder="Type your answer&hellip;"
+                 @keydown.enter.prevent="sendGoalAnswer()">
+          <button type="button" class="primary-btn"
+                  :disabled="goalChat.busy || !goalChat.answer.trim()"
+                  @click="sendGoalAnswer()">Send</button>
+        </div>
+        <div class="action-row" x-show="goalChat.done">
+          <button type="button" class="primary-btn" @click="applyGoalDraft()">
+            Use these answers
+          </button>
+          <button type="button" class="secondary-btn" @click="goalChat.open = false">
+            Close
+          </button>
+        </div>
+      </div>
+
       <label>Job titles (comma or newline separated)
         <textarea rows="3" x-model="targetingTitlesText"
                   placeholder="Senior Data Engineer, Staff ML Engineer"></textarea>

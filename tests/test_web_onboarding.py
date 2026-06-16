@@ -464,6 +464,81 @@ class TestEndpointTargeting:
         assert cfg["targeting"]["locations"] == ["L"]
 
 
+    def test_persists_preferences(self, settings: Settings, web_state: WebState):
+        # The goal-chat's soft-preferences blob round-trips through the single targeting writer.
+        with _make_client(web_state) as client:
+            r = client.post("/api/onboarding/targeting", json={
+                "titles": ["Backend Engineer"],
+                "preferences": ["work-life balance", "Python stack"],
+            })
+        assert r.status_code == 200
+        cfg = load_user_config(settings.data_dir)
+        assert cfg["targeting"]["preferences"] == ["work-life balance", "Python stack"]
+
+
+class TestGoalChat:
+    """The scripted goal-elicitation chat endpoint (Direction 1, Phase B). A combined stub payload
+    serves every step — each step's finalize picks only its own keys."""
+
+    _PAYLOAD = {
+        "titles": ["Senior Backend Engineer"], "seniority": "senior",
+        "locations": ["Remote (US)"], "remote_ok": True, "onsite_ok": False,
+        "preferences": ["work-life balance"],
+    }
+
+    def _client(self, web_state, monkeypatch):
+        import auto_applier.llm.complete as cmod
+        monkeypatch.setattr(cmod, "build_default",
+                            lambda settings: _StubLLM(self._PAYLOAD))
+        return _make_client(web_state)
+
+    def test_start_returns_first_question(self, web_state, monkeypatch):
+        client = self._client(web_state, monkeypatch)
+        r = client.post("/api/onboarding/goal-chat", json={})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["next_step"] == "roles"
+        assert body["done"] is False
+        assert body["reply"]  # the scripted first question
+
+    def test_answer_advances_and_fills_draft(self, web_state, monkeypatch):
+        client = self._client(web_state, monkeypatch)
+        r = client.post("/api/onboarding/goal-chat",
+                        json={"step": "roles", "answer": "sr be dev", "draft": {}})
+        body = r.json()
+        assert body["next_step"] == "location"
+        assert body["draft"]["titles"] == ["Senior Backend Engineer"]
+        assert body["draft"]["seniority"] == "senior"
+
+    def test_unknown_step_is_400(self, web_state, monkeypatch):
+        client = self._client(web_state, monkeypatch)
+        r = client.post("/api/onboarding/goal-chat",
+                        json={"step": "bogus", "answer": "x", "draft": {}})
+        assert r.status_code == 400
+
+    def test_full_walk_to_done_produces_draft(self, web_state, monkeypatch):
+        client = self._client(web_state, monkeypatch)
+        draft: dict = {}
+        # roles → location → comp → priorities; the last turn is done.
+        for step, answer in [
+            ("roles", "senior backend engineer"),
+            ("location", "remote in the US"),
+            ("comp", "150k"),
+            ("priorities", "work-life balance"),
+        ]:
+            r = client.post("/api/onboarding/goal-chat",
+                            json={"step": step, "answer": answer, "draft": draft})
+            assert r.status_code == 200
+            body = r.json()
+            draft = body["draft"]
+        assert body["done"] is True
+        assert draft["titles"] == ["Senior Backend Engineer"]
+        assert draft["salary_floor"] == 150000           # deterministic parse
+        assert draft["preferences"] == ["work-life balance"]
+        # The chat does NOT persist — nothing is written until the user saves via /targeting.
+        assert client.get("/api/onboarding/state").json()["has_targeting"] is False
+
+
 class TestEndpointTelemetry:
 
     def test_disabled_decision_counts(

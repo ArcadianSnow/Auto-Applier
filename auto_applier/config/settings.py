@@ -175,6 +175,13 @@ class TargetingConfig(BaseModel):
     salary_floor: int | None = None  # USD/year; None = no floor
     seniority: str = ""              # "junior" | "mid" | "senior" | "staff" | "" any
 
+    # Soft preference signals (free-text phrases like "strong work-life balance",
+    # "Python/Postgres stack", "no on-call") gathered by the onboarding goal-elicitation
+    # chat (research/future-directions.md Direction 1, Phase B). NOT a hard filter today —
+    # a forward hook for Phase C's bounded LLM ranker, which ranks dataset candidates against
+    # these. Stored here so the structured-or-conversational entry path is invisible downstream.
+    preferences: list[str] = Field(default_factory=list)
+
     # ATS board identifiers the discovery producer sweeps (research/ats-discovery-seeding.md).
     # These are per-company slugs/tokens you already know — there is no list-all endpoint
     # for any ATS. Seeded with a small confirmed-live starter set (confirm-probe sweep
