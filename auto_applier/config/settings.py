@@ -300,6 +300,37 @@ class RetentionConfig(BaseModel):
         return self
 
 
+class InboxConfig(BaseModel):
+    """Local-first email outcome loop config (email-outcome-loop, Direction 4).
+
+    Non-secret IMAP connection settings. The app-password is NEVER a field here — it
+    is read from ``os.environ["AV3_IMAP_PASSWORD"]`` at connect time (Phase C), matching
+    the project's `.env`-only secrets rule (never in user_config.json).
+
+    Default OFF + Gmail defaults: a fresh install reads no mail until the user opts in
+    (sets ``enabled`` + ``user``). The offline ``av3 inbox --eml`` path works regardless,
+    so Phase B is fully exercisable without ever enabling this.
+    """
+
+    enabled: bool = False
+    host: str = "imap.gmail.com"
+    port: int = 993
+    user: str | None = None
+    folder: str = "INBOX"
+    since_days: int = 30
+    poll_interval_s: float = 300.0
+
+    @model_validator(mode="after")
+    def _knobs_sane(self) -> "InboxConfig":
+        if not (1 <= self.port <= 65535):
+            raise ValueError(f"inbox.port must be 1..65535 (got {self.port})")
+        if self.since_days <= 0:
+            raise ValueError("inbox.since_days must be > 0")
+        if self.poll_interval_s <= 0:
+            raise ValueError("inbox.poll_interval_s must be > 0")
+        return self
+
+
 class Settings(BaseModel):
     """Root settings object. Construct via ``load_settings()``."""
 
@@ -314,6 +345,7 @@ class Settings(BaseModel):
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     web: WebConfig = Field(default_factory=WebConfig)
     targeting: TargetingConfig = Field(default_factory=TargetingConfig)
+    inbox: InboxConfig = Field(default_factory=InboxConfig)
 
     #: Owner opt-in (default OFF): auto-fill a STATIC "which best describes you? [human/AI]"
     #: self-ID FORM FIELD with the human option. The applicant is human, and such a field is a

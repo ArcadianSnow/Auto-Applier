@@ -82,3 +82,28 @@ CREATE TABLE IF NOT EXISTS answers (
     embedding   BLOB,
     updated_at  TEXT NOT NULL
 );
+
+-- Inbox-side idempotency for the email outcome loop (email-outcome-loop Phase B,
+-- research/future-directions.md Direction 4). One row per processed message_id so a
+-- re-run never records a duplicate outcome. ``action`` is the routing decision:
+--   outcome  -> a confident match+class produced an OutcomeRepo row (matched_job_id set)
+--   review   -> ambiguous / no confident match -> surfaced to the human (no outcome row)
+--   ignored  -> not a job-status email (newsletter / pure security-code) -> dropped
+-- The outcome itself lives in the `outcomes` table (the existing analytics path); this
+-- table records only that the message was seen and how it was routed.
+CREATE TABLE IF NOT EXISTS inbox_messages (
+    message_id      TEXT PRIMARY KEY,
+    matched_job_id  TEXT,                       -- NULL when no job matched
+    kind            TEXT,                       -- OutcomeKind value, or NULL (ignored/no-kind)
+    action          TEXT NOT NULL,              -- 'outcome' | 'review' | 'ignored'
+    noted_at        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_inbox_messages_action ON inbox_messages (action);
+
+-- Per-folder IMAP fetch cursor (last seen UID) so a live fetch (Phase C) only pulls new
+-- mail. Kept tiny + separate from message dedup; offline `--eml` runs never touch it.
+CREATE TABLE IF NOT EXISTS inbox_state (
+    folder    TEXT PRIMARY KEY,
+    last_uid  INTEGER NOT NULL
+);

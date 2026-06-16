@@ -1148,6 +1148,112 @@ def outcome_cmd(job_id: str, kind: str, note: str) -> None:
     click.echo(f"recorded outcome={rec.kind.value} job={job_id} at={rec.noted_at}")
 
 
+@cli.command("inbox")
+@click.option("--eml", "eml_paths", multiple=True, type=click.Path(exists=True, dir_okay=False),
+              help="Ingest these saved .eml file(s) through the worker (offline, no creds). "
+                   "The no-IMAP dogfood/demo path — pass it multiple times for several emails.")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Classify + match + print, write NOTHING (no outcomes, no inbox state). "
+                   "Genuinely side-effect-free.")
+@click.option("--since-days", type=int, default=None,
+              help="Only consider mail newer than N days (live fetch; default settings.inbox.since_days).")
+@click.option("--review", "show_review", is_flag=True, default=False,
+              help="Print messages routed to review (no ingest), then exit.")
+@click.option("--status", "show_status", is_flag=True, default=False,
+              help="Print inbox config + last-uid state WITHOUT connecting, then exit.")
+def inbox_cmd(eml_paths: tuple[str, ...], dry_run: bool, since_days: int | None,
+              show_review: bool, show_status: bool) -> None:
+    """Read the local inbox for application outcomes and drive the outcome ladder
+    (email-outcome-loop, Direction 4).
+
+    A confident confirmation/rejection/interview/offer that matches an APPLIED job records
+    an outcome (the same path `av3 outcome` uses → conversion analytics picks it up).
+    Ambiguous or unmatched mail routes to review (`--review`) — never a guessed outcome.
+    Email NEVER marks a job APPLIED.
+
+    Offline: `--eml FILE` ingests a saved email with no IMAP/creds. A live IMAP fetch is
+    Phase C (gated on a Gmail app-password); without it (and without --eml) this prints a
+    friendly nudge and exits 0.
+    """
+    import asyncio
+
+    from auto_applier.inbox import (
+        InboxMessageRepo,
+        InboxWorker,
+        eml_file_source,
+    )
+    from auto_applier.llm.complete import build_default
+
+    settings = load_settings()
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    conn = init_app_db(settings.app_db_path)
+    _install_sink(settings)
+
+    try:
+        # --status: report config + cursor WITHOUT connecting.
+        if show_status:
+            ic = settings.inbox
+            last = InboxMessageRepo(conn).last_uid(ic.folder)
+            click.echo("Inbox config:")
+            click.echo(f"  enabled   = {ic.enabled}")
+            click.echo(f"  host:port = {ic.host}:{ic.port}")
+            click.echo(f"  user      = {ic.user or '(unset)'}")
+            click.echo(f"  folder    = {ic.folder}")
+            click.echo(f"  since_days= {ic.since_days}")
+            click.echo(f"  last_uid  = {last if last is not None else '(none yet)'}")
+            click.echo(
+                "  app-password: read from $AV3_IMAP_PASSWORD at connect (Phase C); "
+                "never stored in config."
+            )
+            return
+
+        # --review: show the review queue, no ingest.
+        if show_review:
+            rows = InboxMessageRepo(conn).list_for_review()
+            if not rows:
+                click.echo("No messages routed to review.")
+                return
+            click.echo(f"{len(rows)} message(s) routed to review:")
+            for m in rows:
+                job = m.matched_job_id or "(no match)"
+                click.echo(f"  {m.noted_at}  job={job}  msg={m.message_id}")
+            return
+
+        # No --eml and no live fetcher (Phase C not built / disabled): friendly exit.
+        if not eml_paths:
+            click.echo(
+                "email ingestion not configured yet — use `--eml FILE` to test on a "
+                "saved email, or enable it in onboarding (coming soon)."
+            )
+            return
+
+        source = eml_file_source(list(eml_paths))
+        worker = InboxWorker(
+            settings=settings,
+            conn=conn,
+            llm=build_default(settings),
+            source=source,
+            record=not dry_run,
+        )
+
+        mode = "dry-run (writes nothing)" if dry_run else "recording outcomes"
+        click.echo(f"Ingesting {len(eml_paths)} email(s) [{mode}]...")
+        summary = asyncio.run(worker.run_once())
+    finally:
+        conn.close()
+
+    click.echo(
+        f"fetched={summary.fetched} classified={summary.classified} "
+        f"outcomes={summary.outcomes_recorded} review={summary.routed_to_review} "
+        f"ignored={summary.ignored_non_job} dup={summary.already_processed} "
+        f"sec-code={summary.security_code_flags} errors={summary.errors} "
+        f"elapsed={summary.elapsed_s:.1f}s"
+    )
+    for note in summary.notes:
+        click.echo(f"  ! {note}")
+    sys.exit(1 if summary.errors else 0)
+
+
 @cli.command("analytics")
 @click.option("--json", "as_json", is_flag=True, default=False,
               help="Emit the conversion report as JSON instead of the ASCII tables.")
