@@ -23,6 +23,7 @@ import pytest
 from auto_applier.resume.extract import (
     _coerce_factbank_dict,
     extract_factbank,
+    extract_text_from_bytes,
     extract_text_from_file,
     merge_extracted,
 )
@@ -98,6 +99,31 @@ def test_extract_text_unsupported_extension_raises(tmp_path):
     p.write_text("not really a doc", encoding="utf-8")
     with pytest.raises(ValueError):
         extract_text_from_file(p)
+
+
+def test_extract_text_from_bytes_txt():
+    text = extract_text_from_bytes(b"Jane Doe\nSenior Data Analyst at Acme", "resume.txt")
+    assert "Jane Doe" in text and "Acme" in text
+
+
+def test_extract_text_from_bytes_docx():
+    import io
+
+    import docx
+
+    d = docx.Document()
+    d.add_paragraph("Jane Doe")
+    d.add_paragraph("Senior Data Analyst at Acme")
+    buf = io.BytesIO()
+    d.save(buf)
+
+    text = extract_text_from_bytes(buf.getvalue(), "resume.docx")
+    assert "Jane Doe" in text and "Senior Data Analyst" in text
+
+
+def test_extract_text_from_bytes_unsupported_raises():
+    with pytest.raises(ValueError):
+        extract_text_from_bytes(b"whatever", "resume.doc")
 
 
 # --------------------------------------------------------------- extract_factbank

@@ -26,6 +26,8 @@ function onboarding() {
     busy: false,
     lastSavedNote: '',
     status: null,
+    extracting: false,
+    extractNote: '',
 
     contact: { name: '', email: '', phone: '', location: '', links: {} },
     workHistory: [],
@@ -150,6 +152,55 @@ function onboarding() {
 
     removeWork(idx) {
       this.workHistory.splice(idx, 1);
+    },
+
+    async extractResume(ev) {
+      // Upload a résumé → server extracts a fact-bank DRAFT → pre-fill the résumé-derived steps
+      // for the user to REVIEW. Nothing is saved here; the per-step Save buttons still persist.
+      const f = ev?.target?.files?.[0];
+      if (!f) return;
+      this.extracting = true;
+      this.extractNote = '';
+      try {
+        // FileReader → data URL → strip the "data:...;base64," prefix → raw base64 (robust for
+        // any size; avoids spreading a large byte array). base64-in-JSON => no multipart needed.
+        const b64 = await new Promise((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(String(fr.result).split(',', 2)[1] || '');
+          fr.onerror = () => reject(fr.error);
+          fr.readAsDataURL(f);
+        });
+        const r = await fetch('/api/onboarding/extract-resume', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: f.name, content_b64: b64 }),
+        });
+        if (!r.ok) {
+          const e = await r.json().catch(() => ({}));
+          this.extractNote = `Could not read that file: ${e.detail || r.statusText}`;
+          return;
+        }
+        this._hydrateExtracted(await r.json());
+        this.extractNote = 'Filled from your résumé. Review each step and click Save — '
+          + 'nothing is stored until you do.';
+      } catch (e) {
+        this.extractNote = `Error: ${e}`;
+      } finally {
+        this.extracting = false;
+        if (ev?.target) ev.target.value = '';  // let the user re-pick the same file
+      }
+    },
+
+    _hydrateExtracted(fb) {
+      // Pre-fill ONLY the résumé-derived steps (contact / work history / skills). Never touches
+      // work-auth / targeting / telemetry — a résumé doesn't supply those, and they stay the
+      // user's explicit answers.
+      fb = fb || {};
+      this.contact = { ...this.contact, ...(fb.contact || {}) };
+      this.workHistory = (fb.work_history || []).map(w => ({
+        ...w, bulletsText: (w.bullets || []).join('\n'),
+      }));
+      this.skillsText = (fb.skills || []).join('\n');
     },
 
     async _post(endpoint, payload) {

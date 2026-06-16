@@ -137,8 +137,11 @@ So decompose the journey into five steps, with the LLM's autonomy bounded at eac
   skills, every role), `av3 extract-resume <file> [--save] [--json]`. Live-verified on a real résumé:
   faithful, complete (3 roles + 63 skills), stable. **qwen3 finding:** use Ollama's API `think:false`
   (NOT the in-prompt `/no_think` token — it randomly dropped roles) + a `num_predict` bound;
-  `complete_json` now supports both. **Still to do:** the onboarding WIZARD UI (upload→extract→review
-  in the browser — currently CLI only) and an eval harness (`tests/fixtures/resumes/*` + golden JSON).
+  `complete_json` now supports both. **Wizard UI (Phase C, slice 1) SHIPPED:** the contact step has a
+  résumé upload → `POST /api/onboarding/extract-resume` (base64-in-JSON, no multipart) → pre-fills
+  contact/work/skills for REVIEW (no auto-save; per-step Save still the only writer). Browser-verified
+  (upload → fields populate, 0 console errors). **Still to do:** wire `seed-boards` into the targeting
+  step (slice 2), and an extraction eval harness (`tests/fixtures/resumes/*` + golden JSON).
 - **Phase B — Goal elicitation → TargetingConfig.** Scripted conversational step (new onboarding
   sub-route + a small state machine). Writes `titles/locations/remote/salary_floor/seniority` + a new
   `preferences` blob (soft signals for ranking). **Deliverable:** the chat produces the structured

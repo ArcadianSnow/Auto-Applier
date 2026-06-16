@@ -55,6 +55,64 @@ def _make_client(web_state: WebState) -> TestClient:
     return TestClient(app)
 
 
+# --------------------------------------------------------------- résumé extract endpoint
+
+class _StubLLM:
+    """complete_json returns a fixed fact-bank dict (accepts the think/num_predict kwargs the
+    extractor passes)."""
+
+    def __init__(self, payload: dict):
+        self._payload = payload
+
+    async def complete_json(self, prompt, *, system="", think=None, num_predict=None):
+        return self._payload
+
+
+class TestExtractResume:
+
+    _FB = {
+        "contact": {"name": "Jane Doe", "email": "jane@x.com"},
+        "work_history": [
+            {"company": "Acme", "title": "Analyst", "start": "2020",
+             "end": "Present", "bullets": ["did things"]},
+        ],
+        "skills": ["SQL", "Python"],
+    }
+
+    def _client(self, web_state, monkeypatch, payload=None):
+        import auto_applier.llm.complete as cmod
+        monkeypatch.setattr(cmod, "build_default", lambda settings: _StubLLM(payload or self._FB))
+        return _make_client(web_state)
+
+    def test_extract_returns_factbank_draft_without_persisting(self, web_state, monkeypatch):
+        import base64
+        client = self._client(web_state, monkeypatch)
+        b64 = base64.b64encode(b"Jane Doe\nAnalyst at Acme\nSQL, Python").decode()
+        r = client.post("/api/onboarding/extract-resume",
+                        json={"filename": "resume.txt", "content_b64": b64})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["contact"]["name"] == "Jane Doe"
+        assert len(body["work_history"]) == 1
+        assert body["work_history"][0]["company"] == "Acme"
+        assert body["skills"] == ["SQL", "Python"]
+        # DRAFT only — extraction must not persist; the per-step Save endpoints are the writers.
+        assert client.get("/api/onboarding/state").json()["has_work_history"] is False
+
+    def test_extract_unsupported_extension_is_400(self, web_state, monkeypatch):
+        import base64
+        client = self._client(web_state, monkeypatch)
+        b64 = base64.b64encode(b"x").decode()
+        r = client.post("/api/onboarding/extract-resume",
+                        json={"filename": "resume.doc", "content_b64": b64})
+        assert r.status_code == 400
+
+    def test_extract_missing_fields_is_400(self, web_state, monkeypatch):
+        client = self._client(web_state, monkeypatch)
+        r = client.post("/api/onboarding/extract-resume", json={"filename": "resume.txt"})
+        assert r.status_code == 400
+
+
 # --------------------------------------------------------------- persistence
 
 class TestPersistence:

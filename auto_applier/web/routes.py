@@ -710,6 +710,43 @@ async def onboarding_state(request: Request) -> dict:
     return status.to_dict()
 
 
+@api_router.post("/onboarding/extract-resume")
+async def onboarding_extract_resume(request: Request) -> dict:
+    """Extract a fact-bank DRAFT from an uploaded résumé so the wizard can pre-fill the
+    contact / work-history / skills steps for the user to REVIEW.
+
+    Payload is base64-in-JSON (so no python-multipart dependency, and it reuses the same JSON
+    request path as every other step): ``{"filename": "me.pdf", "content_b64": "<base64>"}``.
+    Returns the fact-bank dict (master.json shape). It does NOT persist — the per-step Save
+    endpoints remain the only writers, so the user reviews every extracted field before anything
+    is stored (faithful-but-unverified is a draft, never the source of truth until confirmed)."""
+    import base64
+
+    from auto_applier.llm.complete import build_default
+    from auto_applier.resume.extract import extract_factbank, extract_text_from_bytes
+    from auto_applier.web.onboarding import _fact_bank_to_dict
+
+    payload = await _read_json_dict(request)
+    filename = str(payload.get("filename") or "")
+    content_b64 = payload.get("content_b64") or ""
+    if not filename or not content_b64:
+        raise HTTPException(status_code=400, detail="need {filename, content_b64}")
+    try:
+        data = base64.b64decode(content_b64)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
+    try:
+        text = extract_text_from_bytes(data, filename)
+    except ValueError as exc:  # unsupported extension
+        raise HTTPException(status_code=400, detail=str(exc))
+    web_state = _get_state(request)
+    try:
+        bank = await extract_factbank(text, build_default(web_state.settings))
+    except Exception as exc:  # noqa: BLE001 — LLM/transport failure → 502 (not a server crash)
+        raise HTTPException(status_code=502, detail=f"résumé extraction failed: {exc}")
+    return _fact_bank_to_dict(bank)
+
+
 @api_router.post("/onboarding/contact")
 async def onboarding_contact(request: Request) -> dict:
     """Save contact info (name + email + phone + location + links).

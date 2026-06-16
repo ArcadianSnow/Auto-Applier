@@ -29,6 +29,15 @@
       <p class="muted">
         How forms should fill your name + email + phone fields.
       </p>
+      <div class="resume-upload">
+        <p><strong>Have a résumé?</strong> Upload it (.pdf, .docx, or .txt) and we'll pre-fill
+        Contact, Work history, and Skills for you to review &mdash; nothing is saved until you
+        click Save on each step.</p>
+        <input type="file" accept=".pdf,.docx,.txt"
+               @change="extractResume($event)" :disabled="extracting">
+        <span class="muted" x-show="extracting">Reading your résumé&hellip;</span>
+        <p class="muted small" x-show="extractNote" x-text="extractNote"></p>
+      </div>
       <div class="form-grid">
         <label>Full name
           <input type="text" x-model="contact.name" placeholder="Pat Q. Example">

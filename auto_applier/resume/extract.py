@@ -27,6 +27,7 @@ from auto_applier.resume.factbank import FactBank
 __all__ = [
     "extract_factbank",
     "extract_from_file",
+    "extract_text_from_bytes",
     "extract_text_from_file",
     "merge_extracted",
 ]
@@ -36,23 +37,32 @@ _MAX_RESUME_CHARS = 24000
 
 
 def extract_text_from_file(path: str | Path) -> str:
-    """Plain text from a résumé file. Supports ``.pdf`` (pdfplumber), ``.docx`` (python-docx),
-    ``.txt``/``.md`` (read). Raises :class:`ValueError` on an unsupported extension (incl. the
-    legacy binary ``.doc``)."""
+    """Plain text from a résumé file on disk. Supports ``.pdf`` / ``.docx`` / ``.txt``; raises
+    :class:`ValueError` on an unsupported extension (incl. the legacy binary ``.doc``). Thin
+    wrapper over :func:`extract_text_from_bytes` (the web-upload path shares the same logic)."""
     p = Path(path)
-    ext = p.suffix.lower()
+    return extract_text_from_bytes(p.read_bytes(), p.name)
+
+
+def extract_text_from_bytes(data: bytes, filename: str) -> str:
+    """Plain text from in-memory résumé bytes (the web-upload path), dispatched by ``filename``'s
+    extension: ``.pdf`` (pdfplumber), ``.docx`` (python-docx), ``.txt``/``.md`` (decode). Raises
+    :class:`ValueError` on an unsupported extension."""
+    import io
+
+    ext = Path(filename).suffix.lower()
     if ext == ".pdf":
         import pdfplumber
 
-        with pdfplumber.open(str(p)) as pdf:
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
             return "\n".join((page.extract_text() or "") for page in pdf.pages).strip()
     if ext == ".docx":
         import docx
 
-        doc = docx.Document(str(p))
+        doc = docx.Document(io.BytesIO(data))
         return "\n".join(par.text for par in doc.paragraphs).strip()
     if ext in (".txt", ".md", ".text"):
-        return p.read_text(encoding="utf-8", errors="replace").strip()
+        return data.decode("utf-8", errors="replace").strip()
     raise ValueError(
         f"unsupported résumé format '{ext}' (use .pdf, .docx, or .txt; legacy .doc is not "
         "supported — re-save it as .docx or .pdf first)"
