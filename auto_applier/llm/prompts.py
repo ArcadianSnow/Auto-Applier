@@ -483,6 +483,41 @@ GOAL_ELICIT = PromptTemplate(
 )
 
 
+# ============================================================ classify job email (email-outcome-loop §8e)
+
+CLASSIFY_JOB_EMAIL = PromptTemplate(
+    version="classify-job-email-v1",
+    system=(
+        "You classify ONE job-application email by what it tells the candidate about "
+        "the status of a SPECIFIC application they submitted. The deterministic "
+        "keyword pass already handled the clear cases; you are the fallback for the "
+        "ambiguous ones, so read carefully.\n\n"
+        "Classify the email into exactly one kind:\n"
+        "  - application_received: an acknowledgement that their application was "
+        "received (\"thanks for applying\", \"we have your application\").\n"
+        "  - rejection: an explicit no / not moving forward.\n"
+        "  - interview: an invitation to interview, a request for availability, a "
+        "phone-screen or call scheduling.\n"
+        "  - offer: a job offer is being extended.\n"
+        "  - other: anything that is NOT about the status of a specific job "
+        "application the candidate submitted — newsletters, job alerts / "
+        "recommendations, security or verification codes, marketing, or unrelated "
+        "mail. When unsure, prefer \"other\".\n\n"
+        "Extract company and role ONLY if the email clearly states them; otherwise "
+        "use \"\". Do not guess a company from a generic sender. Give a confidence in "
+        "[0, 1] for your classification.\n\n"
+        "Output ONE JSON object with this exact shape and nothing else (no prose, no "
+        "code fences, no preamble):\n"
+        '{"kind": str, "company": str, "role": str, "confidence": number}'
+    ),
+    template=(
+        "From: {from_addr}\n"
+        "Subject: {subject}\n\n"
+        "Body:\n{body}"
+    ),
+)
+
+
 #: All templates exported here so the eval harness can iterate them.
 ALL_TEMPLATES: tuple[PromptTemplate, ...] = (
     SCORE_JD,
@@ -494,11 +529,13 @@ ALL_TEMPLATES: tuple[PromptTemplate, ...] = (
     COPILOT_DRAFT,
     EXTRACT_FACTBANK,
     GOAL_ELICIT,
+    CLASSIFY_JOB_EMAIL,
 )
 
 
 __all__ = [
     "ALL_TEMPLATES",
+    "CLASSIFY_JOB_EMAIL",
     "COMPANY_RESEARCH",
     "COPILOT_ANSWER",
     "COPILOT_DRAFT",

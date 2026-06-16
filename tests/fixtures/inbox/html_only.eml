@@ -1,0 +1,19 @@
+From: Umbrella Careers <careers@umbrella.com>
+To: candidate@example.com
+Subject: We received your application
+Date: Sat, 21 Jun 2026 10:00:00 -0500
+Message-ID: <htmlonly-001@umbrella.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+
+<html>
+  <head><style>.x{color:red}</style><script>var a=1;</script></head>
+  <body>
+    <p>Hi&nbsp;Joseph,</p>
+    <p>Thank you for applying to the <b>Data Analyst</b> role at Umbrella.
+       We have received your application.</p>
+    <p>Track it here:
+       <a href="https://jobs.lever.co/umbrella/abc-123">your application</a></p>
+    <div>The Umbrella Careers Team</div>
+  </body>
+</html>

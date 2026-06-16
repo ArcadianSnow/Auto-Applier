@@ -246,7 +246,32 @@ a guided in-app wizard, and (b) keep it strictly optional/off-by-default.**
 - **IMAP quirks** (Gmail's `[Gmail]/All Mail`, label semantics, throttling) — keep the poll polite and
   incremental (since-UID), cache processed message-ids.
 
-## The plan (phased)
+## ⚠️ GROUNDED correction (2026-06-16 — read before building; supersedes the phasing below)
+
+A Plan-agent pass verified the wiring against the actual code and a **build-ready plan now lives in
+`.claude/unstuck/plan-email-outcome-loop.md`** (the system-of-record for the build). The key
+corrections to the optimistic text above:
+
+- **The loop does NOT wire to `reconcile.py`.** `reconcile.py` is **skill-gap** reconciliation
+  (JD→fact-bank skill proposals), not outcomes. There is no "outcome reconcile." The real path is a
+  **single line** — `OutcomeRepo(conn).add(Outcome(job_id, kind, note))` (`repositories.py:339-344`,
+  the exact call `av3 outcome` uses) → analytics (`applied_with_outcomes` → `compute_conversion_report`)
+  consumes the `outcomes` table **unchanged**. So the "reuse existing infra" thesis is *more* true
+  than stated, just via a different (simpler) entry point.
+- **`OutcomeKind` has no `confirmation`/`interview-invite` value** (ladder is GHOST/REJECTION/RESPONSE/
+  INTERVIEW/OFFER). The classifier **projects** onto these 5 ("application received" → `RESPONSE`);
+  extending the enum is a bigger change (analytics ranking + CLI choices) → v1 reuses the 5.
+- **No domain/email column exists** to match on → the matcher keys on `job.url` substring (strongest) +
+  normalized `company` + role-token overlap, confidence-gated, fail-to-review.
+- **Build phasing is re-cut** so the offline-verifiable slice ships first: **Phase A** = parse +
+  classify + match + fixtures + offline tests (no IMAP, no DB writes); **Phase B** = worker + persistence
+  + `av3 inbox --dry-run` (proves the `OutcomeRepo`→analytics round-trip via a STUB fetcher — still
+  offline; the demoable milestone *before* asking for the app-password); **Phase C** = real `imaplib`
+  fetch + scheduler slot + the Greenhouse security-code flag (GATED on the user's Gmail app-password);
+  **Phase D** = onboarding wizard + dashboard surface (needs Direction 2). See the plan doc for exact
+  module/function signatures and the four open forks (all with recommended defaults).
+
+## The plan (phased — original sketch; see the GROUNDED correction above for the authoritative cut)
 - **Phase A — Read-only IMAP ingestion.** `telemetry`-style local module: connect (host/port/user/
   app-password from `.env`), incremental fetch (since last UID), store processed `message-id`s so we
   never re-handle one. Provider-agnostic config; Gmail defaults pre-filled. **Deliverable:** "pull new
