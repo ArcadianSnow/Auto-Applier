@@ -72,13 +72,13 @@
             <span class="source-actions" x-show="s.paused">
               <button class="link-btn"
                       x-show="s.login_url"
-                      :disabled="sourceBusy[s.source]"
+                      :disabled="!!sourceBusy[s.source]"
                       @click="sourceLogin(s.source)"
                       title="Open the login page in the bot's persistent Chrome profile">
                 Log in
               </button>
               <button class="link-btn"
-                      :disabled="sourceBusy[s.source]"
+                      :disabled="!!sourceBusy[s.source]"
                       @click="sourceMarkHealthy(s.source)"
                       title="Mark this source healthy after you've signed back in">
                 Mark logged in
@@ -89,26 +89,120 @@
       </ul>
     </section>
 
-    {# ------- two-column: review queue + apply queue ------- #}
+    {# ------- two-column: assisted queue + apply queue ------- #}
     <div class="two-col">
-      <section class="card">
-        <h2>Review queue
-          <span class="count" x-text="queue.review.length"></span>
+      {# Direction 2 (A1+A2): the flat REVIEW list, turned into a grouped to-do
+         list. Three buckets by needed_action; each row carries a reason pill +
+         the right action buttons. assistedOpen/Confirm/Cancel + markApplied +
+         skipJob are ported into dashboard() and parameterized by jobId. #}
+      <section class="card" x-cloak>
+        <h2>Assisted queue
+          <span class="count" x-text="reviewQueue.length"></span>
         </h2>
-        <p class="muted" x-show="queue.review.length === 0">Nothing to review.</p>
-        <ul class="job-list" x-show="queue.review.length > 0">
-          <template x-for="j in queue.review" :key="j.id">
-            <li>
-              <a :href="`/jobs/${j.id}`">
-                <span class="job-title" x-text="j.title"></span>
-                <span class="job-meta">
-                  <span x-text="j.company"></span>
-                  <span class="muted" x-text="j.source"></span>
-                </span>
-              </a>
-            </li>
+        <p class="muted" x-show="reviewQueue.length === 0">Nothing waiting on you.</p>
+        <div class="assisted-queue-list" x-show="reviewQueue.length > 0">
+
+          {# ---- Ready to finish (bot filled, human submits) ---- #}
+          <template x-if="reviewGroups().submit.length > 0">
+            <div class="assisted-group">
+              <h3 class="assisted-group-head">Ready to finish
+                <span class="count" x-text="reviewGroups().submit.length"></span>
+              </h3>
+              <ul class="job-list">
+                <template x-for="j in reviewGroups().submit" :key="j.id">
+                  <li>
+                    <div class="assisted-row">
+                      <span class="job-title" x-text="j.title"></span>
+                      <span class="job-meta">
+                        <span x-text="j.company"></span>
+                        <span class="muted" x-text="j.source"></span>
+                      </span>
+                      <span class="status-pill pill-reason" x-text="j.reason"></span>
+                    </div>
+                    <div class="action-row">
+                      <button class="secondary-btn"
+                              :disabled="!!reviewBusy[j.id]"
+                              @click="assistedOpen(j.id)">Open the application</button>
+                      <button class="primary-btn"
+                              :disabled="!!reviewBusy[j.id]"
+                              @click="assistedConfirm(j.id)">I submitted it</button>
+                      <button class="secondary-btn"
+                              :disabled="!!reviewBusy[j.id]"
+                              @click="assistedCancel(j.id)">Skip</button>
+                      <a class="link-btn" :href="`/jobs/${j.id}`">Details</a>
+                    </div>
+                    <p class="muted small" x-show="reviewNote[j.id]" x-text="reviewNote[j.id]"></p>
+                  </li>
+                </template>
+              </ul>
+            </div>
           </template>
-        </ul>
+
+          {# ---- Sign-in needed (source session expired) ---- #}
+          <template x-if="reviewGroups().login.length > 0">
+            <div class="assisted-group">
+              <h3 class="assisted-group-head">Sign-in needed
+                <span class="count" x-text="reviewGroups().login.length"></span>
+              </h3>
+              <ul class="job-list">
+                <template x-for="j in reviewGroups().login" :key="j.id">
+                  <li>
+                    <div class="assisted-row">
+                      <span class="job-title" x-text="j.title"></span>
+                      <span class="job-meta">
+                        <span x-text="j.company"></span>
+                        <span class="muted" x-text="j.source"></span>
+                      </span>
+                      <span class="status-pill pill-reason" x-text="j.reason"></span>
+                    </div>
+                    <div class="action-row">
+                      <button class="secondary-btn"
+                              :disabled="!!sourceBusy[j.source]"
+                              @click="sourceLogin(j.source)"
+                              title="Open the sign-in page in the bot's Chrome profile">Log in</button>
+                      <a class="link-btn" :href="`/jobs/${j.id}`">Details</a>
+                    </div>
+                    <p class="muted small" x-show="reviewNote[j.id]" x-text="reviewNote[j.id]"></p>
+                  </li>
+                </template>
+              </ul>
+            </div>
+          </template>
+
+          {# ---- Needs your decision (no app / failed attempt) ---- #}
+          <template x-if="reviewGroups().decide.length > 0">
+            <div class="assisted-group">
+              <h3 class="assisted-group-head">Needs your decision
+                <span class="count" x-text="reviewGroups().decide.length"></span>
+              </h3>
+              <ul class="job-list">
+                <template x-for="j in reviewGroups().decide" :key="j.id">
+                  <li>
+                    <div class="assisted-row">
+                      <span class="job-title" x-text="j.title"></span>
+                      <span class="job-meta">
+                        <span x-text="j.company"></span>
+                        <span class="muted" x-text="j.source"></span>
+                      </span>
+                      <span class="status-pill pill-reason" x-text="j.reason"></span>
+                    </div>
+                    <div class="action-row">
+                      <button class="primary-btn"
+                              :disabled="!!reviewBusy[j.id]"
+                              @click="markApplied(j.id)">Mark applied</button>
+                      <button class="secondary-btn"
+                              :disabled="!!reviewBusy[j.id]"
+                              @click="skipJob(j.id)">Skip</button>
+                      <a class="link-btn" :href="`/jobs/${j.id}`">Details</a>
+                    </div>
+                    <p class="muted small" x-show="reviewNote[j.id]" x-text="reviewNote[j.id]"></p>
+                  </li>
+                </template>
+              </ul>
+            </div>
+          </template>
+
+        </div>
       </section>
 
       <section class="card">

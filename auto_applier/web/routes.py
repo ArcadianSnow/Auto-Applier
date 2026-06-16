@@ -68,6 +68,7 @@ from auto_applier.web.views import (
     job_brief,
     job_detail,
     recent_scheduler_event,
+    review_reason,
 )
 
 api_router = APIRouter()
@@ -203,6 +204,72 @@ async def queue(request: Request) -> dict:
                 job_brief(j) for j in repo.list_by_state(JobState.APPLYING, limit=50)
             ],
         }
+
+
+# ---------------------------------------------------------------- /api/review-queue (Direction 2, A1)
+
+# The actionable assisted-queue feed (Direction 2, Phase A). Where /api/queue
+# returns a flat REVIEW list, this enriches each REVIEW job with an INFERRED
+# needed-action (submit | login | decide) + a human reason + the bits the
+# dashboard needs to act on it (the ASSISTED_PENDING application id, source
+# pause state, artifact paths, score). The reason is not stored — it's derived
+# every poll from (job, latest Application status, source health) via the pure
+# views.review_reason() helper.
+
+
+@api_router.get("/review-queue")
+async def review_queue(request: Request) -> dict:
+    """REVIEW jobs grouped into an actionable to-do list (Direction 2, A1).
+
+    For each REVIEW job we compute:
+      * ``needed_action`` ∈ {submit, login, decide} + a human ``reason``
+        (``views.review_reason`` — pure, unit-tested).
+      * ``assisted_application_id`` — the latest ASSISTED_PENDING attempt's id
+        (so the dashboard's Open/Confirm/Cancel buttons target the right row),
+        or ``None``.
+      * ``source_paused`` — whether the job's source is in AUTH_REQUIRED.
+      * ``artifacts`` — resume / cover-letter paths off the latest attempt (so
+        the user can sanity-check what the bot prepared), or ``None``.
+      * ``score_total`` — the JD score, or ``None`` if never scored.
+
+    Read-only; one short-lived connection. Capped at 50 like /api/queue.
+    """
+    web_state = _get_state(request)
+    with web_state.app_conn() as conn:
+        job_repo = JobRepo(conn)
+        app_repo = ApplicationRepo(conn)
+        score_repo = ScoreRepo(conn)
+        jobs_out = []
+        for job in job_repo.list_by_state(JobState.REVIEW, limit=50):
+            apps = app_repo.list_by_job(job.id)
+            # The most-recent attempt drives the reason + the artifact preview.
+            # list_by_job orders by submitted_at ASC (empties first), so the
+            # last element is the freshest attempt with a real timestamp; an
+            # ASSISTED_PENDING attempt (no timestamp) sorts to the FRONT, so we
+            # surface it specifically via _latest_assisted_pending.
+            pending = _latest_assisted_pending(apps)
+            latest_app = pending if pending is not None else (apps[-1] if apps else None)
+            source_paused = source_is_paused(job.source)
+            needed_action, reason = review_reason(job, latest_app, source_paused)
+            score = score_repo.get(job.id)
+            artifacts = None
+            if latest_app is not None and (
+                latest_app.generated_resume_path or latest_app.cover_letter_path
+            ):
+                artifacts = {
+                    "resume": latest_app.generated_resume_path or None,
+                    "cover_letter": latest_app.cover_letter_path or None,
+                }
+            jobs_out.append({
+                **job_brief(job),
+                "score_total": score.total if score is not None else None,
+                "needed_action": needed_action,
+                "reason": reason,
+                "assisted_application_id": pending.id if pending is not None else None,
+                "source_paused": source_paused,
+                "artifacts": artifacts,
+            })
+    return {"jobs": jobs_out}
 
 
 # ---------------------------------------------------------------- /api/history
@@ -653,6 +720,83 @@ async def assisted_cancel(request: Request, job_id: str) -> dict:
         "application_id": pending.id,
         "application_status": ApplicationStatus.FAILED.value,
     }
+
+
+# ---------------------------------------------------------------- /api/jobs/.../mark-applied + /skip (Direction 2, A2)
+
+# The "Needs your decision" actions for the assisted queue (Direction 2, A2).
+#   * mark-applied — the user applied to this job themselves (or finished an
+#     assisted form outside the Confirm path) → record a human-attested
+#     APPLIED. Reuses pipeline.manual_apply.mark_manually_applied so the
+#     state-machine walk + Application row match `av3 applied` exactly (a
+#     human attestation is a positive confirmation per spec §5).
+#   * skip — the user decided not to pursue it → REVIEW → SKIPPED, mirroring
+#     the inline `av3 pass` logic (cli/main.py).
+
+
+@api_router.post("/jobs/{job_id}/mark-applied")
+async def job_mark_applied(request: Request, job_id: str) -> dict:
+    """Record a human-attested manual apply for ``job_id`` → APPLIED.
+
+    Thin web wrapper over :func:`auto_applier.pipeline.manual_apply.mark_manually_applied`
+    (which opens its own transaction + writes the MANUAL/APPLIED Application
+    row, then walks the Job to APPLIED). Allowed only from {DECIDED, REVIEW};
+    any other source state comes back as the function's error result.
+
+    Errors:
+      * 404 — job doesn't exist.
+      * 409 — the job isn't in a state a manual apply can be attested from
+        (e.g. already APPLIED, or still SCORED). The detail carries the
+        underlying reason verbatim.
+    """
+    from auto_applier.pipeline.manual_apply import mark_manually_applied
+
+    web_state = _get_state(request)
+    with web_state.app_conn() as conn:
+        if JobRepo(conn).get(job_id) is None:
+            raise HTTPException(
+                status_code=404, detail=f"job {job_id} not found"
+            )
+        result = mark_manually_applied(conn, job_id)
+    if result.status == "error":
+        raise HTTPException(status_code=409, detail=result.detail)
+    return {
+        "job_id": job_id,
+        "job_state": JobState.APPLIED.value,
+        "status": result.status,
+        "detail": result.detail,
+    }
+
+
+@api_router.post("/jobs/{job_id}/skip")
+async def job_skip(request: Request, job_id: str) -> dict:
+    """Move a REVIEW job to SKIPPED — the user decided not to pursue it.
+
+    Mirrors the inline ``av3 pass`` logic (cli/main.py): a validated
+    ``set_state`` inside an explicit transaction, catching
+    :class:`InvalidTransition` so an illegal source state (e.g. a terminal
+    APPLIED) returns a clean 409 instead of a 500.
+
+    Errors:
+      * 404 — job doesn't exist.
+      * 409 — REVIEW → SKIPPED isn't allowed from the job's current state.
+    """
+    from auto_applier.db.engine import tx
+    from auto_applier.domain.state import InvalidTransition
+
+    web_state = _get_state(request)
+    with web_state.app_conn() as conn:
+        repo = JobRepo(conn)
+        if repo.get(job_id) is None:
+            raise HTTPException(
+                status_code=404, detail=f"job {job_id} not found"
+            )
+        try:
+            with tx(conn):
+                repo.set_state(job_id, JobState.SKIPPED)
+        except (InvalidTransition, KeyError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+    return {"job_id": job_id, "job_state": JobState.SKIPPED.value}
 
 
 def _latest_assisted_pending(apps):

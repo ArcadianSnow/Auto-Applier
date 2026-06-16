@@ -44,6 +44,9 @@ function dashboard() {
     },
     sources: [],
     queue: { review: [], queued_apply: [], applying: [] },
+    reviewQueue: [],       // Direction 2 (A1): enriched REVIEW jobs (needed_action + reason)
+    reviewBusy: {},        // {jobId: bool} — per-row spinner gate for the assisted-queue actions
+    reviewNote: {},        // {jobId: string} — transient per-row status / error note
     history: [],
     events: [],
     connState: 'connecting',
@@ -80,10 +83,11 @@ function dashboard() {
       if (this._pollInFlight) return;
       this._pollInFlight = true;
       try {
-        const [status, sources, queue, history, onboarding] = await Promise.all([
+        const [status, sources, queue, reviewQueue, history, onboarding] = await Promise.all([
           fetch('/api/status').then(r => r.json()),
           fetch('/api/sources').then(r => r.json()),
           fetch('/api/queue').then(r => r.json()),
+          fetch('/api/review-queue').then(r => r.json()),
           fetch('/api/history?limit=20').then(r => r.json()),
           // Best-effort — endpoint may not be reachable on a stripped
           // install (it's wired in (5/M)); the banner just stays hidden.
@@ -93,6 +97,7 @@ function dashboard() {
         this.status = status;
         this.sources = sources.sources || [];
         this.queue = queue;
+        this.reviewQueue = reviewQueue.jobs || [];
         this.history = history.applications || [];
         this.onboarding = onboarding;
       } catch (e) {
@@ -269,6 +274,184 @@ function dashboard() {
         const next = { ...this.sourceBusy };
         delete next[name];
         this.sourceBusy = next;
+      }
+    },
+
+    // ---------------- Direction 2 (A1+A2): assisted queue ----------------
+
+    /**
+     * Bucket the enriched REVIEW queue by needed_action. Drives the three
+     * sub-groups in the Assisted-queue card (submit / login / decide).
+     * Unknown actions fall into 'decide' so a row never silently vanishes.
+     */
+    reviewGroups() {
+      const groups = { submit: [], login: [], decide: [] };
+      for (const j of this.reviewQueue) {
+        const bucket = groups[j.needed_action] ? j.needed_action : 'decide';
+        groups[bucket].push(j);
+      }
+      return groups;
+    },
+
+    _setReviewBusy(jobId, on) {
+      const next = { ...this.reviewBusy };
+      if (on) next[jobId] = true; else delete next[jobId];
+      this.reviewBusy = next;
+    },
+
+    _setReviewNote(jobId, msg) {
+      this.reviewNote = { ...this.reviewNote, [jobId]: msg };
+    },
+
+    /**
+     * Open the pre-filled apply URL for an ASSISTED_PENDING job in the bot's
+     * headed browser. Ported from jobDetail().assistedOpen, parameterized by
+     * jobId; surfaces launch.mode/note (or the OS-browser fallback note) in
+     * the per-row note line.
+     */
+    async assistedOpen(jobId) {
+      if (this.reviewBusy[jobId]) return;
+      this._setReviewBusy(jobId, true);
+      this._setReviewNote(jobId, '');
+      try {
+        const r = await fetch(`/api/jobs/${jobId}/assisted/open`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this._setReviewNote(jobId, `Could not open: ${body.detail || r.statusText}`);
+          if (r.status === 409) await this.refreshAll();
+          return;
+        }
+        const note = body?.launch?.note || '';
+        this._setReviewNote(jobId, note ? `Opened — ${note}` : 'Opened in the bot browser.');
+      } catch (e) {
+        this._setReviewNote(jobId, `Error: ${e}`);
+      } finally {
+        this._setReviewBusy(jobId, false);
+      }
+    },
+
+    /**
+     * Mark the latest ASSISTED_PENDING attempt APPLIED — only after the user
+     * clicked submit on the form themselves. confirm()-guarded; optimistic
+     * refresh on success, 409-graceful re-fetch.
+     */
+    async assistedConfirm(jobId) {
+      if (this.reviewBusy[jobId]) return;
+      if (!confirm('Mark this application as APPLIED? Only do this after '
+                 + 'you clicked submit on the form yourself.')) return;
+      this._setReviewBusy(jobId, true);
+      this._setReviewNote(jobId, '');
+      try {
+        const r = await fetch(`/api/jobs/${jobId}/assisted/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this._setReviewNote(jobId, `Confirm failed: ${body.detail || r.statusText}`);
+          await this.refreshAll();
+          return;
+        }
+        await this.refreshAll();
+      } catch (e) {
+        this._setReviewNote(jobId, `Error: ${e}`);
+      } finally {
+        this._setReviewBusy(jobId, false);
+      }
+    },
+
+    /**
+     * Mark the latest ASSISTED_PENDING attempt cancelled (FAILED) — the user
+     * reviewed the pre-fill and decided not to submit. The job stays in
+     * REVIEW. confirm()-guarded.
+     */
+    async assistedCancel(jobId) {
+      if (this.reviewBusy[jobId]) return;
+      if (!confirm('Skip this assisted attempt? The pre-fill is discarded and '
+                 + 'the job stays in your review list.')) return;
+      this._setReviewBusy(jobId, true);
+      this._setReviewNote(jobId, '');
+      try {
+        const r = await fetch(`/api/jobs/${jobId}/assisted/cancel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this._setReviewNote(jobId, `Skip failed: ${body.detail || r.statusText}`);
+          await this.refreshAll();
+          return;
+        }
+        await this.refreshAll();
+      } catch (e) {
+        this._setReviewNote(jobId, `Error: ${e}`);
+      } finally {
+        this._setReviewBusy(jobId, false);
+      }
+    },
+
+    /**
+     * Record a human-attested manual apply for a "needs your decision" job →
+     * APPLIED. confirm()-guarded; optimistic refresh, 409-graceful re-fetch.
+     */
+    async markApplied(jobId) {
+      if (this.reviewBusy[jobId]) return;
+      if (!confirm('Mark this job as APPLIED? Do this if you applied to it '
+                 + 'yourself outside the bot.')) return;
+      this._setReviewBusy(jobId, true);
+      this._setReviewNote(jobId, '');
+      try {
+        const r = await fetch(`/api/jobs/${jobId}/mark-applied`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this._setReviewNote(jobId, `Could not mark applied: ${body.detail || r.statusText}`);
+          await this.refreshAll();
+          return;
+        }
+        await this.refreshAll();
+      } catch (e) {
+        this._setReviewNote(jobId, `Error: ${e}`);
+      } finally {
+        this._setReviewBusy(jobId, false);
+      }
+    },
+
+    /**
+     * Move a REVIEW job to SKIPPED — the user decided not to pursue it.
+     * confirm()-guarded; optimistic refresh, 409-graceful re-fetch.
+     */
+    async skipJob(jobId) {
+      if (this.reviewBusy[jobId]) return;
+      if (!confirm('Skip this job? It drops off your review list.')) return;
+      this._setReviewBusy(jobId, true);
+      this._setReviewNote(jobId, '');
+      try {
+        const r = await fetch(`/api/jobs/${jobId}/skip`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this._setReviewNote(jobId, `Could not skip: ${body.detail || r.statusText}`);
+          await this.refreshAll();
+          return;
+        }
+        await this.refreshAll();
+      } catch (e) {
+        this._setReviewNote(jobId, `Error: ${e}`);
+      } finally {
+        this._setReviewBusy(jobId, false);
       }
     },
 

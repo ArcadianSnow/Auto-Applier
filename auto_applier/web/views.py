@@ -15,8 +15,42 @@ import json
 import sqlite3
 
 from auto_applier.domain.models import Application, Job, JobScore
-from auto_applier.domain.state import JobState
+from auto_applier.domain.state import ApplicationStatus, JobState
 from auto_applier.sources.health import SourceHealthRecord
+
+
+def review_reason(
+    job: Job,
+    latest_app: Application | None,
+    source_paused: bool,
+) -> tuple[str, str]:
+    """Infer the needed action + a human reason for a REVIEW job (Direction 2,
+    Phase A — slice A1).
+
+    The reason is NOT stored anywhere; it's derived from the (job, latest
+    Application status, source health) triple every poll. Pure + unit-testable
+    so the bucketing logic is provable without a DB.
+
+    Returns ``(needed_action, human_reason)`` where ``needed_action`` is one of:
+
+      * ``"submit"`` — the bot filled the form and handed off; the user reviews
+        the pre-fill and presses submit. A1 deliberately COLLAPSES the
+        security-code subcase into "submit" (it isn't distinguishable from
+        app.db alone; A3 splits it via the event/outcome signal).
+      * ``"login"`` — the source's session expired; the user signs in to
+        resume the apply worker on that source.
+      * ``"decide"`` — the bot couldn't complete it (optimize-gate REVIEW with
+        no Application, or a FAILED attempt); the user decides what to do.
+
+    Order matters: an ASSISTED_PENDING attempt wins over ``source_paused`` — a
+    filled form is finishable by the human even if the source later paused for
+    a different job.
+    """
+    if latest_app is not None and latest_app.status is ApplicationStatus.ASSISTED_PENDING:
+        return ("submit", "Filled — review and press submit")
+    if source_paused:
+        return ("login", f"Waiting on sign-in to {job.source}")
+    return ("decide", "Needs your review — the bot couldn't complete it")
 
 
 def job_brief(job: Job) -> dict:

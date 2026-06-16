@@ -345,9 +345,10 @@ class TestDashboardHtml:
         assert "text/html" in r.headers["content-type"]
         # Sanity: Alpine.js components are wired in.
         assert 'x-data="dashboard()"' in r.text
-        # The three panels referenced in the spec are present.
+        # The three panels referenced in the spec are present. The flat
+        # "Review queue" became the grouped "Assisted queue" in Direction 2 (A1).
         assert "Pipeline" in r.text
-        assert "Review queue" in r.text
+        assert "Assisted queue" in r.text
         assert "Recent applications" in r.text
         # Alpine.js + our JS are linked.
         assert "alpinejs" in r.text

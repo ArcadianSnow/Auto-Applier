@@ -516,6 +516,44 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   opacity: 0.5; cursor: progress;
 }
 
+/* ---------------- assisted queue (Direction 2, A1+A2) ---------------- */
+.assisted-queue-list {
+  max-height: 30rem;
+  overflow-y: auto;          /* scroll, never clip — copies the .proposal-list idiom */
+}
+.assisted-group { margin-bottom: 0.9rem; }
+.assisted-group:last-child { margin-bottom: 0; }
+.assisted-group-head {
+  margin: 0.4rem 0 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+.assisted-group-head .count {
+  background: var(--bg-soft);
+  border-radius: 999px;
+  padding: 0.02rem 0.45rem;
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+}
+.assisted-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding-top: 0.5rem;
+}
+/* a soft, contrast-safe pill for the inferred review reason */
+.status-pill.pill-reason {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 /* hide Alpine-gated blocks until the component initializes (no flash) */
 [x-cloak] { display: none !important; }
 
