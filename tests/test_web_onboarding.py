@@ -113,6 +113,77 @@ class TestExtractResume:
         assert r.status_code == 400
 
 
+# --------------------------------------------------------------- background seed-boards
+
+class _FakeSeeder:
+    """Stand-in BoardSeeder: instant run() + a fixed result, so the background job tests never
+    touch the network."""
+
+    def __init__(self, **kw):
+        self.kw = kw
+
+    def run(self):
+        from auto_applier.pipeline.seed_worker import SeedSummary
+        s = SeedSummary(probed=5, kept=2, dead=1)
+        s.added = {"greenhouse": ["acme", "globex"]}
+        return s
+
+    def merged_targeting(self, summary):
+        return {"greenhouse_boards": ["acme", "globex"], "lever_boards": [], "ashby_boards": []}
+
+
+class TestSeedBoardsBackground:
+
+    def test_run_seed_job_saves_boards_and_marks_done(self, settings: Settings, monkeypatch):
+        import asyncio
+
+        import auto_applier.pipeline.seed_worker as sw
+        from auto_applier.web import routes as R
+        monkeypatch.setattr(sw, "BoardSeeder", _FakeSeeder)
+        R._SEED = {"status": "idle"}
+
+        asyncio.run(R._run_seed_job(settings, ["data analyst"], 50))
+
+        assert R._SEED["status"] == "done"
+        assert R._SEED["kept"] == 2
+        cfg = load_user_config(settings.data_dir)
+        assert cfg["targeting"]["greenhouse_boards"] == ["acme", "globex"]
+
+    def test_start_endpoint_runs_in_background_then_done(self, web_state, monkeypatch):
+        import time
+
+        import auto_applier.pipeline.seed_worker as sw
+        from auto_applier.web import routes as R
+        monkeypatch.setattr(sw, "BoardSeeder", _FakeSeeder)
+        R._SEED = {"status": "idle"}
+        client = _make_client(web_state)
+
+        r = client.post("/api/onboarding/seed-boards/start", json={"titles": ["data analyst"]})
+        assert r.status_code == 200
+        assert r.json()["status"] in ("running", "done")
+
+        final = None
+        for _ in range(60):
+            s = client.get("/api/onboarding/seed-boards/status").json()
+            if s["status"] != "running":
+                final = s
+                break
+            time.sleep(0.05)
+        assert final is not None and final["status"] == "done"
+        assert final["kept"] == 2
+        cfg = load_user_config(web_state.settings.data_dir)
+        assert cfg["targeting"]["greenhouse_boards"] == ["acme", "globex"]
+
+    def test_start_rejects_non_list_titles(self, web_state, monkeypatch):
+        import auto_applier.pipeline.seed_worker as sw
+        from auto_applier.web import routes as R
+        monkeypatch.setattr(sw, "BoardSeeder", _FakeSeeder)
+        R._SEED = {"status": "idle"}
+        client = _make_client(web_state)
+        r = client.post("/api/onboarding/seed-boards/start", json={"titles": "data analyst"})
+        assert r.status_code == 400
+
+
 # --------------------------------------------------------------- persistence
 
 class TestPersistence:

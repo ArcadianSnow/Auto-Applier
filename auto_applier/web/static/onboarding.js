@@ -28,6 +28,8 @@ function onboarding() {
     status: null,
     extracting: false,
     extractNote: '',
+    seed: { status: 'idle', probed: 0, kept: 0, dead: 0, note: '', error: '' },
+    _seedPoll: null,
 
     contact: { name: '', email: '', phone: '', location: '', links: {} },
     workHistory: [],
@@ -66,6 +68,15 @@ function onboarding() {
         if (order.indexOf(this.step) > order.indexOf('work-auth')) {
           this.step = 'work-auth';
         }
+        // Reflect an in-flight background board search (e.g. the tab was reopened) and resume
+        // polling so the user sees it finish even across a reload.
+        try {
+          const sr = await fetch('/api/onboarding/seed-boards/status');
+          if (sr.ok) {
+            this.seed = await sr.json();
+            if (this.seed.status === 'running') this._pollSeed();
+          }
+        } catch (e) { /* ignore */ }
       } catch (e) {
         console.error('onboarding load failed', e);
       }
@@ -201,6 +212,40 @@ function onboarding() {
         ...w, bulletsText: (w.bullets || []).join('\n'),
       }));
       this.skillsText = (fb.skills || []).join('\n');
+    },
+
+    async startSeed() {
+      // Background "find companies": kick off the probe, then poll. The user can keep onboarding
+      // (or leave) while it runs — the server-side sweep finishes and saves the boards regardless.
+      const titles = (this.targetingTitlesText || '')
+        .split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+      try {
+        const r = await fetch('/api/onboarding/seed-boards/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ titles }),
+        });
+        this.seed = await r.json();
+      } catch (e) {
+        this.seed = { status: 'error', error: String(e) };
+        return;
+      }
+      this._pollSeed();
+    },
+
+    _pollSeed() {
+      if (this._seedPoll) clearInterval(this._seedPoll);
+      this._seedPoll = setInterval(async () => {
+        try {
+          const r = await fetch('/api/onboarding/seed-boards/status');
+          if (!r.ok) return;
+          this.seed = await r.json();
+          if (this.seed.status !== 'running') {
+            clearInterval(this._seedPoll);
+            this._seedPoll = null;
+          }
+        } catch (e) { /* transient — keep polling */ }
+      }, 1500);
     },
 
     async _post(endpoint, payload) {

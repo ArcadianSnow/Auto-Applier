@@ -850,6 +850,95 @@ async def onboarding_targeting(request: Request) -> dict:
     return onboarding_status(web_state.settings.data_dir).to_dict()
 
 
+# -- background "find companies" (seed-boards) for the targeting step ----------------
+# Single-user local app → one job at a time, held in a module-level dict (NOT on WebState,
+# which is read-only-by-design). The probe is sync (httpx + ~1 req/s throttle) so it runs in a
+# thread via asyncio.to_thread; the POST returns immediately and the wizard polls /status, so a
+# minutes-long sweep never blocks a request and the user keeps onboarding while it runs.
+_SEED: dict = {"status": "idle"}
+_SEED_TASK = None  # keep a reference so the running task isn't garbage-collected
+
+
+async def _run_seed_job(settings, titles, limit: int) -> None:
+    """Probe candidate slugs, merge the live + title-relevant ones into targeting.*_boards, and
+    persist. Updates the module-level ``_SEED`` dict (read by /seed-boards/status)."""
+    from auto_applier.pipeline.seed_worker import BoardSeeder
+    from auto_applier.web.onboarding import load_user_config, save_user_config
+
+    cache_path = settings.data_dir / "ats_probe_cache.json"
+    cache: dict = {}
+    if cache_path.exists():
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            cache = {}
+
+    def _progress(s) -> None:  # called from the worker thread (GIL-safe dict writes)
+        _SEED.update(probed=s.probed, kept=s.kept, dead=s.dead,
+                     irrelevant=s.live_irrelevant)
+
+    try:
+        seeder = BoardSeeder(
+            settings=settings,
+            titles=titles if titles is not None else list(settings.targeting.titles),
+            relevant_only=True,
+            limit=limit,
+            probe_cache=cache,
+            progress=_progress,
+        )
+        summary = await asyncio.to_thread(seeder.run)
+        if summary.kept:
+            merged = seeder.merged_targeting(summary)
+            cfg = load_user_config(settings.data_dir)
+            cfg.setdefault("targeting", {})
+            for key, lst in merged.items():
+                cfg["targeting"][key] = lst
+            save_user_config(settings.data_dir, cfg)
+        try:
+            cache_path.write_text(json.dumps(cache), encoding="utf-8")
+        except OSError:
+            pass
+        _SEED.update(
+            status="done", probed=summary.probed, kept=summary.kept, dead=summary.dead,
+            added={k: len(v) for k, v in summary.added.items()},
+            note=(f"Added {summary.kept} board(s) in your field."
+                  if summary.kept else "No new boards matched — try broadening your titles."),
+        )
+    except Exception as exc:  # noqa: BLE001 — surface as an error status, never crash the loop
+        _SEED.update(status="error", error=str(exc))
+
+
+@api_router.post("/onboarding/seed-boards/start")
+async def onboarding_seed_boards_start(request: Request) -> dict:
+    """Kick off a BACKGROUND probe that finds company boards matching the user's titles and
+    merges the verified-live ones into ``targeting.*_boards``. Returns immediately; poll
+    ``/onboarding/seed-boards/status``. Idempotent while running (a second call returns the
+    in-flight job instead of starting another)."""
+    global _SEED, _SEED_TASK
+    payload = await _read_json_dict(request)
+    if _SEED.get("status") == "running":
+        return dict(_SEED)
+    titles = payload.get("titles")
+    if titles is not None and not isinstance(titles, list):
+        raise HTTPException(status_code=400, detail="titles must be a list")
+    try:
+        limit = int(payload.get("limit") or 120)
+    except (TypeError, ValueError):
+        limit = 120
+    limit = max(1, min(limit, 400))
+    web_state = _get_state(request)
+    _SEED = {"status": "running", "probed": 0, "kept": 0, "dead": 0, "added": {}, "note": ""}
+    _SEED_TASK = asyncio.create_task(_run_seed_job(web_state.settings, titles, limit))
+    return dict(_SEED)
+
+
+@api_router.get("/onboarding/seed-boards/status")
+async def onboarding_seed_boards_status(request: Request) -> dict:
+    """Current state of the background seed-boards job: idle | running | done | error, plus the
+    live probed / kept / dead counters."""
+    return dict(_SEED)
+
+
 @api_router.post("/onboarding/telemetry")
 async def onboarding_telemetry(request: Request) -> dict:
     """Save the telemetry opt-in decision (spec §9). Payload:

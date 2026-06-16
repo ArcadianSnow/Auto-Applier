@@ -140,8 +140,13 @@ So decompose the journey into five steps, with the LLM's autonomy bounded at eac
   `complete_json` now supports both. **Wizard UI (Phase C, slice 1) SHIPPED:** the contact step has a
   résumé upload → `POST /api/onboarding/extract-resume` (base64-in-JSON, no multipart) → pre-fills
   contact/work/skills for REVIEW (no auto-save; per-step Save still the only writer). Browser-verified
-  (upload → fields populate, 0 console errors). **Still to do:** wire `seed-boards` into the targeting
-  step (slice 2), and an extraction eval harness (`tests/fixtures/resumes/*` + golden JSON).
+  (upload → fields populate, 0 console errors). **Phase C slice 2 SHIPPED:** the targeting step has a
+  "Find companies in my field" button → BACKGROUND probe (`POST /api/onboarding/seed-boards/start` +
+  `/status` polling; runs off-loop via `asyncio.to_thread` so the ~1 req/s sweep never blocks and the
+  user keeps onboarding) → merges verified-live boards into `targeting.*_boards`. Browser-verified
+  (live "probed N · found M" counters update, server stays responsive). **Still to do:** the
+  goal-elicitation chat (Phase B) and an extraction eval harness (`tests/fixtures/resumes/*` + golden
+  JSON).
 - **Phase B — Goal elicitation → TargetingConfig.** Scripted conversational step (new onboarding
   sub-route + a small state machine). Writes `titles/locations/remote/salary_floor/seniority` + a new
   `preferences` blob (soft signals for ranking). **Deliverable:** the chat produces the structured

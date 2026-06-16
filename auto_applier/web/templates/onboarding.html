@@ -149,6 +149,22 @@
         <textarea rows="3" x-model="targetingTitlesText"
                   placeholder="Senior Data Engineer, Staff ML Engineer"></textarea>
       </label>
+      <div class="seed-boards">
+        <button type="button" class="secondary-btn"
+                :disabled="seed.status === 'running'" @click="startSeed()">
+          <span x-show="seed.status !== 'running'">Find companies in my field</span>
+          <span x-show="seed.status === 'running'">Searching&hellip;</span>
+        </button>
+        <span class="muted small" x-show="seed.status === 'running'"
+              x-text="`probed ${seed.probed || 0} · found ${seed.kept || 0}`"></span>
+        <span class="muted small" x-show="seed.status === 'done'" x-text="seed.note"></span>
+        <span class="muted small" x-show="seed.status === 'error'"
+              x-text="`Search failed: ${seed.error || ''}`"></span>
+        <p class="muted small">
+          Probes verified company boards that currently have postings matching your titles and
+          adds them to discovery. Runs in the background &mdash; keep going; it saves when done.
+        </p>
+      </div>
       <label>Locations (comma or newline separated)
         <textarea rows="2" x-model="targetingLocationsText"
                   placeholder="Remote (US), Seattle"></textarea>

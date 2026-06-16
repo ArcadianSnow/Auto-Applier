@@ -164,6 +164,24 @@ def test_dead_slug_isolated(settings: Settings):
     assert summary.added == {"greenhouse": ["good"]}
 
 
+def test_progress_callback_fires_per_candidate(settings: Settings):
+    s = _settings(settings)
+    gh = _StubSource({"a": ["Data Analyst"], "b": ["Frontend Engineer"], "c": "raise"})
+    seen = []
+    seeder = _seeder(
+        s,
+        directory=_dir(("greenhouse", "A", "a"), ("greenhouse", "B", "b"),
+                       ("greenhouse", "C", "c")),
+        sources={"greenhouse": gh},
+        progress=lambda summ: seen.append((summ.probed, summ.kept)),
+    )
+    summary = seeder.run()
+
+    assert len(seen) == 3                 # one callback per candidate
+    assert seen[-1][0] == 3               # probed reached the full count
+    assert summary.kept == seen[-1][1]    # the live kept count matches the final summary
+
+
 # --------------------------------------------------------------- skip + cache
 
 def test_already_configured_slug_not_reprobed(settings: Settings):

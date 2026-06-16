@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import random
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from auto_applier.config.settings import Settings
@@ -94,6 +95,7 @@ class BoardSeeder:
         sources: dict[str, object] | None = None,
         directory: list[DirectoryEntry] | None = None,
         probe_cache: dict[str, str] | None = None,
+        progress: Callable[["SeedSummary"], None] | None = None,
     ):
         self._settings = settings
         self._titles = titles if titles is not None else list(settings.targeting.titles)
@@ -105,6 +107,7 @@ class BoardSeeder:
         self._injected_sources = sources
         self._directory = directory
         self._cache = probe_cache if probe_cache is not None else {}
+        self._progress = progress
 
     # -- public ------------------------------------------------------------
 
@@ -146,12 +149,14 @@ class BoardSeeder:
                 key = f"{e.ats}:{e.slug}"
                 if self._cache.get(key) == "dead":
                     summary.cached_skip += 1
+                    self._emit_progress(summary, kept)
                     continue
                 summary.probed += 1
                 status, keep = self._probe_one(e, src, summary)
                 self._cache[key] = status
                 if keep:
                     kept.setdefault(e.ats, []).append(e.slug)
+                self._emit_progress(summary, kept)
         finally:
             self._close_sources(sources)
 
@@ -170,6 +175,15 @@ class BoardSeeder:
         }
 
     # -- internals ---------------------------------------------------------
+
+    def _emit_progress(self, summary: SeedSummary, kept: dict) -> None:
+        """Refresh the live counters on ``summary`` and fire the optional progress callback
+        (the background web runner reads these for the wizard's live 'probed X · found Y')."""
+        if self._progress is None:
+            return
+        summary.kept = sum(len(v) for v in kept.values())
+        summary.added = kept
+        self._progress(summary)
 
     def _probe_one(self, e: DirectoryEntry, src, summary: SeedSummary) -> tuple[str, bool]:
         """Probe one slug. Returns ``(liveness, keep)`` where liveness ∈ {"live","dead"} (for
