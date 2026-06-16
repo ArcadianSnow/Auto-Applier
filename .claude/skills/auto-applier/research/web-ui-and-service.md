@@ -594,6 +594,37 @@ from a prior cycle.
 | Cancel flips Application, keeps Job in REVIEW | `test_cancel_flips_application_keeps_job_in_review` |
 | Cancel 404 on missing job | `test_cancel_404_when_job_missing` |
 | Cancel 409 with no PENDING attempt | `test_cancel_409_when_no_pending` |
+
+## Direction 2 (Phase A) — Assisted-queue panel landed (2026-06-16, commit 46f88d6)
+
+Turned the flat REVIEW list into a grouped, actionable to-do list on the dashboard ("N filled,
+waiting for you to submit / log in / decide") — the realistic Greenhouse outcome. Evolved the
+existing Alpine app (no framework rewrite, per future-directions.md Direction 2).
+
+- **New endpoints** (`routes.py`): `GET /api/review-queue` (REVIEW jobs enriched with
+  `needed_action`/`reason`/`assisted_application_id`/`source_paused`/`score_total`),
+  `POST /api/jobs/{id}/mark-applied` (reuses `manual_apply.mark_manually_applied` — note: an already-
+  APPLIED job returns **200 `status="already"`**, not an error, so the 409 case is a genuinely
+  disallowed state like SCORED), `POST /api/jobs/{id}/skip` (REVIEW→SKIPPED). Open/confirm/cancel/login
+  REUSE the existing (4/M) assisted endpoints.
+- **The "reason" is INFERRED, not stored** (`views.review_reason`, pure + unit-tested): latest
+  Application `ASSISTED_PENDING` → "submit"; source `is_paused` → "login"; else (no app = optimize-gate
+  REVIEW, or a FAILED app) → "decide". No schema change. The security-code-vs-plain-submit distinction
+  is NOT derivable from app.db alone (the `CAPTCHA_CHALLENGE` signal lives only in the driver outcome /
+  events) → collapsed into "submit" for now; deferred to A3 (ties to the Direction 3 question).
+- Honesty preserved: `mark-applied`/`confirm` are human attestations (same as `av3 applied`), never a
+  fabricated bot confirmation; assisted finish goes through the existing headed-browser launcher.
+
+### ⚠️ DURABLE GOTCHA — Alpine `:disabled` (and any boolean attr) bound to `undefined` does NOT clear
+
+`:disabled="reviewBusy[j.id]"` with `reviewBusy` a `{}` dict (so the value is `undefined` when the row
+isn't busy) rendered EVERY action button **permanently `disabled`**. Alpine only *removes* a boolean
+attribute when the bound value is explicitly `false` — `undefined`/`null` leave it set. Proven live
+(playwright): setting the keys to explicit `false` → enabled; resetting to `{}` (undefined) → disabled
+again. **Fix: coerce dict-indexed boolean bindings to a real boolean — `:disabled="!!reviewBusy[j.id]"`.**
+The same latent bug existed in the pre-existing Sources-panel bindings (`!!sourceBusy[s.source]`), now
+fixed too. **Rule for this codebase: any `:disabled="<dict>[key]"` MUST be `!!`-coerced.** TestClient
+tests can't catch this (it's render-time JS) — only the playwright browser-smoke did.
 | Latest-pending picks most recent of multiple | `test_picks_most_recent_pending` |
 | login_url round-trips through snapshot | `test_login_url_round_trips` |
 | login_url clears on mark_healthy | `test_login_url_clears_on_mark_healthy` |
