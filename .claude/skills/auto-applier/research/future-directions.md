@@ -131,10 +131,14 @@ So decompose the journey into five steps, with the LLM's autonomy bounded at eac
 - **Licensing/attribution:** bundling MIT datasets is clean but needs an attribution note in-repo.
 
 ## The plan (phased)
-- **Phase A — Résumé → fact bank.** PDF/DOCX→text (already have `python-docx`; add a PDF text lib),
-  `prompts.EXTRACT_FACTBANK` (versioned), review screen reusing the wizard's per-field render, write
-  through the existing atomic `save_fact_bank`. Eval harness: `tests/fixtures/resumes/*` with expected
-  JSON. **Deliverable:** "upload résumé → review → fact bank populated," no slugs yet.
+- **Phase A — Résumé → fact bank. ✅ SHIPPED 2026-06-16 (CLI).** `resume/extract.py` (pdfplumber/
+  python-docx/txt → text; `extract_factbank` → coerce → `FactBank.from_dict`; `merge_extracted`
+  preserves user-entered work-auth/EEO/relocation), `prompts.EXTRACT_FACTBANK` (faithful, individual
+  skills, every role), `av3 extract-resume <file> [--save] [--json]`. Live-verified on a real résumé:
+  faithful, complete (3 roles + 63 skills), stable. **qwen3 finding:** use Ollama's API `think:false`
+  (NOT the in-prompt `/no_think` token — it randomly dropped roles) + a `num_predict` bound;
+  `complete_json` now supports both. **Still to do:** the onboarding WIZARD UI (upload→extract→review
+  in the browser — currently CLI only) and an eval harness (`tests/fixtures/resumes/*` + golden JSON).
 - **Phase B — Goal elicitation → TargetingConfig.** Scripted conversational step (new onboarding
   sub-route + a small state machine). Writes `titles/locations/remote/salary_floor/seniority` + a new
   `preferences` blob (soft signals for ranking). **Deliverable:** the chat produces the structured

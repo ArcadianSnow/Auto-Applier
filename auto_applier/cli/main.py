@@ -1395,6 +1395,86 @@ def research_cmd(company: str, source_file: str | None, show: bool) -> None:
     click.echo(briefing.to_markdown())
 
 
+@cli.command("extract-resume")
+@click.argument("resume_path")
+@click.option("--save", is_flag=True, default=False,
+              help="Write the extracted fact bank to profile/master.json (review the output "
+                   "first!). Merges into any existing bank, PRESERVING your work-auth / "
+                   "sponsorship / EEO / relocation answers — only résumé-derived fields change.")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Emit the extracted fact bank as JSON (the master.json shape).")
+def extract_resume_cmd(resume_path: str, save: bool, as_json: bool) -> None:
+    """Extract a structured fact bank from a résumé file (.pdf / .docx / .txt).
+
+    Parses the file locally (pdfplumber / python-docx) and uses the local LLM to pull contact,
+    work history, education, skills, certifications, and impact metrics into the fact-bank shape
+    — so onboarding doesn't mean hand-typing your whole history. Faithful by design: it extracts
+    ONLY what the résumé states (the bank is the fabrication guard's source of truth). REVIEW the
+    output before trusting it; --save merges it into profile/master.json without touching your
+    work-auth / EEO / relocation answers.
+    """
+    import asyncio
+    import json as _json
+    from pathlib import Path
+
+    from auto_applier.llm.complete import build_default
+    from auto_applier.resume.extract import extract_from_file, merge_extracted
+    from auto_applier.web.onboarding import (
+        _fact_bank_to_dict,
+        load_fact_bank,
+        save_fact_bank,
+    )
+
+    settings = load_settings()
+    if not Path(resume_path).exists():
+        click.echo(f"  x FAIL résumé file not found: {resume_path}", err=True)
+        sys.exit(2)
+
+    try:
+        bank = asyncio.run(extract_from_file(resume_path, build_default(settings)))
+    except ValueError as exc:  # unsupported format
+        click.echo(f"  x FAIL {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(_json.dumps(_fact_bank_to_dict(bank), indent=2, ensure_ascii=False))
+    else:
+        c = bank.contact
+        click.echo(f"contact: {c.name or '(none)'} | {c.email or '-'} | {c.location or '-'}")
+        if c.links:
+            click.echo("  links: " + ", ".join(f"{k}={v}" for k, v in c.links.items()))
+        click.echo(f"work history: {len(bank.work_history)} role(s)")
+        for w in bank.work_history:
+            span = f"{w.start or '?'}-{w.end or '?'}"
+            click.echo(
+                f"  - {w.title or '(title?)'} @ {w.company or '(company?)'}  [{span}]  "
+                f"{len(w.bullets)} bullet(s)"
+            )
+        click.echo(
+            f"education: {len(bank.education)} | skills: {len(bank.skills)} | "
+            f"certs: {len(bank.certifications)} | metrics: {len(bank.allowed_metrics)}"
+        )
+        if bank.skills:
+            click.echo("  skills: " + ", ".join(bank.skills[:18])
+                       + (" …" if len(bank.skills) > 18 else ""))
+        if bank.allowed_metrics:
+            click.echo("  metrics: " + " | ".join(bank.allowed_metrics[:8])
+                       + (" …" if len(bank.allowed_metrics) > 8 else ""))
+
+    if not save:
+        click.echo("\n(extracted only — re-run with --save to write it into your fact bank, "
+                   "after reviewing the fields above.)")
+        return
+
+    existing = load_fact_bank(settings.data_dir)
+    had_bank = bool(existing.work_history or existing.contact.name)
+    merged = merge_extracted(existing, bank)
+    save_fact_bank(settings.data_dir, merged)
+    click.echo(f"\nsaved fact bank -> {settings.data_dir / 'profile' / 'master.json'}")
+    if had_bank:
+        click.echo("  (merged: résumé fields replaced; your work-auth / EEO / relocation kept.)")
+
+
 @cli.command("ask")
 @click.argument("question")
 @click.option("--job", "job_id", default=None,

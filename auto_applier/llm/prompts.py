@@ -409,6 +409,55 @@ COPILOT_DRAFT = PromptTemplate(
 )
 
 
+EXTRACT_FACTBANK = PromptTemplate(
+    version="extract-factbank-v1",
+    system=(
+        "You extract a job candidate's structured fact bank from the raw text of their "
+        "résumé. This bank becomes the SINGLE SOURCE OF TRUTH a downstream fabrication guard "
+        "enforces, so extract ONLY what the résumé actually states. NEVER invent, infer, or "
+        "embellish a company, title, date, school, degree, skill, certification, or number "
+        "that is not present in the text. If something is not in the résumé, leave it empty. "
+        "Faithfulness matters far more than completeness.\n\n"
+        "Extract:\n"
+        "  - contact: name, email, phone, location (city/region), and links (LinkedIn / GitHub "
+        "/ portfolio URLs) exactly as they appear.\n"
+        "  - work_history: each role with company, title, start, end, and bullets (the "
+        "achievement / responsibility lines under that role, kept faithful to the wording — "
+        "do NOT invent or inflate metrics). Most-recent first if the résumé is ordered that "
+        "way. Extract EVERY role the résumé lists — never omit, merge, or summarize a job, "
+        "including older or short ones.\n"
+        "  - education: institution, degree, field_of_study, start, end.\n"
+        "  - skills: list INDIVIDUAL skills / technologies as SEPARATE entries — never a "
+        "category header or a comma-joined blob as one entry. If the résumé groups skills "
+        "(e.g. 'Databases: SQL Server, Azure SQL, T-SQL'), split them into 'SQL Server', "
+        "'Azure SQL', 'T-SQL' and DROP the 'Databases:' label itself.\n"
+        "  - certifications: any certifications or licenses listed.\n"
+        "  - allowed_metrics: EVERY concrete impact number the résumé states, quoted "
+        "near-verbatim (e.g. 'saved $40K/year', 'team of 10', '190+ tables', 'cut load time "
+        "35%'). These become the guard's numeric allow-list, so capture them all and invent "
+        "none.\n\n"
+        "Do NOT output work authorization, sponsorship, or EEO / demographic fields — the "
+        "candidate sets those himself; they are never extracted from a résumé.\n\n"
+        "Dates: normalize to 'YYYY-MM', 'YYYY', 'Present', or '' when absent. Never guess a "
+        "date the résumé does not give.\n\n"
+        "Output ONE JSON object with this exact shape and nothing else (no prose, no code "
+        "fences, no preamble):\n"
+        '{\n'
+        '  "contact": {"name": str, "email": str, "phone": str, "location": str, '
+        '"links": {label: url}},\n'
+        '  "work_history": [{"company": str, "title": str, "start": str, "end": str, '
+        '"bullets": [str]}],\n'
+        '  "education": [{"institution": str, "degree": str, "field_of_study": str, '
+        '"start": str, "end": str}],\n'
+        '  "skills": [str],\n'
+        '  "certifications": [str],\n'
+        '  "allowed_metrics": [str]\n'
+        '}'
+    ),
+    template="Résumé text:\n{resume_text}",
+)
+
+
 #: All templates exported here so the eval harness can iterate them.
 ALL_TEMPLATES: tuple[PromptTemplate, ...] = (
     SCORE_JD,
@@ -418,6 +467,7 @@ ALL_TEMPLATES: tuple[PromptTemplate, ...] = (
     COMPANY_RESEARCH,
     COPILOT_ANSWER,
     COPILOT_DRAFT,
+    EXTRACT_FACTBANK,
 )
 
 
@@ -426,6 +476,7 @@ __all__ = [
     "COMPANY_RESEARCH",
     "COPILOT_ANSWER",
     "COPILOT_DRAFT",
+    "EXTRACT_FACTBANK",
     "GENERATE_COVER_LETTER",
     "GENERATE_RESUME",
     "SCORE_JD",

@@ -33,7 +33,10 @@ import httpx
 class CompletionClient(Protocol):
     """JSON-out completion. Tests pass a deterministic stub."""
 
-    async def complete_json(self, prompt: str, *, system: str = "") -> dict: ...
+    async def complete_json(
+        self, prompt: str, *, system: str = "",
+        think: bool | None = None, num_predict: int | None = None,
+    ) -> dict: ...
 
 
 class CompletionError(RuntimeError):
@@ -103,16 +106,30 @@ class _OllamaJSONBackend:
         self.model = model
         self.timeout_s = timeout_s
 
-    async def complete_json(self, prompt: str, *, system: str = "") -> dict:
+    async def complete_json(
+        self, prompt: str, *, system: str = "",
+        think: bool | None = None, num_predict: int | None = None,
+    ) -> dict:
+        options: dict = {"temperature": 0.0}  # deterministic for resolver use
+        if num_predict is not None:
+            # Bound generation so a degenerate loop can't run to the read timeout (the
+            # qwen3 failure mode cover-gen hit). A large JSON still fits comfortably.
+            options["num_predict"] = num_predict
         payload: dict = {
             "model": self.model,
             "prompt": prompt,
             "format": "json",
             "stream": False,
-            "options": {"temperature": 0.0},  # deterministic for resolver use
+            "options": options,
         }
         if system:
             payload["system"] = system
+        if think is not None:
+            # qwen3 thinking control. think=False skips the chain-of-thought trace; the API
+            # parameter is cleaner AND more reliable than the in-prompt "/no_think" token,
+            # which was observed to degrade structured-extraction completeness (2026-06-16:
+            # the token randomly dropped work-history roles; think=False returns all of them).
+            payload["think"] = think
         url = f"{self.host}/api/generate"
         async with httpx.AsyncClient(timeout=self.timeout_s) as client:
             resp = await client.post(url, json=payload)
@@ -141,11 +158,16 @@ class FallbackCompletion:
     def __init__(self, ollama: _OllamaJSONBackend | None = None):
         self.ollama = ollama
 
-    async def complete_json(self, prompt: str, *, system: str = "") -> dict:
+    async def complete_json(
+        self, prompt: str, *, system: str = "",
+        think: bool | None = None, num_predict: int | None = None,
+    ) -> dict:
         last_exc: Exception | None = None
         if self.ollama is not None:
             try:
-                return await self.ollama.complete_json(prompt, system=system)
+                return await self.ollama.complete_json(
+                    prompt, system=system, think=think, num_predict=num_predict,
+                )
             except (httpx.HTTPError, CompletionError) as exc:
                 last_exc = exc
         raise CompletionError(
