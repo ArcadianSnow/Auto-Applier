@@ -180,13 +180,37 @@ voice ceiling (same as cover letters); the human edits anyway. Tests: `tests/tes
 (freeform section — route-not-verdict, fabrication-flagged-but-returned, voice-tell retry-prefers-
 clean, dash-strip, empty→review, binary-screener-regression, sensitive-still-policy).
 
-**Not done (Phase B, deliberately deferred — the apply-pipeline wiring).** Routing the resolver's
-open-ended bail (`answer_resolver.py:554`) to the copilot draft in ASSISTED mode needs a
-"fill-but-flag" `Resolution` (`fills = value is not None and not needs_review`, so a drafted-but-
-flagged essay can't both fill and flag today) — that touches the gated auto/assisted invariants
-(`fill_resolutions` / `any_required_unresolved`) and would be a default-OFF settings flag mirroring
-`attest_human`. Lower priority: the apply pipeline is not the user's live use (discovery+scoring-
-only; he answers screeners by hand with `av3 ask`). See `automated-apply-next-build.md` BUILD 6.
+### Phase B — apply-pipeline wiring (SHIPPED 2026-06-15, default OFF)
+
+The assisted *apply path* now drafts freeform answers too, behind `settings.draft_freeform_answers`
+(default OFF — the safe bail-blank stays the default for everyone, mirroring `attest_human`).
+
+- **Fill-but-flag `Resolution`.** Added `Resolution.draft: bool` and a new `ResolutionSource.DRAFT`.
+  `fills` became `value is not None and (not needs_review or self.draft)` — so a draft is the one
+  resolution that BOTH fills (typed into the textarea) AND carries `needs_review=True` (flagged). The
+  change is purely additive: no existing resolution has a value set together with `needs_review=True`,
+  so `fills` is unchanged for every non-draft case.
+- **Resolver.** `AnswerResolver(draft_freeform=...)`; the open-ended branch (`answer_resolver.py`)
+  now, when opted in and an LLM is present, calls `_draft_open_ended` → `Copilot.answer()` (which
+  routes to the freeform draft) and returns the fill-but-flag `Resolution`. Any draft failure
+  (copilot review/empty/exception) returns `None` → the caller falls back to the safe blank bail.
+  The worker sets `resolver.current_job = job` per-job (same pattern as the salary ask) so a
+  "why this company?" essay drafts against the real company/JD.
+- **Never auto-submits (the load-bearing invariant).** New `apply_base.any_drafted(resolutions)`;
+  all three drivers (greenhouse/lever/ashby) downgrade `BROWSER_AUTO → ASSISTED_PENDING` on
+  `any_required_unresolved OR any_drafted`. The `any_drafted` clause is essential: a draft on an
+  *optional* field would slip past the required-only check, so without it the form could auto-submit
+  an AI essay. With it, ANY drafted job goes assisted — the bot fills the draft, the human edits and
+  submits. (A drafted *required* field is already caught by `needs_review` too; `any_drafted` covers
+  the optional case.)
+- **Tests:** `test_answer_resolver.py` (off-by-default bails + LLM never called; on → fill-but-flag
+  DRAFT; LLM-error → safe bail; no-LLM → bail) and `test_apply_driver.py` (drafted OPTIONAL field
+  forces assisted, never submitted). Full suite green.
+
+The apply pipeline still isn't the user's live use (discovery+scoring-only; he answers screeners by
+hand with `av3 ask`, which Phase A serves), so the flag ships OFF. It's ready for whenever the
+auto/assisted browser-apply path goes live. Job-context-aware drafts are wired (`current_job`) but
+only exercised through the worker; `av3 ask --job` already gives the same context on the CLI.
 
 ## Known limits / future work
 

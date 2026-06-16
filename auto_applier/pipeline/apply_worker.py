@@ -328,6 +328,7 @@ class ApplyWorker:
             llm_client=llm_client,
             salary_expectation=salary_expectation,
             attest_human=settings.attest_human,
+            draft_freeform=settings.draft_freeform_answers,
         )
 
     # -- public ------------------------------------------------------------
@@ -524,6 +525,11 @@ class ApplyWorker:
         # and no posted comp exist, recommend_ask returns None → "" → resolver bails any
         # salary question to REVIEW (unchanged v3.0 behaviour).
         self._apply_salary_ask(job)
+        # Per-job context for assisted freeform drafting (BUILD 6 Phase B). Set on the shared
+        # resolver before this job's questions resolve (same per-job pattern as the salary ask,
+        # safe because jobs process sequentially) so a "why this company?" essay can draft
+        # against the real company/JD. No-op unless draft_freeform is enabled.
+        self._resolver.current_job = job
 
         listing = driver.listing_from_job(job)
         page = await self._new_page()

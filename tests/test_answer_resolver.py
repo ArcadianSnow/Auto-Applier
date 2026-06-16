@@ -339,6 +339,67 @@ def test_open_ended_fills_from_bank_when_seeded(answer_repo):
     assert res.source is ResolutionSource.BANK
 
 
+# ---- assisted-mode freeform DRAFT (BUILD 6 Phase B, opt-in draft_freeform) ----------
+
+def _draft_reply(**over) -> dict:
+    """A COPILOT_DRAFT reply shape — the copilot routes an open-ended question here. Clean
+    (bank-grounded, tell-free) so the draft isn't flagged in these wiring tests."""
+    base = dict(
+        answer=("At Acme Health, I rebuilt the billing pipeline in Python and SQL. "
+                "That data work is what this role needs."),
+        bank_evidence=["Python", "SQL"],
+        overclaim_risk="low",
+        risk_note="",
+        gaps=[],
+    )
+    base.update(over)
+    return base
+
+
+def test_draft_freeform_off_by_default_open_ended_still_bails():
+    """Default (no opt-in): an open-ended prompt bails blank and the LLM is never invoked —
+    the AUTO-path invariant is unchanged for everyone who doesn't opt in."""
+    llm = StubLLM(reply=_draft_reply())
+    resolver = AnswerResolver(_bank(), answer_repo=_make_empty_repo(), llm_client=llm)
+    res = asyncio.run(resolver.resolve(_q("Why do you want to work here?", kind="textarea")))
+    assert res.value is None and res.needs_review is True
+    assert res.source is ResolutionSource.REVIEW
+    assert llm.last_prompt == ""            # drafting OFF → copilot never invoked for the essay
+
+
+def test_draft_freeform_on_drafts_and_pre_fills():
+    """Opt-in: an open-ended prompt is DRAFTED and pre-filled, flagged for human review
+    (fill-but-flag) — instead of bailing blank."""
+    llm = StubLLM(reply=_draft_reply())
+    resolver = AnswerResolver(_bank(), answer_repo=_make_empty_repo(),
+                              llm_client=llm, draft_freeform=True)
+    res = asyncio.run(resolver.resolve(_q("Why do you want to work here?", kind="textarea")))
+    assert res.value.startswith("At Acme Health")   # the draft is pre-filled into the field
+    assert res.source is ResolutionSource.DRAFT
+    assert res.draft is True
+    assert res.needs_review is True                 # ALWAYS the human's to edit + submit
+    assert res.fills is True                        # fill-but-flag: typed in despite needs_review
+    assert llm.last_prompt != ""                    # the copilot WAS invoked to draft
+
+
+def test_draft_freeform_falls_back_to_bail_when_copilot_errors():
+    """A draft failure (LLM down) must not break resolution — fall back to the safe blank bail."""
+    llm = StubLLM(raise_exc=RuntimeError("ollama down"))
+    resolver = AnswerResolver(_bank(), answer_repo=_make_empty_repo(),
+                              llm_client=llm, draft_freeform=True)
+    res = asyncio.run(resolver.resolve(_q("Describe a hard problem you solved.", kind="textarea")))
+    assert res.value is None and res.needs_review is True
+    assert res.source is ResolutionSource.REVIEW
+
+
+def test_draft_freeform_on_but_no_llm_still_bails():
+    """draft_freeform ON but no LLM client → the branch can't draft → safe blank bail."""
+    resolver = AnswerResolver(_bank(), answer_repo=_make_empty_repo(),
+                              llm_client=None, draft_freeform=True)
+    res = asyncio.run(resolver.resolve(_q("Tell us about yourself.", kind="textarea")))
+    assert res.value is None and res.source is ResolutionSource.REVIEW
+
+
 def test_work_auth_yes_no_eligibility_maps_to_yes():
     """'Are you eligible to work…?' (yes/no) → 'Yes', not the status string 'US Citizen'
     (which wouldn't match a Yes/No select — live blank 2026-06-12)."""

@@ -444,11 +444,17 @@ design + rationale: `application-copilot.md` → "Freeform draft path (BUILD 6)"
 - **Live-verified** (real bank, qwen3:8b): the Stripe bait now drafts a grounded, honest, **tell-free**
   first-person answer; a STAR essay drafts cleanly. Tests added in `tests/test_copilot.py`.
 
-**Phase B (NOT done, deferred):** routing the resolver's open-ended bail → the copilot draft in the
-ASSISTED *apply* path needs a "fill-but-flag" `Resolution` (today `fills = value is not None and not
-needs_review`), touching the gated auto/assisted invariants behind a default-OFF flag. Deferred
-because the apply pipeline isn't the user's live use. This is the remaining BUILD 6 work if/when the
-auto/assisted browser-apply path goes live.
+**Phase B (SHIPPED 2026-06-15, default OFF):** the assisted *apply* path drafts freeform answers too,
+behind `settings.draft_freeform_answers` (default OFF — safe bail-blank stays the default). Added
+`Resolution.draft` + `ResolutionSource.DRAFT` + the fill-but-flag `fills` (`value is not None and (not
+needs_review or draft)`); the resolver's open-ended branch calls `_draft_open_ended` → the copilot
+draft and returns a pre-filled-yet-flagged resolution (failure → safe bail). New
+`apply_base.any_drafted`; all three drivers downgrade `BROWSER_AUTO → ASSISTED_PENDING` on
+`any_required_unresolved OR any_drafted`, so a drafted essay (even on an optional field) is NEVER
+auto-submitted. Worker sets `resolver.current_job` per-job for company/JD-aware drafts. Tests in
+`test_answer_resolver.py` + `test_apply_driver.py`; full suite green. Ships OFF because the apply
+pipeline isn't the live use; ready for the gated go-live. Full design: `application-copilot.md`
+→ "Phase B".
 
 ## THEN — the gated go-live (unchanged)
 

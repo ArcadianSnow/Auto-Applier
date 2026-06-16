@@ -27,6 +27,7 @@ from auto_applier.sources.browser.apply_base import (
     Applicant,
     ApplyOutcome,
     CustomQuestion,
+    any_drafted,
     any_required_unresolved,
     attach_cover_letter,
     check_auth_wall,
@@ -260,12 +261,15 @@ async def prepare_application(
     # If any REQUIRED custom question lacked a confident answer, downgrade BROWSER_AUTO
     # to assisted (a missing required answer would either fail validation or submit a
     # broken application). Optional unresolved questions are benign.
-    if (
-        mode is ApplyMode.BROWSER_AUTO
-        and any_required_unresolved(outcome.custom_questions, outcome.resolutions)
+    if mode is ApplyMode.BROWSER_AUTO and (
+        any_required_unresolved(outcome.custom_questions, outcome.resolutions)
+        or any_drafted(outcome.resolutions)
     ):
         outcome.status = ApplicationStatus.ASSISTED_PENDING
-        outcome.note = "required custom question unresolved — downgraded to assisted (spec §8b)"
+        outcome.note = (
+            "required custom question unresolved or freeform draft pre-filled — "
+            "downgraded to assisted (spec §8b)"
+        )
         return outcome
 
     if mode is ApplyMode.BROWSER_ASSISTED:

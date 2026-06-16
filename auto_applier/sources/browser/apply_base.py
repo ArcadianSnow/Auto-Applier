@@ -38,6 +38,7 @@ __all__ = [
     "ApplyMode",
     "ApplyOutcome",
     "CustomQuestion",
+    "any_drafted",
     "any_required_unresolved",
     "attach_cover_letter",
     "check_auth_wall",
@@ -571,6 +572,18 @@ def any_required_unresolved(questions: list[CustomQuestion], resolutions: list) 
         if q.required and getattr(r, "needs_review", False):
             return True
     return False
+
+
+def any_drafted(resolutions: list) -> bool:
+    """True iff any resolution is a freeform DRAFT (BUILD 6 Phase B).
+
+    A drafted essay is pre-filled but UNVETTED, so the driver force-downgrades the job to
+    assisted even when every *required* field resolved and the draft sat on an *optional*
+    field — the bot must never auto-submit an AI-written essay (the §8b invariant). Without
+    this, an optional drafted field would slip past :func:`any_required_unresolved` and the
+    form could auto-submit with the draft in it.
+    """
+    return any(getattr(r, "draft", False) for r in resolutions)
 
 
 async def check_auth_wall(page, source: str) -> str:

@@ -36,6 +36,7 @@ from auto_applier.sources.browser.apply_base import (
     Applicant,
     ApplyOutcome,
     CustomQuestion,
+    any_drafted,
     any_required_unresolved,
     check_auth_wall,
     fill_phone,
@@ -231,12 +232,15 @@ async def prepare_application(
     # --- production: branch by mode ---
     # Required-Q downgrade has to fire before BROWSER_AUTO so we never submit a
     # form with unanswered required custom questions (spec §8b).
-    if (
-        mode is ApplyMode.BROWSER_AUTO
-        and any_required_unresolved(outcome.custom_questions, outcome.resolutions)
+    if mode is ApplyMode.BROWSER_AUTO and (
+        any_required_unresolved(outcome.custom_questions, outcome.resolutions)
+        or any_drafted(outcome.resolutions)
     ):
         outcome.status = ApplicationStatus.ASSISTED_PENDING
-        outcome.note = "required custom question unresolved — downgraded to assisted (spec §8b)"
+        outcome.note = (
+            "required custom question unresolved or freeform draft pre-filled — "
+            "downgraded to assisted (spec §8b)"
+        )
         return outcome
 
     if mode is ApplyMode.BROWSER_ASSISTED:

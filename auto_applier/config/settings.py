@@ -315,6 +315,13 @@ class Settings(BaseModel):
     #: bail-to-assisted default. (User-directed 2026-06-14; the real anti-bot path is untouched.)
     attest_human: bool = False
 
+    #: Assisted-mode freeform drafting (BUILD 6 Phase B, default OFF). When ON, an open-ended /
+    #: essay application field with no banked answer is DRAFTED by the §8f copilot and pre-filled
+    #: for the human to edit, instead of bailing blank — and the draft ALWAYS forces the job to
+    #: assisted, so the bot never auto-submits an AI-written essay. OFF keeps the safe bail-blank
+    #: default. ("Assisted" = the AI drafts the freeform answer, the human spot-checks + submits.)
+    draft_freeform_answers: bool = False
+
     #: Score floor for cover-letter autogen (``av3 cover --generate-all``; BUILD 5). A strong
     #: match (total ≥ this) gets a tailored, guard-checked .docx letter written and ready "just
     #: in case", written into ``uploads/<job_id>/`` only if one isn't already there (a manual

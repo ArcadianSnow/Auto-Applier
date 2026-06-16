@@ -66,6 +66,7 @@ class ResolutionSource(str, Enum):
 
     BANK = "bank"               # exact or semantic match against the answer repo
     INFERRED = "inferred"       # LLM tier-3 answer, confidence-gated, flagged for review
+    DRAFT = "draft"             # assisted-mode freeform DRAFT (BUILD 6 Phase B); pre-filled, always reviewed
     SENSITIVE_DEFAULT = "sensitive_default"  # EEO blank -> "prefer not to answer"
     FACT_BANK = "fact_bank"     # work-auth pulled from the fact bank directly
     USER_CONFIG = "user_config"  # e.g. salary expectation from user_config.json
@@ -95,11 +96,19 @@ class Resolution:
     confidence: float = 1.0    # 1.0 = bank/policy; <1 only for inferred
     sensitive: SensitiveClass = SensitiveClass.NONE
     needs_review: bool = False
+    #: A freeform DRAFT (BUILD 6 Phase B): an LLM-drafted essay answer that IS pre-filled
+    #: into the field yet ALWAYS needs human review. The driver force-downgrades any drafted
+    #: job to assisted (``any_drafted``), so a draft is filled but never auto-submitted.
+    draft: bool = False
     note: str = ""
 
     @property
     def fills(self) -> bool:
-        return self.value is not None and not self.needs_review
+        # A normal answer fills when it has a value and doesn't need review. A freeform DRAFT
+        # is the deliberate exception ("fill but flag"): it carries needs_review=True (the
+        # human edits + submits) yet is pre-filled into the field for that review. The driver
+        # force-downgrades any drafted job to assisted, so a draft never auto-submits.
+        return self.value is not None and (not self.needs_review or self.draft)
 
 
 # ------------------------------------------------------ sensitive-field classifier
@@ -510,6 +519,7 @@ class AnswerResolver:
         salary_expectation: str = "",
         config: _ResolverConfig | None = None,
         attest_human: bool = False,
+        draft_freeform: bool = False,
     ):
         self.fact_bank = fact_bank
         self.answer_repo = answer_repo
@@ -517,6 +527,13 @@ class AnswerResolver:
         self.llm_client = llm_client
         self.salary_expectation = salary_expectation
         self.config = config or _ResolverConfig()
+        # Assisted-mode freeform drafting (BUILD 6 Phase B, default OFF). When ON, an
+        # open-ended prompt with no banked answer is DRAFTED by the §8f copilot and pre-filled
+        # for the human (instead of bailing blank); the draft always forces the job to assisted
+        # so it is never auto-submitted. ``current_job`` is set per-job by the worker (mirrors
+        # ``salary_expectation``) so the draft can use the company/JD as context.
+        self.draft_freeform = draft_freeform
+        self.current_job = None
         # Owner opt-in (default OFF): fill the human option on a STATIC "which best describes
         # you? [human/AI]" self-ID FORM FIELD. The applicant is a human, and such a field is
         # not a behavioural/risk-scored anti-bot challenge (those are CAPTCHA/fingerprint,
@@ -548,10 +565,17 @@ class AnswerResolver:
         bank_hit = await self._resolve_from_bank(question)
         if bank_hit is not None:
             return bank_hit
-        # Open-ended essays must come from the bank (a prepared answer) or BAIL — the LLM
-        # is never allowed to free-write prose (it produced wrong negations live). Binary
+        # Open-ended essays must come from the bank (a prepared answer) or BAIL by default —
+        # the LLM is never allowed to free-write prose on the AUTO-submit path (it produced
+        # wrong negations live). When the owner opts in (``draft_freeform``, BUILD 6 Phase B),
+        # an essay is instead DRAFTED by the §8f copilot and pre-filled for assisted review —
+        # the draft always forces the job to assisted, so it is never auto-submitted. Binary
         # screeners still go to the copilot-audited tier below.
         if is_open_ended(question.label, getattr(question, "kind", "")):
+            if self.draft_freeform and self.llm_client is not None:
+                drafted = await self._draft_open_ended(question)
+                if drafted is not None:
+                    return drafted
             return self._review(
                 question,
                 note="open-ended prompt, no prepared/bank answer — bailed to assisted "
@@ -905,6 +929,43 @@ class AnswerResolver:
                 f"copilot-audited (verdict={answer.verdict}, "
                 f"risk={answer.overclaim_risk}); flag for §8e feedback loop"
             ),
+        )
+
+    # ---- freeform draft (Tier 2b — assisted, opt-in; BUILD 6 Phase B) ----
+
+    async def _draft_open_ended(self, question: CustomQuestion) -> Resolution | None:
+        """Draft an open-ended/essay answer via the §8f copilot's freeform path and return a
+        **fill-but-flag** resolution: a pre-filled value with ``needs_review=True`` AND
+        ``draft=True``, so the driver TYPES the draft into the field yet force-downgrades the
+        job to assisted (the human edits + submits; never an auto-submitted AI essay).
+
+        Returns ``None`` on any draft failure (copilot bailed to review, empty body, or an
+        exception) so the caller falls back to the safe blank bail. Never raises."""
+        from auto_applier.copilot import DRAFT_VERDICT, Copilot
+
+        try:
+            answer = await Copilot(self.llm_client).answer(
+                question.label or "", self.fact_bank, job=self.current_job
+            )
+        except Exception as exc:  # noqa: BLE001 — a draft failure must never break resolution
+            logger.warning("Freeform draft failed for %r: %s", question.label, exc)
+            return None
+        text = (answer.long_answer or "").strip()
+        if answer.verdict != DRAFT_VERDICT or not text:
+            # The copilot fell back to review/empty (or the question wasn't actually open-ended
+            # to it) — bail blank rather than fill something unvetted-and-unflagged.
+            return None
+        note = "freeform DRAFT pre-filled for review (assisted); never auto-submitted"
+        if answer.overclaim_risk == "high":
+            note += " — HIGH overclaim risk: " + (answer.risk_note or "verify before submitting")
+        return Resolution(
+            question=question,
+            value=text,
+            source=ResolutionSource.DRAFT,
+            confidence=0.0,          # a draft is not a confident answer — it is the human's to vet
+            needs_review=True,       # ALWAYS — the human edits + submits
+            draft=True,              # fill-but-flag: typed in, yet forces assisted
+            note=note,
         )
 
     # ---- review bail ----------------------------------------------------

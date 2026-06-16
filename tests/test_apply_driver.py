@@ -264,6 +264,37 @@ def test_required_question_unresolved_downgrades_auto_to_assisted():
     assert "unresolved" in outcome.note
 
 
+def test_drafted_optional_question_forces_assisted_never_auto_submits():
+    """BUILD 6 Phase B safety floor: a freeform DRAFT — even on an OPTIONAL field, where
+    any_required_unresolved is False — must force assisted. The bot never auto-submits an
+    AI-written essay; the human edits the pre-filled draft and submits."""
+    from auto_applier.resume.answer_resolver import Resolution, ResolutionSource
+    from auto_applier.sources.browser.apply_base import CustomQuestion, any_drafted
+
+    html = '<textarea id="g-recaptcha-response"></textarea><form><button type="submit"></button></form>'
+    scripts = ["https://www.gstatic.com/recaptcha/releases/x/recaptcha__en.js"]
+    questions = [
+        {"id": "question_555", "label": "Why do you want to work here?",
+         "required": False, "kind": "textarea"},
+    ]
+    page = FakePage(html, scripts, questions)
+    q = CustomQuestion("question_555", "Why do you want to work here?", False, "textarea")
+    draft = Resolution(question=q, value="At Acme, I rebuilt the billing pipeline.",
+                       source=ResolutionSource.DRAFT, needs_review=True, draft=True)
+    assert any_drafted([draft]) is True
+    resolver = _FakeResolver({"question_555": draft})
+
+    outcome = asyncio.run(
+        prepare_application(
+            page, _listing(), Applicant("A", "B", "a@b.com"), "/tmp/r.pdf",
+            dry_run=False, mode=ApplyMode.BROWSER_AUTO, resolver=resolver,
+        )
+    )
+    assert outcome.status is ApplicationStatus.ASSISTED_PENDING   # forced assisted by the draft
+    assert outcome.submitted is False                            # NEVER auto-submitted
+    assert "draft" in outcome.note.lower()
+
+
 def test_human_attestation_gate_downgrades_auto_to_assisted_end_to_end():
     """Blocker A, full chain: a native-select "Which best describes you?" whose options
     are AI-vs-human is discovered WITH options, the REAL resolver classifies it
