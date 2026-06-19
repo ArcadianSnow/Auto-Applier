@@ -328,24 +328,30 @@ Gusto ×2, Monzo ×2). Read-only throughout; no production writes (dry-run analy
   30-day scan covered only the oldest ~8 days and returned **0 outcomes** (every recent rejection hidden).
   Fix: cold start now takes the **NEWEST** `max_messages`; incremental stays oldest-first (catch-up, never
   skips). Post-fix the default 200-cap/30-day scan covers the recent window and finds the rejections.
-- **🔧 OPEN — matching precision for multi-role-same-company.** When you've applied to several roles at one
-  company (Dataiku ×2, Monzo ×2, Gusto ×2), a *generic* rejection email ("Your application to Monzo") hits
-  **company-only match (0.60)** and binds to the FIRST APPLIED job for that company — so the rejection is
-  DETECTED but pinned to the wrong sibling role. The url-match (0.95) would disambiguate but these ATS
-  emails don't carry the job URL. Follow-up: match on a role token from the subject, and/or capture the
-  ATS application-id/url at apply time for a hard join.
-- **🔧 OPEN — Gusto produced NO matchable email.** No email with a "gusto" company-hint surfaced in 21
-  days. Likely the rejection was relayed via an ATS domain (greenhouse/lever/ashby) whose 2nd-level label
-  is *filtered* in `_company_hint` → empty hint → no match (or it was marked from the portal, no email).
-  Follow-up: for ATS-relayed mail, recover the company from the subject/body, not just the From domain.
-- **⚠️ Classifier false positives (safe).** A Quora "BREAKING…" digest and CapitalOne CreditWise mails
-  tripped a `_REJECTION` keyword, and some Snowflake *confirmations* ("…next steps…") classified as
-  INTERVIEW. These are UNMATCHED to any APPLIED job → they route to **review**, never record a false
-  outcome (the confidence-gate + APPLIED-candidate matching contains them). Follow-up if noisy: tighten
-  the `_REJECTION`/`_INTERVIEW` phrase lists (e.g., "next steps" is too eager).
-- **Net:** the loop is genuinely useful on real data and the honesty/safety posture held throughout (no
-  APPLIED writes, no auto-submit, ambiguous→review). Highest-value next improvement = matching precision
-  (role-token + captured ATS url) so multi-role companies resolve to the exact job.
+- **✅ RESOLVED — matching precision for multi-role-same-company** (commit `a0a6e17`). The role IS in the
+  body (Greenhouse/Lever/Monzo templates: "your application for the *<Role>* position", "the *<Role>*
+  opening"), so the matcher now scores each same-company candidate by whether its **full title appears
+  verbatim** in the email text, preferring the **longest** ("Data Engineer II" beats its prefix sibling;
+  the named Monzo role beats the other). A unique winner → `company+role` 0.80; a tie / no role signal →
+  `company-ambiguous` (job_id=None, 0.50, sub-floor) → fails CLOSED to review, never a guessed sibling.
+- **✅ RESOLVED — Gusto** (commit `2c1c817`; my earlier "no email / ATS-relay hint gap" guess was WRONG —
+  verified against the real mail). TWO real causes: (1) **classifier** — Gusto's "Regarding your
+  Application" rejection says "we *won't* be moving forward at this time" with no "unfortunately"; the
+  curly apostrophe (U+2019) broke the `not be moving forward` keyword, so it fell through to RESPONSE (and
+  a confident deterministic miss preempts the LLM). Fix: normalize curly→straight apostrophe in the
+  haystack + add the contraction phrase. (2) **company match** — the email's domain hint "gusto" never
+  equalled the ATS legal name "Gusto, Inc."; fix: strip trailing legal suffixes (inc/llc/ltd/corp/co/…)
+  before comparing. **Result: 7/7 hand-marked rejections now detected, each to the exact job.**
+- **⚠️ OPEN (safe) — classifier false positives.** A Quora "BREAKING…" digest and CapitalOne CreditWise
+  mails tripped a `_REJECTION` keyword, and some "Thanks for applying" *confirmations* (Gusto, Snowflake)
+  classified as INTERVIEW via the over-eager `_INTERVIEW` phrase "next steps". The rejection-FPs are
+  UNMATCHED → route to review (no false outcome). The **interview-FP is the more important one**: a
+  confirmation mislabeled INTERVIEW that DOES match an applied job would record a wrong INTERVIEW outcome.
+  Next classifier-precision pass: tighten `_INTERVIEW` ("next steps"/"schedule a" need an interview cue),
+  and split RESPONSE vs INTERVIEW more carefully. (Not yet done — flagged for the next pass.)
+- **Net:** rejection auto-detection is complete on real data (7/7, exact-job), honesty/safety held
+  throughout (no APPLIED writes, no auto-submit, ambiguous→review). Highest-value next improvement =
+  the classifier-precision pass above (interview-FP), before a real recording scan banks outcomes.
 
 ## The plan (phased — original sketch; see the GROUNDED correction above for the authoritative cut)
 - **Phase A — Read-only IMAP ingestion.** `telemetry`-style local module: connect (host/port/user/
