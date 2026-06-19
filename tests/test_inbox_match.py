@@ -96,3 +96,69 @@ def test_empty_url_not_matched_as_substring():
     res = match_email(_cls(company="", role=""), _email("any body"), [job])
     assert res.job_id is None
     assert res.reason == "none"
+
+
+# ---------------------------------------------- multi-role same company (Phase C precision)
+
+def _monzo_jobs() -> list:
+    lead = _job(id="LEAD", company="Monzo", title="Lead Analytics Engineer, Borrowing", url="")
+    ml = _job(id="ML", company="Monzo", title="Machine Learning Platform Engineer", url="")
+    return [lead, ml]
+
+
+def test_multi_role_resolved_by_role_named_in_body():
+    """Generic subject, role named in the BODY (the real Monzo rejection shape) → the
+    EXACT sibling is chosen, not just the first one listed."""
+    body = ("Thanks for applying to Monzo. Unfortunately we won't be moving forward "
+            "with your application for the Machine Learning Platform Engineer position.")
+    res = match_email(
+        _cls(company="Monzo", role="", kind=OutcomeKind.REJECTION), _email(body), _monzo_jobs()
+    )
+    assert res.job_id == "ML"
+    assert res.reason == "company+role"
+    assert res.confidence == 0.80
+
+
+def test_multi_role_resolves_the_other_sibling():
+    body = ("Unfortunately we won't be moving forward with your application for the "
+            "Lead Analytics Engineer, Borrowing position this time.")
+    res = match_email(_cls(company="Monzo", role=""), _email(body), _monzo_jobs())
+    assert res.job_id == "LEAD"
+
+
+def test_multi_role_prefers_longest_title():
+    """The real Dataiku case: "Data Engineer II" must win when the email says "II",
+    and "Data Engineer" must win when it does NOT (its sibling is a superstring)."""
+    de = _job(id="DE", company="Dataiku", title="Data Engineer", url="")
+    de2 = _job(id="DE2", company="Dataiku", title="Data Engineer II", url="")
+    jobs = [de, de2]
+
+    body_ii = "Thank you for your interest in the Data Engineer II opening at Dataiku."
+    assert match_email(_cls(company="Dataiku"), _email(body_ii), jobs).job_id == "DE2"
+
+    body_de = "Thank you for your interest in the Data Engineer opening at Dataiku."
+    assert match_email(_cls(company="Dataiku"), _email(body_de), jobs).job_id == "DE"
+
+
+def test_multi_role_ambiguous_fails_to_review():
+    """Several applied roles at one company + a GENERIC email naming none → no guess;
+    fail closed to review (job_id None, sub-floor confidence), never a wrong sibling."""
+    res = match_email(
+        _cls(company="Monzo", role=""),
+        _email("Your application to Monzo. We won't be moving forward at this time."),
+        _monzo_jobs(),
+    )
+    assert res.job_id is None
+    assert res.reason == "company-ambiguous"
+    assert res.confidence == 0.50
+
+
+def test_multi_role_url_still_wins_outright():
+    """A url hit short-circuits before any role disambiguation."""
+    jobs = _monzo_jobs()
+    jobs[1] = _job(id="ML", company="Monzo", title="Machine Learning Platform Engineer",
+                   url="https://job-boards.greenhouse.io/monzo/jobs/7118972")
+    body = "View your application at https://job-boards.greenhouse.io/monzo/jobs/7118972"
+    res = match_email(_cls(company="Monzo"), _email(body), jobs)
+    assert res.job_id == "ML"
+    assert res.reason == "url"
