@@ -47,6 +47,11 @@ _REJECTION = (
     "decided to move forward with other candidates",
     "move forward with other candidates",
     "not be moving forward",
+    # Contraction form — real Gusto/Greenhouse rejections say "we won't be moving
+    # forward at this time" with no "unfortunately". The apostrophe is normalized to
+    # straight in _haystack; "wont" covers senders that drop it entirely.
+    "won't be moving forward",
+    "wont be moving forward",
     "will not be proceeding",
     "regret to inform",
     "no longer under consideration",
@@ -112,7 +117,10 @@ _NEWSLETTER = (
 
 
 def _haystack(email: FetchedEmail) -> str:
-    return f"{email.subject}\n{email.body_text}".lower()
+    # Normalize the curly apostrophe (U+2019, what most mail clients emit) to a straight
+    # one so contraction-bearing phrases ("won't be moving forward") match the keyword
+    # list. Straight-apostrophe keywords (e.g. "we'd like to extend") are unaffected.
+    return f"{email.subject}\n{email.body_text}".lower().replace("’", "'")
 
 
 def _any(haystack: str, phrases: tuple[str, ...]) -> bool:

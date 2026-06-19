@@ -56,6 +56,28 @@ def _tokens(text: str) -> set[str]:
     return {t for t in normalize(text).split() if t}
 
 
+# Trailing legal-entity tokens dropped before comparing companies, so the ATS legal
+# name ("Gusto, Inc.") matches the email-domain hint ("gusto"). Conservative — only
+# unambiguous suffixes; descriptive tails like "labs"/"group" are intentionally kept.
+_LEGAL_SUFFIXES = frozenset({
+    "inc", "incorporated", "llc", "ltd", "limited", "corp", "corporation",
+    "co", "company", "gmbh", "ag", "sa", "plc", "bv", "oy", "ab", "as", "srl", "spa",
+})
+
+
+def _company_key(name: str) -> str:
+    """Normalized company name with trailing legal-suffix tokens stripped.
+
+    "Gusto, Inc." → "gusto" matches the email's domain-derived hint "gusto"; "Acme LLC"
+    → "acme". Only *trailing* suffix tokens are removed, so "Coffee Co Roasters" keeps
+    "coffee co roasters" (the "co" isn't trailing).
+    """
+    toks = normalize(name).split()
+    while toks and toks[-1] in _LEGAL_SUFFIXES:
+        toks.pop()
+    return " ".join(toks)
+
+
 def _role_score(job: Job, role_text: str) -> int:
     """How strongly ``role_text`` (normalized subject+body+hint) identifies this job's
     title. A verbatim full-title phrase dominates (and the longer the title, the more
@@ -87,11 +109,11 @@ def match_email(cls: EmailClass, email: FetchedEmail, applied_jobs: list[Job]) -
         if url and url in body:
             return MatchResult(job_id=job.id, confidence=0.95, reason="url")
 
-    company_norm = normalize(cls.company_hint)
-    if not company_norm:
+    company_key = _company_key(cls.company_hint)
+    if not company_key:
         return MatchResult(job_id=None, confidence=0.0, reason="none")
 
-    candidates = [j for j in applied_jobs if normalize(j.company) == company_norm]
+    candidates = [j for j in applied_jobs if _company_key(j.company) == company_key]
     if not candidates:
         return MatchResult(job_id=None, confidence=0.0, reason="none")
 

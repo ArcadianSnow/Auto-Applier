@@ -53,6 +53,9 @@ class TestDeterministic:
         ("rejection.eml", OutcomeKind.REJECTION),
         ("interview.eml", OutcomeKind.INTERVIEW),
         ("offer.eml", OutcomeKind.OFFER),
+        # Real Gusto shape: no "unfortunately", only "we won't be moving forward"
+        # with a curly apostrophe — must beat the _RESPONSE keyword to REJECTION.
+        ("gusto_rejection.eml", OutcomeKind.REJECTION),
     ])
     def test_kind_projected(self, fixture, expected):
         cls = classify_deterministic(_email(fixture))
@@ -60,6 +63,24 @@ class TestDeterministic:
         assert cls.kind is expected
         assert cls.method == "deterministic"
         assert cls.confidence >= 0.8
+
+    def test_contraction_rejection_beats_response_keyword(self):
+        """Regression for the Gusto miss: a rejection body that ALSO contains a
+        response phrase ("thank you for your interest") but no "unfortunately" must
+        still classify REJECTION via the "won't be moving forward" contraction
+        (rejection is checked before response). Both apostrophe forms work."""
+        for apostrophe in ("’", "'"):  # curly (U+2019), straight
+            raw = (
+                "From: Gusto <careers@gusto.com>\r\n"
+                "Subject: Regarding your Application\r\n"
+                "Message-ID: <c@gusto.com>\r\n"
+                'Content-Type: text/plain; charset="utf-8"\r\n'
+                "\r\n"
+                "Thank you for your interest in the role. After reviewing your "
+                f"application, we won{apostrophe}t be moving forward at this time.\r\n"
+            ).encode("utf-8")
+            cls = classify_deterministic(parse_message(raw))
+            assert cls is not None and cls.kind is OutcomeKind.REJECTION
 
     def test_newsletter_ignored(self):
         cls = classify_deterministic(_email("newsletter.eml"))

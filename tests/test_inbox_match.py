@@ -153,6 +153,18 @@ def test_multi_role_ambiguous_fails_to_review():
     assert res.confidence == 0.50
 
 
+def test_company_legal_suffix_stripped():
+    """The email's domain-derived hint ("Gusto") matches the ATS legal name
+    ("Gusto, Inc.") — the real reason a Gusto rejection couldn't bind to its job."""
+    job = _job(id="G", company="Gusto, Inc.", title="Senior Data Engineer", url="")
+    res = match_email(
+        _cls(company="Gusto", role="", kind=OutcomeKind.REJECTION),
+        _email("After reviewing your application, we won't be moving forward."), [job],
+    )
+    assert res.job_id == "G"
+    assert res.reason == "company"
+
+
 def test_multi_role_url_still_wins_outright():
     """A url hit short-circuits before any role disambiguation."""
     jobs = _monzo_jobs()
