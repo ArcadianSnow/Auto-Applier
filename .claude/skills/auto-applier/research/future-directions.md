@@ -312,10 +312,40 @@ gated on the user's Gmail app-password. What landed:
   the security-code nudge test + 1 `@pytest.mark.eval` live IMAP smoke (skips unless `$AV3_IMAP_USER` +
   `$AV3_IMAP_PASSWORD` set). **Full suite 1253 passed / 13 deselected.** Live-CLI smoked: `--status`,
   the setup nudge, the offline `--eml` path, and the security-code nudge all behave.
-- **STILL GATED (the one real blocker):** LIVE mailbox verification needs the user to enable Gmail
-  2-Step Verification, generate an App Password, set `.env` `AV3_IMAP_PASSWORD` + `inbox.user` +
-  `inbox.enabled`. Then `av3 inbox` (or the scheduler) reads real mail. **Phase D** (wizard + dashboard
-  outcomes surface) still depends on Direction 2.
+- **✅ LIVE-VERIFIED + configured in production 2026-06-19** (user supplied the Gmail App Password). See
+  the live-findings block below. **Phase D** (wizard + dashboard outcomes surface) still depends on Direction 2.
+
+## ✅ Phase C LIVE FINDINGS (2026-06-19 — real mailbox, jar8510@gmail.com, 29 APPLIED jobs)
+
+Validated rejection auto-detection against 7 hand-marked rejections (snowflake, Dataiku ×?, aircall,
+Gusto ×2, Monzo ×2). Read-only throughout; no production writes (dry-run analysis script).
+
+- **✅ Detection works — deterministically, no LLM.** The keyword classifier caught real rejections from
+  **Aircall / Snowflake / Monzo / Dataiku** ("Thanks for your interest in…", "Update regarding your
+  application", "Your application to…", "About your application to…"). Re-confirmed 3 of the 7 hand-marked
+  rejections by EXACT job purely from `_REJECTION` keywords. (Offers/interviews/responses also classify.)
+- **🐛 FIXED (commit `a558daf`): cold-start cap took the OLDEST 200 UIDs** → on a busy inbox (~23/day) a
+  30-day scan covered only the oldest ~8 days and returned **0 outcomes** (every recent rejection hidden).
+  Fix: cold start now takes the **NEWEST** `max_messages`; incremental stays oldest-first (catch-up, never
+  skips). Post-fix the default 200-cap/30-day scan covers the recent window and finds the rejections.
+- **🔧 OPEN — matching precision for multi-role-same-company.** When you've applied to several roles at one
+  company (Dataiku ×2, Monzo ×2, Gusto ×2), a *generic* rejection email ("Your application to Monzo") hits
+  **company-only match (0.60)** and binds to the FIRST APPLIED job for that company — so the rejection is
+  DETECTED but pinned to the wrong sibling role. The url-match (0.95) would disambiguate but these ATS
+  emails don't carry the job URL. Follow-up: match on a role token from the subject, and/or capture the
+  ATS application-id/url at apply time for a hard join.
+- **🔧 OPEN — Gusto produced NO matchable email.** No email with a "gusto" company-hint surfaced in 21
+  days. Likely the rejection was relayed via an ATS domain (greenhouse/lever/ashby) whose 2nd-level label
+  is *filtered* in `_company_hint` → empty hint → no match (or it was marked from the portal, no email).
+  Follow-up: for ATS-relayed mail, recover the company from the subject/body, not just the From domain.
+- **⚠️ Classifier false positives (safe).** A Quora "BREAKING…" digest and CapitalOne CreditWise mails
+  tripped a `_REJECTION` keyword, and some Snowflake *confirmations* ("…next steps…") classified as
+  INTERVIEW. These are UNMATCHED to any APPLIED job → they route to **review**, never record a false
+  outcome (the confidence-gate + APPLIED-candidate matching contains them). Follow-up if noisy: tighten
+  the `_REJECTION`/`_INTERVIEW` phrase lists (e.g., "next steps" is too eager).
+- **Net:** the loop is genuinely useful on real data and the honesty/safety posture held throughout (no
+  APPLIED writes, no auto-submit, ambiguous→review). Highest-value next improvement = matching precision
+  (role-token + captured ATS url) so multi-role companies resolve to the exact job.
 
 ## The plan (phased — original sketch; see the GROUNDED correction above for the authoritative cut)
 - **Phase A — Read-only IMAP ingestion.** `telemetry`-style local module: connect (host/port/user/
