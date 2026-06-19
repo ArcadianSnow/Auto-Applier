@@ -172,6 +172,31 @@ def test_security_code_is_flagged_and_ignored(settings: Settings, conn):
     assert summary.outcomes_recorded == 0
 
 
+def test_security_code_surfaces_finish_assisted_nudge(settings: Settings, conn):
+    """Phase C: when a security-code email is seen the worker adds a 'finish assisted'
+    nudge note — honest surfacing of the gate, never an auto-submit (the precise
+    job-linking is Phase D / Direction 2). No nudge when none are seen."""
+    worker = InboxWorker(
+        settings=settings, conn=conn, llm=_RaisingLLM(),
+        source=_stub_source("security_code.eml"),
+    )
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.security_code_flags == 1
+    nudge = [n for n in summary.notes if "security-code email(s) seen" in n]
+    assert len(nudge) == 1
+    assert "email never submits for you" in nudge[0]
+
+    # A non-security-code batch adds no such nudge.
+    clean = InboxWorker(
+        settings=settings, conn=conn, llm=_RaisingLLM(),
+        source=_stub_source("newsletter.eml"),
+    )
+    clean_summary = asyncio.run(clean.run_once())
+    assert clean_summary.security_code_flags == 0
+    assert not any("security-code email(s) seen" in n for n in clean_summary.notes)
+
+
 # --------------------------------------------------------------- (d) idempotency
 
 def test_rerun_is_idempotent_no_duplicate_outcome(settings: Settings, conn):
@@ -266,10 +291,15 @@ def test_cli_status_exits_zero_without_connecting(settings):
 
 
 def test_cli_no_eml_friendly_exit(settings):
-    """With no --eml and no live fetcher, print a friendly nudge and exit 0 (never crash)."""
+    """With no --eml and the inbox unconfigured, print a setup nudge and exit 0
+    (never crash, never connect). The nudge names exactly what's missing."""
     res = CliRunner().invoke(cli, ["inbox"])
     assert res.exit_code == 0, res.output
-    assert "email ingestion not configured yet" in res.output
+    assert "not configured yet" in res.output
+    assert "App Password" in res.output
+    # Names the missing pieces so a user knows what to do.
+    assert "enabled" in res.output
+    assert "AV3_IMAP_PASSWORD" in res.output
 
 
 def test_cli_eml_dry_run_writes_nothing(settings):

@@ -1148,6 +1148,52 @@ def outcome_cmd(job_id: str, kind: str, note: str) -> None:
     click.echo(f"recorded outcome={rec.kind.value} job={job_id} at={rec.noted_at}")
 
 
+def _inbox_setup_nudge(settings) -> str:
+    """A specific, honest setup message naming exactly what's missing for a live fetch.
+
+    Live IMAP needs all three: ``inbox.enabled``, ``inbox.user``, and the app-password
+    in ``$AV3_IMAP_PASSWORD``. We never store the password in config (``.env``-only).
+    """
+    import os
+
+    ic = settings.inbox
+    missing = []
+    if not ic.enabled:
+        missing.append('set "inbox": {"enabled": true} in user_config.json')
+    if not (ic.user or "").strip():
+        missing.append('set "inbox": {"user": "you@gmail.com"} in user_config.json')
+    if not os.environ.get("AV3_IMAP_PASSWORD", "").strip():
+        missing.append("put a Gmail App Password in .env as AV3_IMAP_PASSWORD")
+    steps = "\n".join(f"  - {m}" for m in missing) or "  - (config looks complete)"
+    return (
+        "Live email ingestion is not configured yet.\n"
+        f"{steps}\n"
+        "Gmail needs 2-Step Verification ON, then generate an App Password "
+        "(myaccount.google.com/apppasswords). Or test offline now with `--eml FILE`."
+    )
+
+
+def _build_scheduler_inbox_worker(settings, conn, llm):
+    """A live-IMAP :class:`InboxWorker` for the scheduler, or ``None`` when the inbox
+    isn't configured (so the scheduler simply runs without the stage).
+
+    Read-only IMAP. The fetcher is re-iterable, so the scheduler polls each cycle by
+    re-iterating it; the per-folder ``last_uid`` cursor keeps each poll to new mail only.
+    """
+    from auto_applier.inbox import (
+        ImapFetcher,
+        InboxMessageRepo,
+        InboxWorker,
+        creds_from_settings,
+    )
+
+    creds = creds_from_settings(settings)
+    if creds is None:
+        return None
+    fetcher = ImapFetcher(creds, InboxMessageRepo(conn))
+    return InboxWorker(settings=settings, conn=conn, llm=llm, source=fetcher, record=True)
+
+
 @cli.command("inbox")
 @click.option("--eml", "eml_paths", multiple=True, type=click.Path(exists=True, dir_okay=False),
               help="Ingest these saved .eml file(s) through the worker (offline, no creds). "
@@ -1176,10 +1222,13 @@ def inbox_cmd(eml_paths: tuple[str, ...], dry_run: bool, since_days: int | None,
     friendly nudge and exits 0.
     """
     import asyncio
+    import imaplib
 
     from auto_applier.inbox import (
+        ImapFetcher,
         InboxMessageRepo,
         InboxWorker,
+        creds_from_settings,
         eml_file_source,
     )
     from auto_applier.llm.complete import build_default
@@ -1219,15 +1268,24 @@ def inbox_cmd(eml_paths: tuple[str, ...], dry_run: bool, since_days: int | None,
                 click.echo(f"  {m.noted_at}  job={job}  msg={m.message_id}")
             return
 
-        # No --eml and no live fetcher (Phase C not built / disabled): friendly exit.
-        if not eml_paths:
-            click.echo(
-                "email ingestion not configured yet — use `--eml FILE` to test on a "
-                "saved email, or enable it in onboarding (coming soon)."
-            )
-            return
+        mode = "dry-run (writes nothing)" if dry_run else "recording outcomes"
 
-        source = eml_file_source(list(eml_paths))
+        if eml_paths:
+            # Offline path: ingest saved .eml files, no IMAP / creds.
+            source = eml_file_source(list(eml_paths))
+            click.echo(f"Ingesting {len(eml_paths)} email(s) [{mode}]...")
+        else:
+            # Live IMAP fetch (Phase C). Gated on creds — degrade to a setup nudge.
+            creds = creds_from_settings(settings)
+            if creds is None:
+                click.echo(_inbox_setup_nudge(settings))
+                return
+            source = ImapFetcher(
+                creds, InboxMessageRepo(conn),
+                since_days=since_days, advance_cursor=not dry_run,
+            )
+            click.echo(f"Fetching new mail from {creds.user} ({creds.host}) [{mode}]...")
+
         worker = InboxWorker(
             settings=settings,
             conn=conn,
@@ -1235,10 +1293,16 @@ def inbox_cmd(eml_paths: tuple[str, ...], dry_run: bool, since_days: int | None,
             source=source,
             record=not dry_run,
         )
-
-        mode = "dry-run (writes nothing)" if dry_run else "recording outcomes"
-        click.echo(f"Ingesting {len(eml_paths)} email(s) [{mode}]...")
-        summary = asyncio.run(worker.run_once())
+        try:
+            summary = asyncio.run(worker.run_once())
+        except imaplib.IMAP4.error as exc:
+            click.echo(
+                f"IMAP login/fetch failed: {exc}\n"
+                "Check inbox.user, the app-password in $AV3_IMAP_PASSWORD, and that Gmail "
+                "2-Step Verification + an App Password are enabled.",
+                err=True,
+            )
+            sys.exit(2)
     finally:
         conn.close()
 
@@ -2252,8 +2316,12 @@ def run_cmd(max_cycles: int | None, quiet_hours: str | None,
                 dry_run=dry_run,
                 drivers=default_drivers(),
             )
+            # Optional inbox poll (Direction 4) — present only when the inbox is
+            # configured (enabled + user + $AV3_IMAP_PASSWORD). Read-only.
+            inbox_worker = _build_scheduler_inbox_worker(settings, conn, llm)
             scheduler = Scheduler(
                 discover_worker=discover_worker,
+                inbox_worker=inbox_worker,
                 filter_worker=filter_worker,
                 score_worker=score_worker,
                 optimize_worker=optimize_worker,
@@ -2505,6 +2573,7 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
             _session_holder["session"] = session
             return Scheduler(
                 discover_worker=DiscoverWorker(settings=settings, conn=conn),
+                inbox_worker=_build_scheduler_inbox_worker(settings, conn, llm),
                 filter_worker=FilterWorker(
                     settings=settings, conn=conn, fact_bank=bank,
                     embed_client=embed,

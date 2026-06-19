@@ -65,7 +65,7 @@ import asyncio
 import time as time_mod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Awaitable, Callable, Protocol
+from typing import TYPE_CHECKING, Awaitable, Callable, Protocol
 
 from auto_applier.pipeline.apply_worker import ApplyRunSummary, ApplyWorker
 from auto_applier.pipeline.discover_worker import DiscoverRunSummary, DiscoverWorker
@@ -74,6 +74,12 @@ from auto_applier.pipeline.optimize_worker import OptimizeRunSummary, OptimizeWo
 from auto_applier.pipeline.quiet_hours import QuietHours, parse_quiet_hours
 from auto_applier.pipeline.score_worker import ScoreRunSummary, ScoreWorker
 from auto_applier.telemetry import get_sink
+
+if TYPE_CHECKING:
+    # Hints only — the scheduler drives the inbox worker duck-typed via run_once(),
+    # so we avoid importing the inbox package at pipeline-import time (its __init__
+    # pulls inbox.worker → pipeline.stage, an avoidable import-order edge).
+    from auto_applier.inbox.worker import InboxRunSummary, InboxWorker
 
 __all__ = ["CycleSummary", "MaintenanceHook", "Scheduler", "SchedulerRunSummary"]
 
@@ -118,6 +124,7 @@ class CycleSummary:
     filter_summary: FilterRunSummary | None = None
     score_summary: ScoreRunSummary | None = None
     optimize_summary: OptimizeRunSummary | None = None
+    inbox_summary: InboxRunSummary | None = None
     apply_summary: ApplyRunSummary | None = None
     apply_skipped_quiet_hours: bool = False
     paused: bool = False
@@ -160,6 +167,7 @@ class Scheduler:
         optimize_worker: OptimizeWorker,
         apply_worker: ApplyWorker,
         discover_worker: DiscoverWorker | None = None,
+        inbox_worker: InboxWorker | None = None,
         cycle_interval_s: float = 60.0,
         quiet_hours: QuietHours | None = None,
         pause_predicate: Callable[[], bool] | None = None,
@@ -176,6 +184,10 @@ class Scheduler:
         self._filter = filter_worker
         self._score = score_worker
         self._optimize = optimize_worker
+        # Inbox is an optional TAIL gather stage (email outcome loop, Direction 4):
+        # a read-only IMAP poll that records outcomes for APPLIED jobs. Gather, never
+        # quiet-gated; inert/absent when the inbox isn't configured.
+        self._inbox = inbox_worker
         self._apply = apply_worker
         self._cycle_interval_s = cycle_interval_s
         self._quiet_hours = quiet_hours or parse_quiet_hours(None)
@@ -244,6 +256,11 @@ class Scheduler:
         await self._run_stage(cs, "score", self._score)
         await self._run_stage(cs, "optimize", self._optimize)
 
+        # Inbox poll — last gather stage, runs every cycle regardless of quiet hours
+        # (reading mail doesn't drive the browser). Isolated like every other stage.
+        if self._inbox is not None:
+            await self._run_stage(cs, "inbox", self._inbox)
+
         # Apply stage is the only one gated by quiet hours.
         now_local = self._now()
         if self._quiet_hours.is_quiet(now_local):
@@ -300,7 +317,7 @@ class Scheduler:
         self,
         cycle: CycleSummary,
         stage: str,
-        worker: DiscoverWorker | FilterWorker | ScoreWorker | OptimizeWorker | ApplyWorker,
+        worker: DiscoverWorker | FilterWorker | ScoreWorker | OptimizeWorker | ApplyWorker | InboxWorker,
     ) -> None:
         """Invoke one worker's ``run_once``, isolating any exception. The
         worker's own ``@stage`` decorator already emits per-job events; we
@@ -321,6 +338,8 @@ class Scheduler:
             cycle.score_summary = result  # type: ignore[assignment]
         elif stage == "optimize":
             cycle.optimize_summary = result  # type: ignore[assignment]
+        elif stage == "inbox":
+            cycle.inbox_summary = result  # type: ignore[assignment]
         elif stage == "apply":
             cycle.apply_summary = result  # type: ignore[assignment]
 

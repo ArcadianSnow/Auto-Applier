@@ -271,6 +271,52 @@ corrections to the optimistic text above:
   **Phase D** = onboarding wizard + dashboard surface (needs Direction 2). See the plan doc for exact
   module/function signatures and the four open forks (all with recommended defaults).
 
+## ✅ Phases A + B + C SHIPPED (2026-06-16 → 2026-06-19, NOT pushed — commit-only)
+
+Phases A/B shipped offline (commits `8926dbc`, `937b39e`). **Phase C shipped 2026-06-19** (the real
+IMAP source + scheduler wiring) — code is fully offline-verifiable; only LIVE mailbox verification is
+gated on the user's Gmail app-password. What landed:
+
+- **`auto_applier/inbox/fetcher.py`** — `InboxCreds`, `creds_from_settings(settings) -> InboxCreds|None`
+  (reads `$AV3_IMAP_PASSWORD`; `None` when inbox disabled / no user / no password — never raises), and
+  **`ImapFetcher`**: a **read-only-by-construction** (`select(readonly=True)` + only `UID SEARCH`/`UID
+  FETCH`; *no* STORE/COPY/EXPUNGE) **re-iterable** source of `(uid, raw_bytes)`. Re-iterability is the
+  load-bearing design choice — each `for … in fetcher` opens a fresh session, pulls only mail past the
+  persisted `last_uid` cursor (or the `since_days` window on cold start), advances the cursor, closes —
+  so the always-on scheduler polls by simply re-iterating the same object every cycle. Handles the
+  `UID n:*` IMAP quirk (a no-new-mail poll returns the highest existing UID → filtered to strictly-greater
+  so the cursor never moves on empty). `advance_cursor=False` = the `--dry-run` posture (repeatable).
+- **Engineering call — synchronous fetch, NOT `asyncio.to_thread`** (the plan sketched to_thread): the
+  cursor read/write uses the shared single-thread sqlite connection, and offloading the iteration to a
+  thread would trip sqlite's same-thread guard. The fetcher's `Iterable[(uid,bytes)]` contract (shared by
+  the test stub, `eml_file_source`, and live IMAP) keeps the worker source-agnostic; a brief per-cycle
+  poll stall in `serve` mode is acceptable for a local single-user tool. (If it ever bites, the offload
+  must move cursor I/O off the shared conn.)
+- **Scheduler wiring** — optional `inbox_worker` as the **last gather stage** (runs every cycle, **never
+  quiet-gated** — reading mail doesn't drive the browser), isolated like every stage, **inert/absent**
+  when the inbox isn't configured. Wired into both `av3 run` and `av3 serve` via
+  `_build_scheduler_inbox_worker` (returns `None` when `creds_from_settings` is `None`). Import kept under
+  `TYPE_CHECKING` to avoid an inbox→pipeline.stage import-order edge (the stage is driven duck-typed).
+- **CLI** — `av3 inbox` (no `--eml`) now does the live fetch when configured, else prints a specific
+  `_inbox_setup_nudge` naming exactly what's missing (enabled / user / `$AV3_IMAP_PASSWORD`) + the Gmail
+  2FA→App-Password steps; an `imaplib.IMAP4.error` (bad auth) exits 2 with a clear message, never a traceback.
+- **Security-code → "finish assisted" (honest, minimal).** The worker already flags verification/OTP mail
+  (`security_code_flags`, kind stays None = never an outcome). Phase C adds a summary **nudge note** ("N
+  security-code email(s) seen — if an assisted submit is waiting on a code, open your inbox and finish it;
+  email never submits for you"). Deliberately **no speculative job-matching or auto-act** — the precise
+  job-linking + a dashboard "enter code" button is **Phase D / Direction 3** (where the REVIEW-job-match
+  question and the assisted-finish UI actually get resolved). Honesty invariants intact.
+- **Tests:** `tests/test_inbox_fetcher.py` (14 offline via a `FakeIMAP` transport that *asserts* read-only
+  by raising on any mutating verb; covers creds gating, cold/incremental fetch, the no-new-mail quirk,
+  dry-run hold, re-iterability/poll, max-messages cap, worker+fetcher e2e) + 4 scheduler-wiring tests +
+  the security-code nudge test + 1 `@pytest.mark.eval` live IMAP smoke (skips unless `$AV3_IMAP_USER` +
+  `$AV3_IMAP_PASSWORD` set). **Full suite 1253 passed / 13 deselected.** Live-CLI smoked: `--status`,
+  the setup nudge, the offline `--eml` path, and the security-code nudge all behave.
+- **STILL GATED (the one real blocker):** LIVE mailbox verification needs the user to enable Gmail
+  2-Step Verification, generate an App Password, set `.env` `AV3_IMAP_PASSWORD` + `inbox.user` +
+  `inbox.enabled`. Then `av3 inbox` (or the scheduler) reads real mail. **Phase D** (wizard + dashboard
+  outcomes surface) still depends on Direction 2.
+
 ## The plan (phased — original sketch; see the GROUNDED correction above for the authoritative cut)
 - **Phase A — Read-only IMAP ingestion.** `telemetry`-style local module: connect (host/port/user/
   app-password from `.env`), incremental fetch (since last UID), store processed `message-id`s so we

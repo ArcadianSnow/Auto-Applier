@@ -160,6 +160,18 @@ class InboxWorker:
                 summary.errors += 1
                 summary.notes.append(f"uid={uid} failed")
 
+        # Security-code surfacing (the honest "finish assisted" hook, Direction 3):
+        # a verification/OTP email is never an outcome and never auto-acts, but if one
+        # arrived an assisted submit may be waiting on the code — nudge the user to
+        # finish it themselves. The precise job-linking + dashboard button is Phase D
+        # (needs Direction 2); here we only make the signal visible.
+        if summary.security_code_flags:
+            summary.notes.append(
+                f"{summary.security_code_flags} security-code email(s) seen — if an "
+                "assisted submit is waiting on an emailed code, open your inbox and "
+                "enter it to finish (email never submits for you)."
+            )
+
         summary.elapsed_s = time.perf_counter() - t0
         return summary
 

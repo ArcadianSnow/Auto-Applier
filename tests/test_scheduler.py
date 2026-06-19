@@ -27,6 +27,7 @@ from typing import Any
 
 import pytest
 
+from auto_applier.inbox.worker import InboxRunSummary
 from auto_applier.pipeline.apply_worker import ApplyRunSummary
 from auto_applier.pipeline.filter_worker import FilterRunSummary
 from auto_applier.pipeline.optimize_worker import OptimizeRunSummary
@@ -309,3 +310,66 @@ def test_telemetry_records_paused(sink):
     assert len(skip_rows) >= 1
     ctx = _json.loads(skip_rows[0]["context_json"] or "{}")
     assert ctx.get("reason") == "paused"
+
+
+# --------------------------------------------------------------- inbox stage (Direction 4)
+
+def _build_scheduler_with_inbox(*, quiet_hours_raw=None, now_value=None):
+    """A scheduler wired with the four fakes PLUS an inbox fake (shared call log)."""
+    call_log, f, s, o, a = _make_fakes()
+    inbox = _FakeWorker("inbox", lambda i: InboxRunSummary(run_id=f"i-{i}"), call_log)
+    sleep = _SleepRecorder()
+    now = (lambda: now_value or datetime(2026, 5, 29, 12, 0))
+    scheduler = Scheduler(
+        filter_worker=f,                        # type: ignore[arg-type]
+        score_worker=s,                         # type: ignore[arg-type]
+        optimize_worker=o,                      # type: ignore[arg-type]
+        apply_worker=a,                         # type: ignore[arg-type]
+        inbox_worker=inbox,                     # type: ignore[arg-type]
+        cycle_interval_s=1.0,
+        quiet_hours=parse_quiet_hours(quiet_hours_raw),
+        sleep=sleep,
+        now=now,
+    )
+    return scheduler, call_log, inbox, a
+
+
+def test_inbox_stage_runs_after_optimize_before_apply():
+    scheduler, call_log, inbox, _ = _build_scheduler_with_inbox()
+    summary = asyncio.run(scheduler.run(max_cycles=1))
+    assert call_log == ["filter", "score", "optimize", "inbox", "apply"]
+    assert inbox.call_count == 1
+    cs = summary.cycles[0]
+    assert cs.inbox_summary is not None
+    assert cs.inbox_summary.run_id == "i-1"
+
+
+def test_inbox_stage_runs_during_quiet_hours():
+    """Inbox is GATHER (reading mail doesn't drive the browser): quiet hours pause
+    apply but never the inbox poll."""
+    scheduler, call_log, inbox, a = _build_scheduler_with_inbox(
+        quiet_hours_raw="12:00-14:00", now_value=datetime(2026, 5, 29, 13, 0),
+    )
+    asyncio.run(scheduler.run(max_cycles=1))
+    assert call_log == ["filter", "score", "optimize", "inbox"]  # apply skipped, inbox not
+    assert inbox.call_count == 1
+    assert a.call_count == 0
+
+
+def test_no_inbox_worker_means_no_inbox_stage():
+    """Absent inbox config -> the stage simply doesn't appear (back-compat)."""
+    scheduler, call_log, _, _, _, a, _ = _build_scheduler()
+    asyncio.run(scheduler.run(max_cycles=1))
+    assert "inbox" not in call_log
+    assert a.call_count == 1
+
+
+def test_inbox_stage_exception_isolated():
+    """An inbox-poll crash must not block apply; the error is recorded per cycle."""
+    scheduler, call_log, inbox, a = _build_scheduler_with_inbox()
+    inbox.raise_with = RuntimeError("imap blew up")
+    summary = asyncio.run(scheduler.run(max_cycles=1))
+    assert "apply" in call_log
+    assert a.call_count == 1
+    assert "inbox" in summary.cycles[0].stage_errors
+    assert summary.total_errors == 1
