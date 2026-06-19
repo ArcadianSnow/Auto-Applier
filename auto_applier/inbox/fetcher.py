@@ -190,8 +190,19 @@ class ImapFetcher:
             raw = bytes(raw).decode("ascii", "ignore")
         uids = sorted(int(tok) for tok in str(raw).split() if tok.isdigit())
         if last:
+            # Incremental: only strictly-newer than the cursor (filters the `UID n:*`
+            # quirk's stray highest-UID), OLDEST-first so a batch larger than the cap
+            # is processed chronologically and the cursor catches up over successive
+            # polls — never silently skipping mail.
             uids = [u for u in uids if u > last]
-        return uids[: self._max_messages]
+            return uids[: self._max_messages]
+        # Cold start: a wide window can hold far more than the cap on a busy inbox
+        # (~23/day here → a 30-day window is ~690 mails). Take the NEWEST max_messages
+        # so a one-shot scan always covers RECENT mail (recent outcomes are what matter);
+        # older backlog beyond the cap is dropped on the first run BY DESIGN — widen the
+        # cap / narrow --since-days for a deep historical sweep. Taking the oldest slice
+        # here is the bug that made the first 30-day scan miss every recent rejection.
+        return uids[-self._max_messages :]
 
     @staticmethod
     def _fetch_one(client: imaplib.IMAP4, uid: int) -> bytes | None:

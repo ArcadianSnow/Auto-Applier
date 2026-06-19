@@ -290,9 +290,14 @@ def test_cli_status_exits_zero_without_connecting(settings):
     assert "imap.gmail.com:993" in res.output
 
 
-def test_cli_no_eml_friendly_exit(settings):
+def test_cli_no_eml_friendly_exit(settings, monkeypatch):
     """With no --eml and the inbox unconfigured, print a setup nudge and exit 0
-    (never crash, never connect). The nudge names exactly what's missing."""
+    (never crash, never connect). The nudge names exactly what's missing.
+
+    Hermetic: neutralize the developer's real .env (which on a configured machine
+    holds AV3_IMAP_PASSWORD) so the 'nothing configured' path is deterministic."""
+    monkeypatch.setattr("auto_applier.config.settings.load_dotenv", lambda *a, **k: None)
+    monkeypatch.delenv("AV3_IMAP_PASSWORD", raising=False)
     res = CliRunner().invoke(cli, ["inbox"])
     assert res.exit_code == 0, res.output
     assert "not configured yet" in res.output

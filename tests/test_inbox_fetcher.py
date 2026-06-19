@@ -230,7 +230,10 @@ def test_reiterable_second_poll_sees_only_newer(conn):
     assert repo.last_uid("INBOX") == 8
 
 
-def test_max_messages_caps_one_poll(conn):
+def test_cold_start_cap_takes_NEWEST_messages(conn):
+    """Cold start over a window bigger than the cap takes the NEWEST max_messages —
+    so a one-shot scan on a busy inbox always covers recent mail (the fix for the
+    first-30-day-scan-misses-recent-rejections bug)."""
     repo = InboxMessageRepo(conn)
     fake = FakeIMAP({i: f"m{i}".encode() for i in range(1, 11)})
     fetcher = ImapFetcher(
@@ -239,10 +242,24 @@ def test_max_messages_caps_one_poll(conn):
 
     out = list(fetcher)
 
-    assert len(out) == 4
-    assert [uid for uid, _ in out] == ["1", "2", "3", "4"]
-    # Cursor advances to the last fetched, so the next poll continues from there.
-    assert repo.last_uid("INBOX") == 4
+    assert [uid for uid, _ in out] == ["7", "8", "9", "10"]  # newest 4, not oldest
+    assert repo.last_uid("INBOX") == 10
+
+
+def test_incremental_cap_is_OLDEST_first_for_catchup(conn):
+    """The incremental path caps OLDEST-first so a big new batch is processed
+    chronologically and the cursor catches up next poll — never skipping mail."""
+    repo = InboxMessageRepo(conn)
+    repo.set_last_uid("INBOX", 2)
+    fake = FakeIMAP({i: f"m{i}".encode() for i in range(1, 11)})
+    fetcher = ImapFetcher(
+        _creds(), repo, max_messages=3, imap_factory=_factory_for(fake),
+    )
+
+    out = list(fetcher)
+
+    assert [uid for uid, _ in out] == ["3", "4", "5"]  # oldest new 3 (catch-up)
+    assert repo.last_uid("INBOX") == 5                  # next poll continues from 5
 
 
 # --------------------------------------------------------------- worker + fetcher e2e
