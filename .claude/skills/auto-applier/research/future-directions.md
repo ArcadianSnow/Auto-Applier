@@ -483,12 +483,23 @@ exist, an overhaul is guessing at data. Once they do, the dashboard has clear ne
   contrast, keyboard-navigable, live (not console).
 
 ## The plan
-- **Phase A — Assisted queue panel** (can ship *before* #1/#4): make REVIEW actionable — list jobs
-  waiting on a human step, with the reason (security-code / consent / screener) and a "open the
-  pre-filled form" button. Directly useful given the Greenhouse gate reality.
-- **Phase B — Outcomes column** (after #4): per-job application status from the email loop.
-- **Phase C — Goals/targeting view** (after #1): show + edit what the journey produced.
-- **Phase D — Funnel analytics** surfaced from `analytics.py`.
+- **Phase A — Assisted queue panel. ✅ SHIPPED 2026-06-16 (commit 46f88d6).** Grouped, actionable
+  REVIEW to-do list (Ready to finish / Sign-in needed / Needs decision). See
+  `research/web-ui-and-service.md` "Direction 2 (Phase A)".
+- **Phase B — Outcomes column + funnel. ✅ SHIPPED 2026-06-20.** `GET /api/outcomes` (reuses the
+  `av3 analytics` read-model verbatim) + an Outcomes card (cumulative applied→responded→
+  interviewed→offered funnel, Rejected/Ghosted/Awaiting pills, by-source mini table) + a per-row
+  Outcome column on the history table. New pure helpers `analytics.compute_funnel` /
+  `furthest_outcomes`. Honesty held: feed is APPLIED-only, "Awaiting"≠ghost, rate labelled
+  "positive reply rate", outcome never implies APPLIED. Browser-verified live against the
+  production data dir (29 applied / 18 outcomes, 0 console errors); 1275 green. **This collapsed
+  Phase B + Phase D (funnel analytics) into one slice** — the funnel IS the `analytics.py` surface.
+  Detail: `research/web-ui-and-service.md` "Direction 2 (Phase B)". NB the existing
+  `RESPONSE`>`REJECTION` rank quirk is surfaced + documented there (not changed).
+- **Phase C — Goals/targeting view** (after #1): show + edit what the journey produced. *Next
+  Direction-2 slice; depends on Direction 1's journey output.*
+- ~~**Phase D — Funnel analytics**~~ — folded into Phase B (the Outcomes card's funnel is sourced
+  from `analytics.py`).
 
 **Effort:** medium, incremental. **Dependencies:** Phase B needs #4; Phase C needs #1; Phase A is
 independent and arguably the highest-value standalone slice.

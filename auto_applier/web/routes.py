@@ -39,7 +39,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from auto_applier import __version__
-from auto_applier.db.repositories import ApplicationRepo, JobRepo, ScoreRepo
+from auto_applier.db.repositories import ApplicationRepo, JobRepo, OutcomeRepo, ScoreRepo
 from auto_applier.domain.models import utcnow_iso
 from auto_applier.domain.state import ApplicationStatus, JobState
 from auto_applier.sources.health import (
@@ -299,6 +299,69 @@ async def history(request: Request, limit: int = 50) -> dict:
             score = score_repo.get(app.job_id) if job is not None else None
             rows.append(history_row(app, job, score))
     return {"applications": rows}
+
+
+# ---------------------------------------------------------------- /api/outcomes (Direction 2, Phase B)
+
+# The post-apply outcomes surface (Direction 2, Phase B — = Direction 4 Phase D). Reads the
+# SAME feed `av3 analytics` does (OutcomeRepo.applied_with_outcomes → analytics) and exposes:
+#   * a conversion summary (applied / positive / rate + per-kind tally),
+#   * a cumulative apply→response→interview→offer funnel,
+#   * top sources by conversion,
+#   * a per-job furthest-outcome map so the history table can annotate each APPLIED row.
+# Read-only; honesty intact — the feed is APPLIED-only, "awaiting" is NOT a ghost, and an
+# outcome never implies APPLIED (APPLIED comes only from a positive submit confirmation).
+
+
+@api_router.get("/outcomes")
+async def outcomes(request: Request) -> dict:
+    """Apply-outcome analytics for the dashboard's Outcomes card + history column.
+
+    Aggregates :meth:`OutcomeRepo.applied_with_outcomes` (APPLIED jobs × their recorded
+    outcomes) via the pure :mod:`auto_applier.analytics` helpers — the same read-model the
+    ``av3 analytics`` CLI renders. Returns:
+
+      * ``summary``  — total_applied / total_converted / overall_rate / per-kind counts.
+      * ``funnel``   — cumulative applied→responded→interviewed→offered + rejected/ghosted/
+                       awaiting (each job counted once by its furthest stage).
+      * ``by_source``— top sources by conversion rate (capped, like the CLI table).
+      * ``by_job``   — ``{job_id: kind_value | "awaiting"}`` for every APPLIED job, so the
+                       history table renders a per-row outcome pill ("awaiting" = applied but
+                       no outcome recorded yet — honestly distinct from a recorded ghost).
+    """
+    from auto_applier.analytics import (
+        compute_conversion_report,
+        compute_funnel,
+        furthest_outcomes,
+    )
+
+    web_state = _get_state(request)
+    with web_state.app_conn() as conn:
+        feed = OutcomeRepo(conn).applied_with_outcomes()
+
+    report = compute_conversion_report(feed)
+    funnel = compute_funnel(feed)
+    by_job = {jid: (kind or "awaiting") for jid, kind in furthest_outcomes(feed).items()}
+    return {
+        "summary": {
+            "total_applied": report.total_applied,
+            "total_converted": report.total_converted,
+            "overall_rate": round(report.overall_rate, 4),
+            "outcome_counts": report.outcome_counts,
+        },
+        "funnel": vars(funnel),
+        "by_source": [
+            {
+                "key": s.key,
+                "applied": s.applied,
+                "converted": s.converted,
+                "ghosted": s.ghosted,
+                "rate": round(s.rate, 4),
+            }
+            for s in report.by_source[:8]
+        ],
+        "by_job": by_job,
+    }
 
 
 # ---------------------------------------------------------------- /api/jobs/<id>

@@ -19,9 +19,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 from auto_applier.config import Settings
-from auto_applier.db.repositories import ApplicationRepo, JobRepo, ScoreRepo
-from auto_applier.domain.models import Application, Job, JobScore, utcnow_iso
-from auto_applier.domain.state import ApplicationStatus, ApplyMode, JobState
+from auto_applier.db.repositories import (
+    ApplicationRepo,
+    JobRepo,
+    OutcomeRepo,
+    ScoreRepo,
+)
+from auto_applier.domain.models import Application, Job, JobScore, Outcome, utcnow_iso
+from auto_applier.domain.state import (
+    ApplicationStatus,
+    ApplyMode,
+    JobState,
+    OutcomeKind,
+)
 from auto_applier.telemetry import EventSink
 from auto_applier.web import WebState, create_app
 
@@ -350,6 +360,10 @@ class TestDashboardHtml:
         assert "Pipeline" in r.text
         assert "Assisted queue" in r.text
         assert "Recent applications" in r.text
+        # Direction 2 (Phase B): the outcomes card + the history Outcome column.
+        assert "Outcomes" in r.text
+        assert "hasOutcomeData()" in r.text
+        assert "outcomeFor(" in r.text
         # Alpine.js + our JS are linked.
         assert "alpinejs" in r.text
         assert "app.js" in r.text
@@ -371,3 +385,64 @@ class TestDashboardHtml:
         with _make_client(web_state) as client:
             r = client.get("/jobs/missing")
         assert r.status_code == 404
+
+
+# --------------------------------------------------------------- /api/outcomes (Direction 2, Phase B)
+
+class TestOutcomesEndpoint:
+    """The apply-outcome analytics surface — summary + cumulative funnel +
+    per-job furthest-outcome map (drives the dashboard Outcomes card + the
+    history table's Outcome column)."""
+
+    def test_empty_is_zeroed_not_error(self, web_state: WebState):
+        with _make_client(web_state) as client:
+            r = client.get("/api/outcomes")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["summary"]["total_applied"] == 0
+        assert body["funnel"]["applied"] == 0
+        assert body["by_source"] == []
+        assert body["by_job"] == {}
+
+    def test_summary_funnel_and_by_job(
+        self, web_state: WebState, conn: sqlite3.Connection
+    ):
+        # Two APPLIED jobs: one reached an interview, one applied-but-silent.
+        _seed_job(conn, id="ja", state=JobState.APPLIED, source="lever",
+                  title="Data Engineer", company="Acme")
+        _seed_job(conn, id="jb", state=JobState.APPLIED, source="greenhouse",
+                  title="Data Engineer", company="Beta")
+        repo = OutcomeRepo(conn)
+        repo.add(Outcome(job_id="ja", kind=OutcomeKind.RESPONSE))
+        repo.add(Outcome(job_id="ja", kind=OutcomeKind.INTERVIEW))  # furthest = interview
+
+        with _make_client(web_state) as client:
+            body = client.get("/api/outcomes").json()
+
+        assert body["summary"]["total_applied"] == 2
+        assert body["summary"]["total_converted"] == 1
+        assert body["summary"]["outcome_counts"] == {"interview": 1}
+        # Cumulative funnel: the interview job counts in responded + interviewed.
+        assert body["funnel"] == {
+            "applied": 2, "responded": 1, "interviewed": 1, "offered": 0,
+            "rejected": 0, "ghosted": 0, "awaiting": 1,
+        }
+        # Per-job map: furthest stage for ja, "awaiting" for the silent jb.
+        assert body["by_job"] == {"ja": "interview", "jb": "awaiting"}
+
+    def test_by_source_is_present_for_applied_jobs(
+        self, web_state: WebState, conn: sqlite3.Connection
+    ):
+        _seed_job(conn, id="jc", state=JobState.APPLIED, source="ashby",
+                  title="Analyst", company="Gamma")
+        OutcomeRepo(conn).add(Outcome(job_id="jc", kind=OutcomeKind.OFFER))
+        with _make_client(web_state) as client:
+            body = client.get("/api/outcomes").json()
+        srcs = {s["key"]: s for s in body["by_source"]}
+        assert srcs["ashby"]["applied"] == 1
+        assert srcs["ashby"]["converted"] == 1
+        assert srcs["ashby"]["rate"] == 1.0
+        # An offer counts at every cumulative stage.
+        assert body["funnel"]["offered"] == 1
+        assert body["funnel"]["interviewed"] == 1
+        assert body["funnel"]["responded"] == 1

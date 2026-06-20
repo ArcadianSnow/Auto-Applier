@@ -1152,3 +1152,76 @@ covered in (1/M)–(3/M).
   analytics if needed.
 * macOS / Linux idle-detect backends → v3.1 (Win32 covers the
   primary user base; soft-fail is the spec posture for the rest).
+
+---
+
+## Direction 2 (Phase B) — apply-outcomes surface landed (2026-06-20)
+
+The dashboard's "what happened after I applied" surface — the consumer of the Direction 4
+email-outcome loop (this IS Direction 4 Phase D). Added a read-only **Outcomes card** + a
+per-row **Outcome column** on the history table, both sourced from the SAME feed
+`av3 analytics` renders (`OutcomeRepo.applied_with_outcomes()` → `auto_applier.analytics`).
+Evolves the existing Alpine app (no framework rewrite, per future-directions Direction 2).
+Browser-verified live against the production data dir (29 APPLIED jobs, 18 real email
+outcomes). Full suite **1275 passed / 13 deselected**.
+
+### New surface
+
+| Module / endpoint | Purpose |
+|---|---|
+| `GET /api/outcomes` | `{summary, funnel, by_source[top8], by_job}` — the whole card + column in one read |
+| `analytics.furthest_outcomes(feed)` | pure `{job_id: kind.value \| None}` (reuses `_furthest_per_job`) — drives the history Outcome column |
+| `analytics.OutcomeFunnel` + `compute_funnel(feed)` | pure cumulative funnel (applied / responded / interviewed / offered + rejected / ghosted / awaiting) |
+| dashboard.html Outcomes card | funnel bars + terminal/pending pills + a By-source mini table; `x-show="hasOutcomeData()"` hides it pre-apply |
+| history table Outcome column | per-row pill via `outcomeFor(jobId)` (absent → `—`, `"awaiting"` → Awaiting, kind → coloured pill) |
+
+### Load-bearing design decisions
+
+- **Reuse the analytics read-model verbatim — do NOT re-aggregate in the web layer.** The CLI
+  (`av3 analytics`) and the dashboard now answer "how are applications converting?" from one
+  pure function set, so they can't drift. The endpoint is a thin DTO over
+  `compute_conversion_report` + the two new helpers.
+- **The funnel is CUMULATIVE and `responded == total_converted`.** Each APPLIED job is counted
+  once by its furthest stage; an OFFER counts in responded+interviewed+offered so the bars read
+  as a shrinking ladder. A regression test pins `compute_funnel(feed).responded ==
+  compute_conversion_report(feed).total_converted` so the two read-models never disagree.
+- **"Awaiting" ≠ "Ghosted" (honesty).** `furthest_outcomes` returns `None` for an applied-but-
+  silent job; the endpoint maps `None → "awaiting"`. The card shows Awaiting separately from a
+  *recorded* GHOST. Conversion-rate denominators are unchanged (`compute_conversion_report`
+  still folds silent jobs into the honest non-converted denominator) — the distinction is
+  display-only. The rate is labelled **"positive reply rate"**, never "success".
+- **⚠️ Pre-existing ladder quirk surfaced, NOT changed: `RESPONSE` (rank 2) outranks `REJECTION`
+  (rank 1).** On real data, 7 jobs have BOTH an "application received" RESPONSE and a later
+  REJECTION → furthest = RESPONSE → they show as "Responded" + count as converted. That's why
+  live `outcome_counts` is `{response:9, rejection:4}` (not 9/9) and the funnel shows responded=9
+  / rejected=4. This is the existing `OutcomeKind.rank` ordering (state.py) + existing
+  `compute_conversion_report` behaviour — the new code faithfully mirrors the CLI; it is **out of
+  scope to "fix"** here. If a terminal rejection should ever dominate an earlier ack, that's an
+  `OutcomeKind.rank`/§8e modelling change (affects CLI ranking too), to design separately.
+- **No new egress, no honesty erosion.** Read-only; the feed is APPLIED-only; an outcome never
+  implies APPLIED (APPLIED still requires a positive submit confirmation / human attestation).
+  `mark-applied`/`assisted/confirm` are untouched.
+- **Alpine binding safety.** None of the new bindings is the `:disabled="<dict>[key]"` →
+  undefined trap (the Phase A durable gotcha) — the column uses `x-if`/`x-text`, the bars use
+  string `:class`/`:style`. `outcomeFor()` uses `hasOwnProperty` so an applied-but-`null` job is
+  distinguishable from a non-applied (absent) one. Browser-smoke confirmed: card + column render,
+  correct pills (Awaiting / Responded / Rejected, `—` for the non-APPLIED UNCONFIRMED row),
+  **0 console errors**.
+
+### Tests
+
+- `tests/test_analytics.py` — `compute_funnel` cumulative + empty + responded==converted parity,
+  `furthest_outcomes` furthest-wins + silent-None (pure, reuse the `_feed_row` builder).
+- `tests/test_web_dashboard.py::TestOutcomesEndpoint` — empty zeroed (not error), summary+funnel+
+  by_job (interview job + silent job), by_source for an offer. Plus the dashboard-render test now
+  asserts the card + `hasOutcomeData()` + `outcomeFor(` are wired.
+
+### What's NOT in this slice (future)
+
+- **No interview/offer in real data yet** — funnel handles them (tested), just zero live.
+- **Funnel is furthest-stage, not time-series.** No "applied this week vs last" trend; that's a
+  later analytics slice if wanted.
+- **By-source only** on the card (titles/score-bands exist in the report + CLI). Added if the
+  by-source table proves too coarse.
+- **The RESPONSE>REJECTION ladder question** (above) — left as a documented modelling decision,
+  not a UI bug.

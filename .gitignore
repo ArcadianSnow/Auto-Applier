@@ -73,3 +73,5 @@ installer/icon.ico
 .DS_Store
 Thumbs.db
 .claude/unstuck/
+
+.claude/unstuck/ACTIVE

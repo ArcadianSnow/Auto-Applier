@@ -243,6 +243,74 @@
       </section>
     </div>
 
+    {# ------- apply outcomes (Direction 2, Phase B) ------- #}
+    {# Sourced from /api/outcomes (the same analytics feed as `av3 analytics`).
+       Hidden until at least one APPLIED job exists. Honest framing: the feed is
+       APPLIED-only, the rate is a positive-reply rate, and "Awaiting" is kept
+       distinct from a recorded ghost. #}
+    <section class="card outcomes-card" x-cloak x-show="hasOutcomeData()">
+      <h2>Outcomes
+        <span class="muted small">
+          <span x-text="outcomes.summary.total_applied"></span> applied &middot;
+          <span x-text="outcomes.summary.total_converted"></span> replied
+          (<span x-text="Math.round((outcomes.summary.overall_rate || 0) * 100)"></span>% positive reply rate)
+        </span>
+      </h2>
+
+      {# cumulative funnel: applied → responded → interviewed → offers #}
+      <div class="funnel">
+        <template x-for="stage in [
+            {key:'applied', label:'Applied'},
+            {key:'responded', label:'Responded'},
+            {key:'interviewed', label:'Interviewed'},
+            {key:'offered', label:'Offers'}
+          ]" :key="stage.key">
+          <div class="funnel-row">
+            <span class="funnel-label" x-text="stage.label"></span>
+            <span class="funnel-track">
+              <span class="funnel-bar" :class="`funnel-${stage.key}`"
+                    :style="`width: ${outcomes.funnel[stage.key] > 0
+                              ? Math.max(funnelPct(outcomes.funnel[stage.key]), 4) : 0}%`"></span>
+            </span>
+            <span class="funnel-count" x-text="outcomes.funnel[stage.key]"></span>
+          </div>
+        </template>
+      </div>
+
+      {# terminal / pending breakdown — only the buckets that have entries #}
+      <div class="outcome-pills">
+        <span class="status-pill outcome-rejection" x-show="outcomes.funnel.rejected > 0">
+          Rejected <span x-text="outcomes.funnel.rejected"></span></span>
+        <span class="status-pill outcome-ghost" x-show="outcomes.funnel.ghosted > 0">
+          Ghosted <span x-text="outcomes.funnel.ghosted"></span></span>
+        <span class="status-pill outcome-awaiting" x-show="outcomes.funnel.awaiting > 0">
+          Awaiting reply <span x-text="outcomes.funnel.awaiting"></span></span>
+      </div>
+
+      {# top sources by conversion rate #}
+      <template x-if="outcomes.by_source.length > 0">
+        <div class="outcome-sources">
+          <h3 class="assisted-group-head">By source</h3>
+          <table class="history">
+            <thead>
+              <tr><th>Source</th><th class="num">Applied</th>
+                  <th class="num">Replied</th><th class="num">Rate</th></tr>
+            </thead>
+            <tbody>
+              <template x-for="s in outcomes.by_source" :key="s.key">
+                <tr>
+                  <td x-text="s.key"></td>
+                  <td class="num" x-text="s.applied"></td>
+                  <td class="num" x-text="s.converted"></td>
+                  <td class="num" x-text="Math.round((s.rate || 0) * 100) + '%'"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </section>
+
     {# ------- application history ------- #}
     <section class="card">
       <h2>Recent applications</h2>
@@ -251,7 +319,7 @@
         <thead>
           <tr>
             <th>When</th><th>Status</th><th>Mode</th><th>Job</th>
-            <th class="num">Score</th>
+            <th>Outcome</th><th class="num">Score</th>
           </tr>
         </thead>
         <tbody>
@@ -272,6 +340,16 @@
                 </template>
                 <template x-if="!a.job">
                   <span class="muted">[pruned] <span x-text="a.job_id"></span></span>
+                </template>
+              </td>
+              <td>
+                <template x-if="outcomeFor(a.job && a.job.id)">
+                  <span class="status-pill"
+                        :class="outcomePillClass(outcomeFor(a.job && a.job.id))"
+                        x-text="outcomeLabel(outcomeFor(a.job && a.job.id))"></span>
+                </template>
+                <template x-if="!outcomeFor(a.job && a.job.id)">
+                  <span class="muted">&mdash;</span>
                 </template>
               </td>
               <td class="num"

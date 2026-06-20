@@ -309,6 +309,59 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .pill-queued, .pill-queued_apply { background: var(--accent); color: white; }
 .pill-skipped, .pill-filtered    { background: var(--muted); color: white; }
 
+/* outcome pills (Direction 2, Phase B) — sentiment-coloured */
+.outcome-offer      { background: var(--ok);          color: white; }
+.outcome-interview  { background: var(--accent);      color: white; }
+.outcome-response   { background: var(--accent-soft); color: var(--accent); }
+.outcome-rejection  { background: var(--err);         color: white; }
+.outcome-ghost      { background: var(--muted);       color: white; }
+.outcome-awaiting   { background: var(--bg-soft);     color: var(--fg-muted); }
+
+/* ---------------- outcomes card (Direction 2, Phase B) ---------------- */
+.funnel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.6rem 0;
+}
+.funnel-row {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr 2.5rem;
+  align-items: center;
+  gap: 0.5rem;
+}
+.funnel-label { font-size: 0.8rem; color: var(--fg-muted); }
+.funnel-track {
+  background: var(--bg-soft);
+  border-radius: 999px;
+  height: 0.85rem;
+  overflow: hidden;
+}
+.funnel-bar {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.funnel-applied     { background: var(--accent); }
+.funnel-responded   { background: var(--ok); }
+.funnel-interviewed { background: var(--ok); opacity: 0.8; }
+.funnel-offered     { background: var(--ok); opacity: 0.65; }
+.funnel-count {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-size: 0.85rem;
+  color: var(--fg);
+}
+.outcome-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.6rem 0 0;
+}
+.outcome-sources { margin-top: 0.8rem; }
+.outcome-sources .history { margin-top: 0.3rem; }
+
 /* ---------------- history table ---------------- */
 .history {
   width: 100%;

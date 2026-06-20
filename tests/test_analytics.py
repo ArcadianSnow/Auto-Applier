@@ -15,6 +15,8 @@ from auto_applier.analytics import (
     ConversionReport,
     GroupStat,
     compute_conversion_report,
+    compute_funnel,
+    furthest_outcomes,
     recommend_weight_nudges,
 )
 from auto_applier.db.repositories import JobRepo, OutcomeRepo, ScoreRepo
@@ -163,6 +165,59 @@ def test_outcome_counts_tallies_furthest_stage():
     ]
     rep = compute_conversion_report(feed)
     assert rep.outcome_counts == {"offer": 1, "ghost": 1}
+
+
+# --------------------------------------------------------------- compute_funnel (pure, Direction 2/B)
+
+def test_compute_funnel_cumulative():
+    """Each applied job is counted once by its furthest stage; positive stages are
+    CUMULATIVE (an offer counts in responded + interviewed + offered)."""
+    feed = [
+        _feed_row("j1", "lever", "DE", 8.0, "response"),
+        _feed_row("j1", "lever", "DE", 8.0, "offer"),       # furthest = offer
+        _feed_row("j2", "lever", "DE", 8.0, "interview"),   # furthest = interview
+        _feed_row("j3", "lever", "DE", 8.0, "response"),    # furthest = response
+        _feed_row("j4", "lever", "DE", 8.0, "rejection"),
+        _feed_row("j5", "lever", "DE", 8.0, "ghost"),
+        _feed_row("j6", "lever", "DE", 8.0, None),          # applied, silent
+    ]
+    f = compute_funnel(feed)
+    assert f.applied == 6
+    assert f.responded == 3      # offer + interview + response
+    assert f.interviewed == 2    # offer + interview
+    assert f.offered == 1        # offer
+    assert f.rejected == 1
+    assert f.ghosted == 1        # explicit ghost only
+    assert f.awaiting == 1       # the silent job — NOT counted as ghosted
+
+
+def test_compute_funnel_empty_is_all_zero():
+    f = compute_funnel([])
+    assert (f.applied, f.responded, f.interviewed, f.offered,
+            f.rejected, f.ghosted, f.awaiting) == (0, 0, 0, 0, 0, 0, 0)
+
+
+def test_funnel_responded_equals_converted():
+    """responded must stay equal to ConversionReport.total_converted on the same feed."""
+    feed = [
+        _feed_row("a", "lever", "DE", 8.0, "offer"),
+        _feed_row("b", "greenhouse", "DE", 5.0, "rejection"),
+        _feed_row("c", "ashby", "DE", 9.0, "interview"),
+        _feed_row("d", "lever", "DE", None, None),
+    ]
+    assert compute_funnel(feed).responded == compute_conversion_report(feed).total_converted
+
+
+# --------------------------------------------------------------- furthest_outcomes (pure)
+
+def test_furthest_outcomes_maps_furthest_and_keeps_silent_none():
+    feed = [
+        _feed_row("j1", "lever", "DE", 8.0, "response"),
+        _feed_row("j1", "lever", "DE", 8.0, "interview"),   # furthest wins
+        _feed_row("j2", "lever", "DE", 8.0, None),          # silent → None (not ghost)
+    ]
+    got = furthest_outcomes(feed)
+    assert got == {"j1": "interview", "j2": None}
 
 
 # --------------------------------------------------------------- weight nudges (advisory)

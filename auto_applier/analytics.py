@@ -30,9 +30,12 @@ from auto_applier.reconcile import extract_candidate_skills
 __all__ = [
     "GroupStat",
     "ConversionReport",
+    "OutcomeFunnel",
     "WeightNudge",
     "SkillGapTrend",
     "compute_conversion_report",
+    "compute_funnel",
+    "furthest_outcomes",
     "recommend_weight_nudges",
     "compute_skill_gap_trends",
     "SCORE_BANDS",
@@ -175,6 +178,67 @@ def compute_conversion_report(feed: list[dict]) -> ConversionReport:
         by_title=_to_statlist(by_title),
         by_band=_to_statlist(by_band),
         outcome_counts=outcome_counts,
+    )
+
+
+def furthest_outcomes(feed: list[dict]) -> dict[str, str | None]:
+    """Map each APPLIED ``job_id`` to its furthest-reached outcome (``OutcomeKind.value``),
+    or ``None`` when the job has no recorded outcome yet ("applied, silent").
+
+    Pure projection of :func:`_furthest_per_job` — the dashboard's per-row outcome column
+    consumes this to annotate the history table. ``None`` is *not* a ghost: it's "we
+    haven't heard anything" (the honest awaiting state); an explicit ``ghost`` outcome
+    only appears when one was actually recorded. Conversion *rates* still treat both as
+    non-conversions (see :func:`compute_conversion_report`) — this map is for display."""
+    return {
+        jid: (rec["kind"].value if rec["kind"] is not None else None)
+        for jid, rec in _furthest_per_job(feed).items()
+    }
+
+
+@dataclass(frozen=True)
+class OutcomeFunnel:
+    """A cumulative apply→outcome funnel over APPLIED jobs (each job counted once, by its
+    furthest-reached stage). ``responded`` equals :attr:`ConversionReport.total_converted`
+    (every positive outcome is at least a response). The stages are cumulative — an OFFER
+    job counts in ``responded``, ``interviewed`` *and* ``offered`` — so the bars read as a
+    real funnel. ``rejected`` / ``ghosted`` are the explicit-negative terminals; ``awaiting``
+    is "applied, no outcome recorded yet" — kept distinct from ``ghosted`` so the UI never
+    calls silence a ghost."""
+
+    applied: int = 0
+    responded: int = 0     # furthest outcome is positive (== total_converted)
+    interviewed: int = 0   # furthest rank ≥ INTERVIEW
+    offered: int = 0       # furthest rank ≥ OFFER
+    rejected: int = 0      # furthest outcome is an explicit REJECTION
+    ghosted: int = 0       # furthest outcome is an explicit GHOST
+    awaiting: int = 0      # APPLIED, no outcome recorded yet (honest "no reply")
+
+
+def compute_funnel(feed: list[dict]) -> OutcomeFunnel:
+    """Aggregate the ``applied_with_outcomes()`` feed into a cumulative :class:`OutcomeFunnel`.
+
+    Pure, deterministic, no I/O — mirrors :func:`compute_conversion_report` (same per-job
+    furthest collapse) but emits the funnel shape the dashboard's Outcomes card renders."""
+    applied = responded = interviewed = offered = rejected = ghosted = awaiting = 0
+    for rec in _furthest_per_job(feed).values():
+        applied += 1
+        kind: OutcomeKind | None = rec["kind"]
+        if kind is None:
+            awaiting += 1
+        elif kind is OutcomeKind.GHOST:
+            ghosted += 1
+        elif kind is OutcomeKind.REJECTION:
+            rejected += 1
+        else:  # positive ladder — cumulative
+            responded += 1
+            if kind.rank >= OutcomeKind.INTERVIEW.rank:
+                interviewed += 1
+            if kind.rank >= OutcomeKind.OFFER.rank:
+                offered += 1
+    return OutcomeFunnel(
+        applied=applied, responded=responded, interviewed=interviewed, offered=offered,
+        rejected=rejected, ghosted=ghosted, awaiting=awaiting,
     )
 
 

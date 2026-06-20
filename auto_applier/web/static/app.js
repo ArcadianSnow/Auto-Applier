@@ -48,6 +48,13 @@ function dashboard() {
     reviewBusy: {},        // {jobId: bool} — per-row spinner gate for the assisted-queue actions
     reviewNote: {},        // {jobId: string} — transient per-row status / error note
     history: [],
+    outcomes: {           // Direction 2 (Phase B): apply-outcome analytics (/api/outcomes)
+      summary: { total_applied: 0, total_converted: 0, overall_rate: 0, outcome_counts: {} },
+      funnel: { applied: 0, responded: 0, interviewed: 0, offered: 0,
+                rejected: 0, ghosted: 0, awaiting: 0 },
+      by_source: [],
+      by_job: {},         // {jobId: kind | "awaiting"} — drives the history Outcome column
+    },
     events: [],
     connState: 'connecting',
     controlBusy: false,
@@ -83,12 +90,13 @@ function dashboard() {
       if (this._pollInFlight) return;
       this._pollInFlight = true;
       try {
-        const [status, sources, queue, reviewQueue, history, onboarding] = await Promise.all([
+        const [status, sources, queue, reviewQueue, history, outcomes, onboarding] = await Promise.all([
           fetch('/api/status').then(r => r.json()),
           fetch('/api/sources').then(r => r.json()),
           fetch('/api/queue').then(r => r.json()),
           fetch('/api/review-queue').then(r => r.json()),
           fetch('/api/history?limit=20').then(r => r.json()),
+          fetch('/api/outcomes').then(r => r.json()),
           // Best-effort — endpoint may not be reachable on a stripped
           // install (it's wired in (5/M)); the banner just stays hidden.
           fetch('/api/onboarding/state').then(r => r.ok ? r.json() : null)
@@ -99,6 +107,7 @@ function dashboard() {
         this.queue = queue;
         this.reviewQueue = reviewQueue.jobs || [];
         this.history = history.applications || [];
+        this.outcomes = outcomes;
         this.onboarding = onboarding;
       } catch (e) {
         // Best-effort: keep stale data on screen rather than blanking.
@@ -151,6 +160,51 @@ function dashboard() {
       if (state === 'REVIEW' || state === 'FAILED') return 'cell-warn';
       if (state === 'SKIPPED' || state === 'FILTERED') return 'cell-muted';
       return 'cell-normal';
+    },
+
+    // ---------------- Direction 2 (Phase B): apply outcomes ----------------
+
+    /**
+     * The furthest-reached outcome token for a job ("offer"/"interview"/
+     * "response"/"rejection"/"ghost"/"awaiting"), or null when the job isn't
+     * an APPLIED job at all (so the history Outcome column shows a plain dash).
+     * `awaiting` IS in the map for an applied-but-silent job — honestly
+     * distinct from a recorded ghost.
+     */
+    outcomeFor(jobId) {
+      if (!jobId) return null;
+      const m = this.outcomes?.by_job || {};
+      return Object.prototype.hasOwnProperty.call(m, jobId) ? m[jobId] : null;
+    },
+
+    /** Human label for an outcome token. */
+    outcomeLabel(token) {
+      const labels = {
+        offer: 'Offer', interview: 'Interview', response: 'Responded',
+        rejection: 'Rejected', ghost: 'Ghosted', awaiting: 'Awaiting',
+      };
+      return labels[token] || token;
+    },
+
+    /** CSS modifier class for an outcome pill (colour by sentiment). */
+    outcomePillClass(token) {
+      return `outcome-${token}`;
+    },
+
+    /** True once at least one APPLIED job exists — gates the Outcomes card. */
+    hasOutcomeData() {
+      return (this.outcomes?.funnel?.applied || 0) > 0;
+    },
+
+    /**
+     * Width % for a funnel bar relative to the applied total. Applied is the
+     * 100% baseline; downstream stages render proportionally so the funnel
+     * reads as a shrinking ladder. 0 applied → 0 (the card is hidden anyway).
+     */
+    funnelPct(count) {
+      const base = this.outcomes?.funnel?.applied || 0;
+      if (!base) return 0;
+      return Math.round((count / base) * 100);
     },
 
     /**
