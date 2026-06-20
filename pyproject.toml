@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "auto-applier"
-version = "2.0.0"
+version = "3.0.0a0"
 description = "AI-powered automated job application tool with multi-platform support"
 requires-python = ">=3.11"
 dependencies = [

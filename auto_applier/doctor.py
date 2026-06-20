@@ -44,7 +44,8 @@ def check_config() -> tuple[CheckResult, Settings | None]:
         return (
             CheckResult(
                 "config", Status.FAIL, f"invalid config: {exc}",
-                fix="edit data/v3/user_config.json - see av3/config/settings.py for the schema",
+                fix="fix user_config.json in your data dir (see `av3 status` / $AV3_DATA_DIR; "
+                    "schema in auto_applier/config/settings.py)",
             ),
             None,
         )

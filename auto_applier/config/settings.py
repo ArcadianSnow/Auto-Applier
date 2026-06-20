@@ -21,7 +21,22 @@ from pydantic import BaseModel, Field, model_validator
 
 from auto_applier.config.strategy import RiskBias, StrategyProfile
 
-DEFAULT_DATA_DIR = Path("data/v3")
+def _default_data_dir() -> Path:
+    """A stable per-user data location, so an install SEPARATE FROM THE REPO (pip install
+    + a Start Menu shortcut, no git checkout) doesn't scatter ``data/v3`` into whatever the
+    current working directory happens to be. Overridden by ``AV3_DATA_DIR`` (tests + custom
+    installs). Windows → ``%LOCALAPPDATA%\\AutoApplier\\data``; POSIX → ``$XDG_DATA_HOME`` or
+    ``~/.local/share`` + ``auto-applier``.
+    """
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "AutoApplier" / "data"
+    xdg = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg) if xdg else (Path.home() / ".local" / "share")
+    return base / "auto-applier"
+
+
+DEFAULT_DATA_DIR = _default_data_dir()
 
 
 class ScoringWeights(BaseModel):

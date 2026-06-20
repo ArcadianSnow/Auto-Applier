@@ -3269,40 +3269,89 @@ def mirror_drain_cmd(limit: int, timeout_s: float) -> None:
 
 @cli.command("update")
 @click.option("--repo", type=str, default=None,
-              help="GitHub slug to check (default the project repo).")
+              help="GitHub slug to use (default the project repo).")
+@click.option("--ref", type=str, default="master", show_default=True,
+              help="Branch to install from with --apply.")
+@click.option("--apply", "do_apply", is_flag=True, default=False,
+              help="Actually upgrade in place: pip-install the latest from GitHub "
+                   "(no git needed; the repo is public).")
 @click.option("--timeout-s", type=float, default=5.0, show_default=True,
               help="HTTP timeout for the release-feed fetch.")
 @click.option("--exit-code", is_flag=True, default=False,
               help="Exit 10 when an update is available (for scripting / a "
                    "launch-time check). Default always exits 0.")
-def update_cmd(repo: str | None, timeout_s: float, exit_code: bool) -> None:
-    """Check the release feed and prompt if a newer version exists (spec §11a).
+def update_cmd(repo: str | None, ref: str, do_apply: bool,
+               timeout_s: float, exit_code: bool) -> None:
+    """Check for / apply an update (spec §11a).
 
-    v3.0 is check + prompt only — it tells you where to get the new installer;
-    it does NOT auto-replace a running service (that's its own risk surface).
-    Never fails the command on a network problem — a missed check is not an error.
+    Without ``--apply``: check the release feed and tell you if you're behind.
+    With ``--apply``: pip-install the latest code straight from the public GitHub
+    repo (one command, no git required). Stop ``av3 serve`` / ``av3 run`` first
+    so no files are locked, then restart them afterwards. A network problem on
+    the check is never an error (a missed check is not a failure).
     """
-    from auto_applier.update import DEFAULT_REPO, check_for_update
+    from auto_applier.update import DEFAULT_REPO, check_for_update, github_archive_url
 
     effective_repo = repo or DEFAULT_REPO
+
+    if do_apply:
+        import subprocess
+
+        url = github_archive_url(effective_repo, ref)
+        click.echo(f"Updating Auto Applier from {effective_repo}@{ref} ...")
+        click.echo("  (stop `av3 serve` / `av3 run` first if they're running, "
+                   "then restart them when this finishes)")
+        # Step 1 — refresh the package CODE only: pure-Python, fast, and it can't
+        # hit a "file in use" lock on a compiled dependency (.pyd/.dll) the way a
+        # full --force-reinstall could. --no-deps + --force so the same-version
+        # static tag still gets the latest master content.
+        rc = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade",
+             "--force-reinstall", "--no-deps", url]
+        ).returncode
+        if rc != 0:
+            click.echo("  x FAIL pip could not reinstall the package "
+                       f"(rc={rc}).", err=True)
+            click.echo("        fix -> check your internet connection and that "
+                       "`pip` works, then re-run `av3 update --apply`.", err=True)
+            sys.exit(1)
+        # Step 2 — pull any NEWLY-ADDED dependencies. The package is already at the
+        # current version (step 1), so pip leaves it + existing deps alone and only
+        # installs anything new the update introduced.
+        rc = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade",
+             f"auto-applier[v3] @ {url}"]
+        ).returncode
+        if rc != 0:
+            click.echo("  ! the code updated but pulling new dependencies failed "
+                       f"(rc={rc}).", err=True)
+            click.echo(f"        fix -> re-run `av3 update --apply`, or "
+                       f"`pip install \"auto-applier[v3] @ {url}\"`.", err=True)
+            sys.exit(1)
+        click.echo("+ Updated to the latest. Restart `av3` (and `av3 serve` / "
+                   "`av3 run` if you stopped them) to load it.")
+        return
+
     info = check_for_update(__version__, repo=effective_repo, timeout_s=timeout_s)
 
     if info is None:
         click.echo(
             f"Could not reach the release feed for {effective_repo} "
-            f"(offline / rate-limited?). Current version {__version__}."
+            f"(offline / rate-limited?). Current version {__version__}.\n"
+            "  To upgrade to the latest anyway: `av3 update --apply`."
         )
         return  # exit 0 — a missed check is not an error
     if info.is_newer:
         click.echo(
             f"Update available: {info.current} -> {info.latest}\n"
             f"  {info.url}\n"
-            "  Download and run the new installer to update."
+            "  Upgrade with: `av3 update --apply`"
         )
         if exit_code:
             sys.exit(10)
     else:
-        click.echo(f"Up to date (current {info.current}, latest {info.latest}).")
+        click.echo(f"Up to date (current {info.current}, latest {info.latest}).\n"
+                   "  (Pull the latest master anyway with `av3 update --apply`.)")
 
 
 @cli.command("install-browser")

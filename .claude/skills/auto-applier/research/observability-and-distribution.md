@@ -659,3 +659,59 @@ pieces: `research/mvp-readiness.md`). The CLI/distribution changes:
   `-Time`/`-DataDir`/`-TaskName`/`-Unregister`. README "Keeping the job list fresh" documents the
   cadence (discovery daily is plenty; re-`seed-boards` quarterly / on targeting change; the bundled
   company CSV needs no refresh — dead slugs are dropped on probe).
+
+---
+
+## Distribution v2 — pip-from-GitHub install + `av3 update --apply` (2026-06-20)
+
+The owner asked for "how to set up separate from the repo" + "an easier update mechanism" before
+handing v3 to the 3-4 friend group. Decision (with the user): **distribute via pip-install from the
+PUBLIC GitHub repo, not the PyInstaller/.exe installer.** Why:
+
+- The repo is **public** (`ArcadianSnow/Auto-Applier`, default branch `master`) → `pip install`
+  from a zipball needs **no git and no auth**.
+- The Inno Setup installer (`installer/auto_applier.iss`) expects a PyInstaller `dist/AutoApplier.exe`
+  from a `build.py`/`build_v3.py` that **does not exist in the tree** → that path is non-functional
+  today, and per-release .exe builds + auto-replacing a running .exe (Windows file locks) are exactly
+  the risk the spec flagged. pip is far lower-maintenance for a tiny group.
+
+### What shipped
+
+- **`av3 update --apply [--ref master]`** (`cli/main.py` `update_cmd` + helpers in `update.py`):
+  upgrades in place from the public repo's zipball — no git. **Two-step** (deliberate):
+  1. `pip install --upgrade --force-reinstall --no-deps <zip>` — refreshes the package CODE only.
+     `--no-deps` avoids a "file in use" lock on a compiled dependency (.pyd/.dll) and keeps it fast;
+     `--force-reinstall` is required because the static version tag won't trip pip's "already
+     satisfied" even when master moved.
+  2. `pip install --upgrade "auto-applier[v3] @ <zip>"` — pulls only NEWLY-ADDED deps (package is
+     already current from step 1, so existing deps/.pyd files are untouched).
+  Step-1 failure aborts before step 2. Tells the user to stop/restart `av3 serve`/`av3 run`.
+  Plain `av3 update` (no `--apply`) still just checks the release feed; its messages now point at
+  `av3 update --apply` instead of "download the installer". `update.py` gained pure
+  `github_archive_url(repo, ref)` + `pip_install_spec(repo, ref, extras=)` (tested without network;
+  the subprocess orchestration is tested by monkeypatching `subprocess.run`, like `setup-llm`).
+- **Stable absolute default data dir** (`settings._default_data_dir`): `DEFAULT_DATA_DIR` was the
+  **relative** `data/v3` → a non-repo install (Start Menu shortcut, pip install) would scatter data
+  into whatever the CWD was. Now Windows → `%LOCALAPPDATA%\AutoApplier\data`, POSIX →
+  `$XDG_DATA_HOME` (or `~/.local/share`) + `auto-applier`. `AV3_DATA_DIR` still overrides everything
+  (tests + the owner's `JobSearch/av3data` are unaffected). Only the definition + one `doctor` fix
+  hint referenced the old relative path; no test depended on it. Tests: `test_default_data_dir.py`.
+- **`SETUP.md`** (repo root, linked from README Install): friend-facing "no clone needed" guide —
+  install Python + Ollama, one pip command (`auto-applier[v3] @ .../master.zip`, with a pipx
+  alternative), `setup-llm`/`install-browser`/`init-db`/`doctor`, `av3 launch`, where data lives,
+  `av3 update --apply`, the `av3`-not-on-PATH fallback (`python -m auto_applier.cli.main`), uninstall.
+- **`pyproject` version synced** 2.0.0 → 3.0.0a0 (it was stale vs `__version__`).
+
+### Verification
+Zipball URL `https://github.com/ArcadianSnow/Auto-Applier/archive/refs/heads/master.zip` → HTTP 200
+(install command points at a real artifact). `av3 update --apply` was **NOT run live** (it would
+replace the editable dev install with a pinned master checkout) — its orchestration is unit-tested
+with `subprocess.run` mocked. NB the zipball reflects the **last pushed** master; these changes are
+commit-only (not pushed), so `av3 update --apply` won't deliver them until the owner pushes.
+
+### Still open / future
+- **No GitHub Releases are published**, so `av3 update` (check) finds nothing and `--ref` defaults to
+  branch `master` (`refs/heads`). If the owner later cuts tagged releases, add `refs/tags` support +
+  flip `allow_prerelease` for a stable channel.
+- The **.exe installer** remains the "zero-Python" future option — it needs the missing PyInstaller
+  build script restored first (`build_v3.py`/`run_v3.py` per CLAUDE.md don't exist).

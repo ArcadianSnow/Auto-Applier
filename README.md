@@ -63,6 +63,11 @@ discover ─▶ filter ─▶ score ─▶ optimize ─▶ apply
 
 Requires **Python 3.11+**.
 
+> **Just want to run it (no repo / clone)?** See **[SETUP.md](SETUP.md)** — one `pip install` from
+> the public GitHub repo, then `av3 launch`. Update later with `av3 update --apply`.
+
+The steps below are the **developer / from-checkout** install:
+
 ```bash
 pip install -e ".[v3]"        # core deps (FastAPI, pydantic, httpx, …)
 av3 install-browser           # fetch Chromium on first run (real Chrome via channel is the primary path)

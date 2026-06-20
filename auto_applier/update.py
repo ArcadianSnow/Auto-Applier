@@ -27,7 +27,9 @@ __all__ = [
     "UpdateInfo",
     "check_for_update",
     "compare_versions",
+    "github_archive_url",
     "parse_release_feed",
+    "pip_install_spec",
 ]
 
 # The project's GitHub slug (see reference memory). The release feed is
@@ -121,6 +123,24 @@ def parse_release_feed(
         url=url,
         is_newer=compare_versions(current_version, latest),
     )
+
+
+def github_archive_url(repo: str = DEFAULT_REPO, ref: str = "master") -> str:
+    """Zipball download URL for a branch of a PUBLIC GitHub repo.
+
+    Used by ``av3 update --apply`` so a pip upgrade needs neither git nor auth — pip can
+    install straight from this URL. Branch refs only (``refs/heads/<ref>``); tagged-release
+    installs would use ``refs/tags`` once the project publishes Releases.
+    """
+    return f"https://github.com/{repo}/archive/refs/heads/{ref}.zip"
+
+
+def pip_install_spec(repo: str = DEFAULT_REPO, ref: str = "master", *, extras: str = "v3") -> str:
+    """PEP 508 direct-reference spec pip installs from, e.g.
+    ``auto-applier[v3] @ https://github.com/<repo>/archive/refs/heads/master.zip``.
+    ``extras=""`` drops the ``[...]`` (used for the fast, deps-skipping refresh step)."""
+    suffix = f"[{extras}]" if extras else ""
+    return f"auto-applier{suffix} @ {github_archive_url(repo, ref)}"
 
 
 def _httpx_get(timeout_s: float) -> GetFn:

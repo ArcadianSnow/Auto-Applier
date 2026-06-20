@@ -217,3 +217,63 @@ def test_setup_llm_pull_failure_exits_1(monkeypatch):
     res = _run("setup-llm")
     assert res.exit_code == 1
     assert "could not pull" in res.output
+
+
+# ----------------------------------------------------------------- update --apply
+
+def test_github_archive_url_and_spec():
+    from auto_applier.update import DEFAULT_REPO, github_archive_url, pip_install_spec
+
+    url = github_archive_url(ref="master")
+    assert url == f"https://github.com/{DEFAULT_REPO}/archive/refs/heads/master.zip"
+    spec = pip_install_spec(ref="master")
+    assert spec == f"auto-applier[v3] @ {url}"
+    # extras="" drops the bracket (the fast deps-skipping refresh step)
+    assert pip_install_spec(extras="") == f"auto-applier @ {url}"
+
+
+def test_update_apply_runs_two_pip_steps(monkeypatch):
+    calls = []
+    def fake_run(args, **kw):
+        calls.append(args)
+        return _Proc(0)
+    monkeypatch.setattr("subprocess.run", fake_run)
+    res = _run("update", "--apply")
+    assert res.exit_code == 0, res.output
+    assert len(calls) == 2
+    # Step 1: package code only, force + no-deps, from the zipball URL.
+    assert calls[0][:6] == [
+        __import__("sys").executable, "-m", "pip", "install", "--upgrade", "--force-reinstall",
+    ]
+    assert "--no-deps" in calls[0]
+    assert calls[0][-1].endswith("/archive/refs/heads/master.zip")
+    # Step 2: pulls [v3] extras (new deps) without force.
+    assert any(a.startswith("auto-applier[v3] @ ") for a in calls[1])
+    assert "Updated to the latest" in res.output
+
+
+def test_update_apply_respects_ref(monkeypatch):
+    calls = []
+    monkeypatch.setattr("subprocess.run",
+                        lambda args, **kw: (calls.append(args), _Proc(0))[1])
+    res = _run("update", "--apply", "--ref", "dev")
+    assert res.exit_code == 0
+    assert calls[0][-1].endswith("/archive/refs/heads/dev.zip")
+
+
+def test_update_apply_step1_failure_exits_1_without_step2(monkeypatch):
+    calls = []
+    monkeypatch.setattr("subprocess.run",
+                        lambda args, **kw: (calls.append(args), _Proc(1, "net down"))[1])
+    res = _run("update", "--apply")
+    assert res.exit_code == 1
+    assert len(calls) == 1  # step 2 not attempted after step 1 fails
+    assert "could not reinstall" in res.output
+
+
+def test_update_apply_step2_failure_exits_1(monkeypatch):
+    seq = iter([_Proc(0), _Proc(1, "dep resolve failed")])
+    monkeypatch.setattr("subprocess.run", lambda args, **kw: next(seq))
+    res = _run("update", "--apply")
+    assert res.exit_code == 1
+    assert "new dependencies failed" in res.output
