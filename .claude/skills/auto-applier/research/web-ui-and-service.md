@@ -1225,3 +1225,75 @@ outcomes). Full suite **1275 passed / 13 deselected**.
   by-source table proves too coarse.
 - **The RESPONSE>REJECTION ladder question** (above) — left as a documented modelling decision,
   not a UI bug.
+
+---
+
+## Direction 2 (Phase C) — goals/targeting view landed (2026-06-20)
+
+The dashboard's "what am I targeting" cockpit surface — the consumer of what the Direction 1
+onboarding journey produces (`TargetingConfig`: the structured filters + the ATS board slugs
+discovery sweeps). A **read view by default + an inline editor** on a new Goals card, writing
+through the **single existing targeting writer** (`POST /api/onboarding/targeting`, now extended).
+Evolves the Alpine app (no framework rewrite, per future-directions Direction 2). Full suite
+**1283 passed / 13 deselected** (+8). Browser-verified live against a THROWAWAY temp data dir
+(never the prod targeting): read renders, edit round-trips with sanitization, 0 console errors.
+
+### New surface
+
+| Module / endpoint | Purpose |
+|---|---|
+| `GET /api/targeting` | Effective `TargetingConfig` DTO: 7 structured fields + `boards{greenhouse,lever,ashby}` + `board_count` + `using_default_boards`. Reads the FILE (`load_user_config`) overlaid on defaults, never `settings`. |
+| `POST /api/onboarding/targeting` (extended) | Now ALSO accepts `greenhouse_boards`/`lever_boards`/`ashby_boards`, each sanitized via `_clean_slug_list`. Purely additive → the wizard (never sends them) is unchanged. Still the SINGLE targeting writer. |
+| dashboard.html Goals card | Read view (chips + counts + starter-set hint + "applies after restart" note + "Guided setup" link to the wizard) / edit view (textareas split on newline/comma; checkboxes; number; seniority select; three board textareas). |
+| `app.js` dashboard() | `targeting` state + `goalsEditing/goalsDraft/goalsBusy/goalsNote`; `/api/targeting` in `refreshAll` (poll-clobber guarded); `goalsBoardGroups/startGoalsEdit/cancelGoalsEdit/saveGoals` + `_parseList`. |
+
+### Load-bearing design decisions
+
+- **Read the FILE, not `web_state.settings`.** `settings.targeting` is frozen at scheduler-build
+  (startup) — the discovery/seed workers read it there (`discover_worker.py:153,293`,
+  `seed_worker.py:171,210`), so an edit made this session wouldn't show if we read `settings`.
+  `GET /api/targeting` reads `load_user_config` overlaid on `TargetingConfig` defaults via
+  `model_validate`, so the card reflects saves immediately and shows what discovery WILL sweep on
+  the next worker (re)start. The "Changes apply the next time the worker restarts" note states this
+  honestly (same restart property the wizard + seed-boards probe already have — discovery doesn't
+  hot-reload config).
+- **Reuse the single writer; extend, don't fork.** Mirrors the Phase B "reuse the analytics
+  read-model verbatim" discipline. Boards ARE part of `TargetingConfig`, so accepting the three
+  board keys on `/onboarding/targeting` keeps ONE writer for wizard + dashboard (can't drift); a
+  payload without a key never blanks it (field-by-field merge), so structured-only and board-only
+  edits each leave the other half intact (tested both directions).
+- **Board sanitization preserves case (`_clean_slug_list`).** Trim → drop empties → dedupe by
+  EXACT value, order-preserved. Exact (not case-folded) is deliberate: **Ashby slugs are
+  case-sensitive** ("Linear", "Notion", "OpenAI") so lowercasing would break the confirm-probe;
+  `"Linear"` and `"linear"` are kept as distinct (tested). A non-list value → `[]` (clears, never
+  corrupts) so a malformed submit can't write a string the next `load_settings()` would reject.
+- **Never 500 the card.** A hand-edited/invalid saved `targeting` block (e.g. `salary_floor:
+  "lots"`) falls back to pure `TargetingConfig()` defaults rather than raising — the dashboard's
+  read must be robust to a power-user's hand edit of `master`/`user_config`.
+- **Edit-mode poll guard.** The 5s `refreshAll` skips overwriting `this.targeting` while
+  `goalsEditing` is true (the draft owns the view); `saveGoals` flips `goalsEditing=false`
+  *before* `refreshAll()` so the post-save refresh isn't skipped. Verified live: edit, save,
+  the read view repaints with the server's canonical values.
+- **Alpine binding safety.** No `:disabled="<dict>[key]"` undefined-trap here (the Phase A durable
+  gotcha) — `goalsBusy` is a plain bool, lists use `x-for`, flags use `x-show`. Browser-smoke
+  confirmed card + editor render, sanitization round-trips, 0 console errors.
+
+### Tests
+
+- `tests/test_web_dashboard.py::TestTargetingEndpoint` (8): defaults when nothing saved
+  (`using_default_boards` true, starter set counted), reflects saved overrides + `board_count`,
+  malformed-config fallback (no 500), board sanitize+persist+roundtrip, Ashby case-preserving
+  dedupe, structured-only doesn't blank boards & board-only doesn't blank structured, non-list
+  board value clears. Plus the dashboard-render test now asserts the card + `startGoalsEdit`/
+  `saveGoals`/`goalsBoardGroups` are wired.
+
+### What's NOT in this slice (future)
+
+- **No live config hot-reload.** Edits apply on the next worker restart (stated in the card) —
+  same as the wizard; the discovery/seed workers read `settings.targeting` captured at startup.
+  Hot-reloading would mean re-reading settings per cycle (a broader change), deferred.
+- **No in-card "find companies" probe.** The seed-boards background probe lives in the onboarding
+  wizard (linked as "Guided setup"); the dashboard card is hand-edit + the wizard for the guided/
+  conversational + probe flows. Porting the probe into the card is a later nicety if wanted.
+- **No goal-elicitation chat on the dashboard** — that's the wizard's job (Direction 1 Phase B);
+  the card surfaces/edits the structured result.

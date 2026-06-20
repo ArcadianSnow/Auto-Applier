@@ -55,6 +55,16 @@ function dashboard() {
       by_source: [],
       by_job: {},         // {jobId: kind | "awaiting"} — drives the history Outcome column
     },
+    targeting: {     // Direction 2 (Phase C): effective goals/targeting (/api/targeting)
+      titles: [], locations: [], remote_ok: true, onsite_ok: true,
+      salary_floor: null, seniority: '', preferences: [],
+      boards: { greenhouse: [], lever: [], ashby: [] },
+      board_count: 0, using_default_boards: false,
+    },
+    goalsEditing: false,   // when true, polls don't clobber the card (the editor owns the view)
+    goalsDraft: {},        // text-buffered edit copy (lists are newline-joined strings)
+    goalsBusy: false,
+    goalsNote: '',
     events: [],
     connState: 'connecting',
     controlBusy: false,
@@ -90,13 +100,14 @@ function dashboard() {
       if (this._pollInFlight) return;
       this._pollInFlight = true;
       try {
-        const [status, sources, queue, reviewQueue, history, outcomes, onboarding] = await Promise.all([
+        const [status, sources, queue, reviewQueue, history, outcomes, targeting, onboarding] = await Promise.all([
           fetch('/api/status').then(r => r.json()),
           fetch('/api/sources').then(r => r.json()),
           fetch('/api/queue').then(r => r.json()),
           fetch('/api/review-queue').then(r => r.json()),
           fetch('/api/history?limit=20').then(r => r.json()),
           fetch('/api/outcomes').then(r => r.json()),
+          fetch('/api/targeting').then(r => r.json()),
           // Best-effort — endpoint may not be reachable on a stripped
           // install (it's wired in (5/M)); the banner just stays hidden.
           fetch('/api/onboarding/state').then(r => r.ok ? r.json() : null)
@@ -108,6 +119,8 @@ function dashboard() {
         this.reviewQueue = reviewQueue.jobs || [];
         this.history = history.applications || [];
         this.outcomes = outcomes;
+        // Don't overwrite the card while the user is editing it — the draft owns the view.
+        if (!this.goalsEditing) this.targeting = targeting;
         this.onboarding = onboarding;
       } catch (e) {
         // Best-effort: keep stale data on screen rather than blanking.
@@ -205,6 +218,100 @@ function dashboard() {
       const base = this.outcomes?.funnel?.applied || 0;
       if (!base) return 0;
       return Math.round((count / base) * 100);
+    },
+
+    // ---------------- Direction 2 (Phase C): goals / targeting ----------------
+
+    /** The board lists grouped for the read view, in a stable ATS order. */
+    goalsBoardGroups() {
+      const b = this.targeting?.boards || {};
+      return [
+        { key: 'greenhouse', slugs: b.greenhouse || [] },
+        { key: 'lever', slugs: b.lever || [] },
+        { key: 'ashby', slugs: b.ashby || [] },
+      ];
+    },
+
+    /**
+     * Enter edit mode: copy the live targeting into a text-buffered draft. Lists
+     * become newline-joined strings the textareas bind to; salary_floor keeps its
+     * number|null. Setting goalsEditing freezes the poll from clobbering the card.
+     */
+    startGoalsEdit() {
+      const t = this.targeting || {};
+      const b = t.boards || {};
+      this.goalsDraft = {
+        titles: (t.titles || []).join('\n'),
+        locations: (t.locations || []).join('\n'),
+        remote_ok: !!t.remote_ok,
+        onsite_ok: !!t.onsite_ok,
+        salary_floor: t.salary_floor ?? null,
+        seniority: t.seniority || '',
+        preferences: (t.preferences || []).join('\n'),
+        greenhouse_boards: (b.greenhouse || []).join('\n'),
+        lever_boards: (b.lever || []).join('\n'),
+        ashby_boards: (b.ashby || []).join('\n'),
+      };
+      this.goalsNote = '';
+      this.goalsEditing = true;
+    },
+
+    cancelGoalsEdit() {
+      this.goalsEditing = false;
+      this.goalsNote = '';
+    },
+
+    /** Split a textarea value on newlines/commas → trimmed, empties dropped. */
+    _parseList(text) {
+      return String(text || '')
+        .split(/[\n,]/)
+        .map(s => s.trim())
+        .filter(Boolean);
+    },
+
+    /**
+     * Persist the draft via the single targeting writer (/api/onboarding/targeting).
+     * Lists are parsed back from the textareas; salary_floor coerces ''/0/NaN → null.
+     * On success: refresh from the server (which re-reads the file) and exit edit mode.
+     */
+    async saveGoals() {
+      if (this.goalsBusy) return;
+      this.goalsBusy = true;
+      this.goalsNote = 'Saving...';
+      const d = this.goalsDraft;
+      const floor = Number(d.salary_floor);
+      const payload = {
+        titles: this._parseList(d.titles),
+        locations: this._parseList(d.locations),
+        remote_ok: !!d.remote_ok,
+        onsite_ok: !!d.onsite_ok,
+        salary_floor: Number.isFinite(floor) && floor > 0 ? Math.round(floor) : null,
+        seniority: d.seniority || '',
+        preferences: this._parseList(d.preferences),
+        greenhouse_boards: this._parseList(d.greenhouse_boards),
+        lever_boards: this._parseList(d.lever_boards),
+        ashby_boards: this._parseList(d.ashby_boards),
+      };
+      try {
+        const r = await fetch('/api/onboarding/targeting', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          this.goalsNote = `Save failed: ${err.detail || r.statusText}`;
+          return;
+        }
+        // Exit edit BEFORE refreshing so the poll's targeting write isn't skipped.
+        this.goalsEditing = false;
+        this.goalsNote = '';
+        await this.refreshAll();
+      } catch (e) {
+        this.goalsNote = `Error: ${e}`;
+      } finally {
+        this.goalsBusy = false;
+      }
     },
 
     /**

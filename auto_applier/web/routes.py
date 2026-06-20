@@ -364,6 +364,61 @@ async def outcomes(request: Request) -> dict:
     }
 
 
+# ---------------------------------------------------------------- /api/targeting (Direction 2, Phase C)
+
+# The goals/targeting view's READ side (Direction 2 Phase C — the dashboard surface for what the
+# onboarding journey produced: what the user told the bot they want + the company boards it found).
+# Reads the SAVED user_config (the FILE, via load_user_config) overlaid on TargetingConfig defaults
+# — NOT web_state.settings, which is frozen at scheduler-build (startup) so it wouldn't reflect an
+# edit made this session. The card shows the effective config that the discovery producer WILL sweep
+# on the next worker (re)start; the editor writes via the existing /api/onboarding/targeting writer.
+
+
+@api_router.get("/targeting")
+async def targeting(request: Request) -> dict:
+    """Effective job-targeting config for the dashboard Goals card.
+
+    Overlays the saved ``user_config.json`` ``targeting`` block onto
+    :class:`TargetingConfig` defaults so the card shows what discovery actually sweeps
+    (incl. the starter board set when the user hasn't customized it). Returns the structured
+    filters + the ATS board slugs grouped by source + a total count + ``using_default_boards``
+    (so the UI can label the starter set honestly). Never 500s: a malformed saved block falls
+    back to pure defaults.
+    """
+    from auto_applier.config.settings import TargetingConfig
+
+    web_state = _get_state(request)
+    saved = (load_user_config(web_state.settings.data_dir).get("targeting") or {})
+    try:
+        cfg = TargetingConfig.model_validate(saved)
+    except Exception:  # noqa: BLE001 — never let a hand-edited config blank the whole card
+        cfg = TargetingConfig()
+
+    boards = {
+        "greenhouse": list(cfg.greenhouse_boards),
+        "lever": list(cfg.lever_boards),
+        "ashby": list(cfg.ashby_boards),
+    }
+    defaults = TargetingConfig()
+    using_default_boards = (
+        cfg.greenhouse_boards == defaults.greenhouse_boards
+        and cfg.lever_boards == defaults.lever_boards
+        and cfg.ashby_boards == defaults.ashby_boards
+    )
+    return {
+        "titles": list(cfg.titles),
+        "locations": list(cfg.locations),
+        "remote_ok": cfg.remote_ok,
+        "onsite_ok": cfg.onsite_ok,
+        "salary_floor": cfg.salary_floor,
+        "seniority": cfg.seniority,
+        "preferences": list(cfg.preferences),
+        "boards": boards,
+        "board_count": sum(len(v) for v in boards.values()),
+        "using_default_boards": using_default_boards,
+    }
+
+
 # ---------------------------------------------------------------- /api/jobs/<id>
 
 @api_router.get("/jobs/{job_id}")
@@ -1037,9 +1092,16 @@ async def onboarding_work_auth(request: Request) -> dict:
 
 @api_router.post("/onboarding/targeting")
 async def onboarding_targeting(request: Request) -> dict:
-    """Save job-targeting config. Payload mirrors :class:`TargetingConfig`:
-    ``{"titles": [...], "locations": [...], "remote_ok": bool,
-    "onsite_ok": bool, "salary_floor": int|null, "seniority": "..."}.``
+    """Save job-targeting config — the SINGLE writer for ``targeting`` (the onboarding
+    wizard AND the Direction 2 Phase C dashboard Goals editor both POST here). Payload mirrors
+    :class:`TargetingConfig`: ``{"titles": [...], "locations": [...], "remote_ok": bool,
+    "onsite_ok": bool, "salary_floor": int|null, "seniority": "...", "preferences": [...],
+    "greenhouse_boards": [...], "lever_boards": [...], "ashby_boards": [...]}``.
+
+    The board-list keys are accepted from the Goals editor (the wizard never sends them, so its
+    behaviour is unchanged) and sanitized — trimmed, empties dropped, deduped by exact value with
+    order preserved. Exact-value dedupe (not case-folded) is deliberate: Ashby slugs are
+    case-sensitive ("Linear", "Notion", "OpenAI"), so lowercasing would break the probe.
     """
     payload = await _read_json_dict(request)
     web_state = _get_state(request)
@@ -1052,9 +1114,28 @@ async def onboarding_targeting(request: Request) -> dict:
               "salary_floor", "seniority", "preferences"):
         if k in payload:
             targeting[k] = payload[k]
+    for k in ("greenhouse_boards", "lever_boards", "ashby_boards"):
+        if k in payload:
+            targeting[k] = _clean_slug_list(payload[k])
     cfg["targeting"] = targeting
     save_user_config(web_state.settings.data_dir, cfg)
     return onboarding_status(web_state.settings.data_dir).to_dict()
+
+
+def _clean_slug_list(value) -> list[str]:
+    """Trim, drop empties, and dedupe (by exact value, order-preserving) a board-slug list.
+    A non-list payload yields ``[]`` so a malformed Goals-editor submit clears rather than
+    corrupts. Case is preserved — Ashby slugs are case-sensitive."""
+    if not isinstance(value, list):
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in value:
+        slug = str(item).strip()
+        if slug and slug not in seen:
+            seen.add(slug)
+            out.append(slug)
+    return out
 
 
 @api_router.post("/onboarding/goal-chat")

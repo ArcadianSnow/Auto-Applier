@@ -767,3 +767,69 @@ pre.copilot-answer {
   user-select: all;          /* one click selects the whole paste-ready answer */
 }
 .copilot-note { color: var(--warn); font-size: 0.9rem; margin: 0.25rem 0; }
+
+/* ---- Goals & targeting card (Direction 2, Phase C) ---- */
+.chip {
+  display: inline-block;
+  margin: 0.12rem 0.25rem 0.12rem 0;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.85rem;
+  color: var(--fg);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.chip-flag { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.goals-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 1rem;
+  margin: 0.2rem 0 0.6rem;
+}
+.goals-grid dt { color: var(--fg-muted); font-weight: 600; }
+.goals-grid dd { margin: 0; min-width: 0; }
+.goals-boards { display: flex; flex-direction: column; gap: 0.35rem; }
+.goals-board-grp { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem; }
+.goals-board-ats {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+  min-width: 5.5rem;
+}
+.goals-form { display: flex; flex-direction: column; gap: 0.7rem; }
+.goals-form > label { display: block; color: var(--fg-muted); font-size: 0.9rem; }
+.goals-row { display: flex; gap: 1rem; flex-wrap: wrap; }
+.goals-row > label { flex: 1 1 10rem; color: var(--fg-muted); font-size: 0.9rem; }
+.goals-check { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--fg); }
+.goals-check input { width: auto; margin: 0; }
+.goals-form input[type="number"],
+.goals-form select,
+.goals-form textarea {
+  display: block;
+  width: 100%;
+  margin-top: 0.2rem;
+  padding: 0.4rem 0.55rem;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.goals-form textarea { font-family: var(--mono); font-size: 0.9rem; resize: vertical; }
+.goals-form input:focus,
+.goals-form select:focus,
+.goals-form textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+.goals-boards-edit {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.8rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.goals-boards-edit legend { color: var(--fg-muted); font-size: 0.9rem; padding: 0 0.3rem; }
+.goals-boards-edit label { color: var(--fg-muted); font-size: 0.9rem; }

@@ -311,6 +311,119 @@
       </template>
     </section>
 
+    {# ------- goals / targeting (Direction 2, Phase C) ------- #}
+    {# What the onboarding journey produced: the structured filters + the ATS board
+       slugs discovery sweeps. Read view by default; inline editor writes via the
+       single targeting writer (/api/onboarding/targeting). Edits land in
+       user_config.json and apply on the next worker restart (settings is loaded at
+       startup) — stated honestly in the footer note. #}
+    <section class="card goals-card" x-cloak>
+      <h2>Goals &amp; targeting
+        <span class="status-right">
+          <a class="link-btn" href="/onboarding" x-show="!goalsEditing"
+             title="Open the guided wizard (résumé extract, goal chat, find-companies probe)">Guided setup</a>
+          <button class="secondary-btn" x-show="!goalsEditing"
+                  @click="startGoalsEdit()">Edit</button>
+        </span>
+      </h2>
+
+      {# ---- read view ---- #}
+      <div x-show="!goalsEditing">
+        <dl class="goals-grid">
+          <dt>Roles</dt>
+          <dd>
+            <template x-if="targeting.titles.length === 0"><span class="muted">Any title</span></template>
+            <template x-for="t in targeting.titles" :key="t"><span class="chip" x-text="t"></span></template>
+          </dd>
+          <dt>Locations</dt>
+          <dd>
+            <template x-if="targeting.locations.length === 0"><span class="muted">Anywhere</span></template>
+            <template x-for="l in targeting.locations" :key="l"><span class="chip" x-text="l"></span></template>
+            <span class="chip chip-flag" x-show="targeting.remote_ok">remote ok</span>
+            <span class="chip chip-flag" x-show="targeting.onsite_ok">onsite ok</span>
+          </dd>
+          <dt>Comp floor</dt>
+          <dd>
+            <span x-show="targeting.salary_floor"
+                  x-text="'$' + (targeting.salary_floor || 0).toLocaleString() + '/yr'"></span>
+            <span class="muted" x-show="!targeting.salary_floor">No floor</span>
+          </dd>
+          <dt>Seniority</dt>
+          <dd>
+            <span x-show="targeting.seniority" x-text="targeting.seniority"></span>
+            <span class="muted" x-show="!targeting.seniority">Any</span>
+          </dd>
+          <dt x-show="targeting.preferences.length > 0">Preferences</dt>
+          <dd x-show="targeting.preferences.length > 0">
+            <template x-for="p in targeting.preferences" :key="p"><span class="chip" x-text="p"></span></template>
+          </dd>
+          <dt>Boards
+            <span class="count" x-text="targeting.board_count"></span>
+          </dt>
+          <dd>
+            <span class="muted small" x-show="targeting.using_default_boards">
+              Starter set &mdash; customize with Edit or the guided "find companies" probe.
+            </span>
+            <div class="goals-boards">
+              <template x-for="grp in goalsBoardGroups()" :key="grp.key">
+                <div class="goals-board-grp" x-show="grp.slugs.length > 0">
+                  <span class="goals-board-ats" x-text="grp.key"></span>
+                  <template x-for="s in grp.slugs" :key="s"><span class="chip" x-text="s"></span></template>
+                </div>
+              </template>
+            </div>
+          </dd>
+        </dl>
+        <p class="muted small">Changes apply the next time the worker restarts.</p>
+      </div>
+
+      {# ---- edit view ---- #}
+      <div x-show="goalsEditing" x-cloak>
+        <div class="goals-form">
+          <label>Roles <span class="muted small">(one per line or comma-separated)</span>
+            <textarea rows="2" x-model="goalsDraft.titles"></textarea>
+          </label>
+          <label>Locations <span class="muted small">(one per line or comma-separated)</span>
+            <textarea rows="2" x-model="goalsDraft.locations"></textarea>
+          </label>
+          <div class="goals-row">
+            <label class="goals-check"><input type="checkbox" x-model="goalsDraft.remote_ok"> Remote ok</label>
+            <label class="goals-check"><input type="checkbox" x-model="goalsDraft.onsite_ok"> Onsite ok</label>
+          </div>
+          <div class="goals-row">
+            <label>Comp floor (USD/yr)
+              <input type="number" min="0" step="1000" x-model.number="goalsDraft.salary_floor"
+                     placeholder="none">
+            </label>
+            <label>Seniority
+              <select x-model="goalsDraft.seniority">
+                <option value="">Any</option>
+                <option value="junior">junior</option>
+                <option value="mid">mid</option>
+                <option value="senior">senior</option>
+                <option value="staff">staff</option>
+              </select>
+            </label>
+          </div>
+          <label>Preferences <span class="muted small">(soft signals, one per line or comma)</span>
+            <textarea rows="2" x-model="goalsDraft.preferences"></textarea>
+          </label>
+          <fieldset class="goals-boards-edit">
+            <legend>Company boards <span class="muted small">(one slug per line)</span></legend>
+            <label>Greenhouse <textarea rows="3" x-model="goalsDraft.greenhouse_boards"></textarea></label>
+            <label>Lever <textarea rows="3" x-model="goalsDraft.lever_boards"></textarea></label>
+            <label>Ashby <span class="muted small">(case-sensitive)</span>
+              <textarea rows="3" x-model="goalsDraft.ashby_boards"></textarea></label>
+          </fieldset>
+          <div class="action-row">
+            <button class="primary-btn" :disabled="goalsBusy" @click="saveGoals()">Save</button>
+            <button class="secondary-btn" :disabled="goalsBusy" @click="cancelGoalsEdit()">Cancel</button>
+            <span class="muted small" x-show="goalsNote" x-text="goalsNote"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
     {# ------- application history ------- #}
     <section class="card">
       <h2>Recent applications</h2>

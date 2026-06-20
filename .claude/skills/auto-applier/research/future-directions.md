@@ -496,13 +496,26 @@ exist, an overhaul is guessing at data. Once they do, the dashboard has clear ne
   Phase B + Phase D (funnel analytics) into one slice** — the funnel IS the `analytics.py` surface.
   Detail: `research/web-ui-and-service.md` "Direction 2 (Phase B)". NB the existing
   `RESPONSE`>`REJECTION` rank quirk is surfaced + documented there (not changed).
-- **Phase C — Goals/targeting view** (after #1): show + edit what the journey produced. *Next
-  Direction-2 slice; depends on Direction 1's journey output.*
+- **Phase C — Goals/targeting view. ✅ SHIPPED 2026-06-20.** A dashboard Goals card that SHOWS +
+  EDITS the effective `TargetingConfig` (the structured filters + the ATS board slugs discovery
+  sweeps) — read view by default, inline editor writing through the SINGLE existing targeting
+  writer (`POST /api/onboarding/targeting`, extended to accept + sanitize the three board-list
+  keys; the wizard never sends them so it's unchanged). New `GET /api/targeting` reads the FILE
+  overlaid on defaults (NOT the startup-frozen `settings`) so edits show immediately + the card
+  shows what discovery WILL sweep on the next worker restart (stated honestly). Board sanitize =
+  trim/drop-empty/dedupe-by-exact-value (Ashby is case-sensitive → no case-fold). 8 new tests;
+  full suite **1283 green**. Browser-verified live against a throwaway temp data dir (read renders,
+  edit round-trips with sanitization, 0 console errors). Detail:
+  `research/web-ui-and-service.md` "Direction 2 (Phase C)".
 - ~~**Phase D — Funnel analytics**~~ — folded into Phase B (the Outcomes card's funnel is sourced
   from `analytics.py`).
 
 **Effort:** medium, incremental. **Dependencies:** Phase B needs #4; Phase C needs #1; Phase A is
 independent and arguably the highest-value standalone slice.
+
+> **Direction 2 is now FULLY shipped** (Phase A assisted queue, Phase B outcomes/funnel, Phase C
+> goals view; Phase D folded into B). Only Direction 3 (security-code stand-down, opportunistic)
+> remains across all four forward bets.
 
 ---
 
@@ -513,7 +526,7 @@ independent and arguably the highest-value standalone slice.
 | 4 | Email outcome loop | low-friction connect (IMAP app-password) | yes (IMAP + local LLM) | medium | **1st** |
 | 1 | Onboarding journey | résumé extraction + *not* needing LLM web research (use the dataset) | yes (dataset + probe; LLM bounded) | large | **2nd** |
 | 3 | Security-code stand-down test | each trial = a real application | n/a | tiny | opportunistic |
-| 2 | Dashboard overhaul | not rewriting for its own sake | yes | medium | **last** (Phase A early) |
+| 2 | Dashboard overhaul | not rewriting for its own sake | yes | medium | ✅ DONE (A+B+C shipped) |
 
 Related: [[project_automated_apply_golive]] (the gate finding that motivated #3/#4),
 [[project_personal_search_goal]] (the current discovery+scoring-only reality), [[user_profile]]

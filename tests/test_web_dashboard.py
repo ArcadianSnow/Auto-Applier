@@ -364,6 +364,11 @@ class TestDashboardHtml:
         assert "Outcomes" in r.text
         assert "hasOutcomeData()" in r.text
         assert "outcomeFor(" in r.text
+        # Direction 2 (Phase C): the goals/targeting card + its editor hooks.
+        assert "Goals &amp; targeting" in r.text
+        assert "startGoalsEdit()" in r.text
+        assert "saveGoals()" in r.text
+        assert "goalsBoardGroups()" in r.text
         # Alpine.js + our JS are linked.
         assert "alpinejs" in r.text
         assert "app.js" in r.text
@@ -446,3 +451,119 @@ class TestOutcomesEndpoint:
         assert body["funnel"]["offered"] == 1
         assert body["funnel"]["interviewed"] == 1
         assert body["funnel"]["responded"] == 1
+
+
+# --------------------------------------------------------------- /api/targeting (Direction 2, Phase C)
+
+class TestTargetingEndpoint:
+    """The goals/targeting view's read side + the (extended) single writer.
+
+    Read: effective TargetingConfig (saved overlaid on defaults), so the dashboard Goals card
+    shows what discovery actually sweeps. Write: /api/onboarding/targeting now also accepts +
+    sanitizes the board-slug lists (the wizard never sends them, so its contract is unchanged)."""
+
+    def test_defaults_when_nothing_saved(self, web_state: WebState):
+        with _make_client(web_state) as client:
+            body = client.get("/api/targeting").json()
+        # No user_config written → pure TargetingConfig() defaults surface.
+        assert body["titles"] == []
+        assert body["remote_ok"] is True and body["onsite_ok"] is True
+        assert body["salary_floor"] is None
+        assert body["using_default_boards"] is True
+        # Starter board set is present and counted.
+        assert "anthropic" in body["boards"]["greenhouse"]
+        assert body["board_count"] == (
+            len(body["boards"]["greenhouse"])
+            + len(body["boards"]["lever"])
+            + len(body["boards"]["ashby"])
+        )
+
+    def test_reflects_saved_overrides(self, web_state: WebState):
+        from auto_applier.web.onboarding import save_user_config
+
+        save_user_config(web_state.settings.data_dir, {
+            "targeting": {
+                "titles": ["Data Engineer", "Platform Engineer"],
+                "salary_floor": 150000,
+                "seniority": "senior",
+                "greenhouse_boards": ["acme"],
+                "lever_boards": [],
+                "ashby_boards": ["Linear"],
+            }
+        })
+        with _make_client(web_state) as client:
+            body = client.get("/api/targeting").json()
+        assert body["titles"] == ["Data Engineer", "Platform Engineer"]
+        assert body["salary_floor"] == 150000
+        assert body["seniority"] == "senior"
+        assert body["boards"] == {"greenhouse": ["acme"], "lever": [], "ashby": ["Linear"]}
+        assert body["board_count"] == 2
+        assert body["using_default_boards"] is False
+
+    def test_malformed_saved_config_falls_back_to_defaults(self, web_state: WebState):
+        from auto_applier.web.onboarding import save_user_config
+
+        # salary_floor as a non-int is invalid for TargetingConfig → endpoint must not 500.
+        save_user_config(web_state.settings.data_dir, {
+            "targeting": {"salary_floor": "lots", "titles": ["X"]}
+        })
+        with _make_client(web_state) as client:
+            r = client.get("/api/targeting")
+        assert r.status_code == 200
+        # Pure defaults on fallback (the bad block is discarded wholesale).
+        assert r.json()["titles"] == []
+        assert r.json()["using_default_boards"] is True
+
+    def test_write_sanitizes_and_persists_boards(self, web_state: WebState):
+        with _make_client(web_state) as client:
+            r = client.post("/api/onboarding/targeting", json={
+                "titles": ["Data Engineer"],
+                # whitespace, an empty entry, and a duplicate → trimmed/dropped/deduped.
+                "greenhouse_boards": [" acme ", "", "acme", "beta"],
+                "ashby_boards": ["Linear", "Notion"],
+            })
+            assert r.status_code == 200
+            body = client.get("/api/targeting").json()
+        assert body["titles"] == ["Data Engineer"]
+        assert body["boards"]["greenhouse"] == ["acme", "beta"]
+        assert body["boards"]["ashby"] == ["Linear", "Notion"]
+
+    def test_ashby_dedupe_preserves_case(self, web_state: WebState):
+        # Ashby slugs are case-sensitive; "linear" and "Linear" are NOT the same board.
+        with _make_client(web_state) as client:
+            client.post("/api/onboarding/targeting",
+                        json={"ashby_boards": ["Linear", "linear", "Linear"]})
+            body = client.get("/api/targeting").json()
+        assert body["boards"]["ashby"] == ["Linear", "linear"]
+
+    def test_structured_only_write_leaves_boards_untouched(self, web_state: WebState):
+        from auto_applier.web.onboarding import save_user_config
+
+        save_user_config(web_state.settings.data_dir,
+                         {"targeting": {"greenhouse_boards": ["kept"]}})
+        with _make_client(web_state) as client:
+            # A payload with no board keys must not blank the saved boards.
+            client.post("/api/onboarding/targeting", json={"titles": ["Eng"]})
+            body = client.get("/api/targeting").json()
+        assert body["titles"] == ["Eng"]
+        assert body["boards"]["greenhouse"] == ["kept"]
+
+    def test_board_only_write_leaves_structured_untouched(self, web_state: WebState):
+        from auto_applier.web.onboarding import save_user_config
+
+        save_user_config(web_state.settings.data_dir,
+                         {"targeting": {"titles": ["Eng"], "salary_floor": 120000}})
+        with _make_client(web_state) as client:
+            client.post("/api/onboarding/targeting", json={"lever_boards": ["acme"]})
+            body = client.get("/api/targeting").json()
+        assert body["titles"] == ["Eng"]
+        assert body["salary_floor"] == 120000
+        assert body["boards"]["lever"] == ["acme"]
+
+    def test_non_list_board_value_clears_not_corrupts(self, web_state: WebState):
+        with _make_client(web_state) as client:
+            r = client.post("/api/onboarding/targeting",
+                            json={"greenhouse_boards": "acme"})  # string, not a list
+            assert r.status_code == 200
+            body = client.get("/api/targeting").json()
+        assert body["boards"]["greenhouse"] == []
