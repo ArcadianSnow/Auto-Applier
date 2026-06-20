@@ -32,7 +32,7 @@ echo (Close this window to stop the server.)
 echo.
 
 REM `av3 launch` does the rest: spawns serve, port-probes, opens browser.
-"%PYTHON%" -m av3.cli.main launch
+"%PYTHON%" -m auto_applier.cli.main launch
 
 REM Pause so the user sees any error output before the window closes.
 echo.

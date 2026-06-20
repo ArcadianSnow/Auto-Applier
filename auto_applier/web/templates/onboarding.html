@@ -252,9 +252,50 @@
       </div>
     </section>
 
+    {# -------- email (optional, Direction 4 Phase D) -------- #}
+    <section class="card onboarding-step" x-show="step === 'email'">
+      <h2>Step 7 &mdash; Connect email (optional)</h2>
+      <p class="muted">
+        Let the bot read your inbox <strong>locally</strong> to track what happens after you apply
+        (replies, rejections, interviews) on the dashboard. Read-only, on-device, nothing leaves
+        your machine. Skip it now and connect later from the dashboard any time.
+      </p>
+      <p class="muted small" x-show="status && status.inbox && status.inbox.enabled">
+        Currently connected: <strong x-text="status?.inbox?.user"></strong>
+        (<span x-text="status?.inbox?.host"></span>). Re-enter the App Password to update it.
+      </p>
+      <ol class="muted small" style="margin: 0.3rem 0 0.6rem 1.2rem;">
+        <li>Gmail: turn on 2-Step Verification, then create an App Password at
+          <code>myaccount.google.com/apppasswords</code> (name it "AutoApplier").</li>
+        <li>Paste the 16-character password below. It's stored only in your local
+          <code>.env</code>, never in plain config.</li>
+      </ol>
+      <label>Email address
+        <input type="email" x-model="inbox.user" placeholder="you@gmail.com" autocomplete="off">
+      </label>
+      <label>App Password
+        <input type="password" x-model="inbox.password"
+               placeholder="16-char app password" autocomplete="off">
+      </label>
+      <div class="goals-row">
+        <label>IMAP host
+          <input type="text" x-model="inbox.host" placeholder="imap.gmail.com">
+        </label>
+        <label>Port
+          <input type="number" x-model.number="inbox.port" min="1" placeholder="993">
+        </label>
+      </div>
+      <div class="action-row">
+        <button class="primary-btn" :disabled="inboxBusy" @click="saveInbox()"
+                x-text="inboxBusy ? 'Verifying...' : 'Connect &amp; continue'"></button>
+        <button class="secondary-btn" :disabled="inboxBusy" @click="skipInbox()">Skip for now</button>
+        <span class="muted small" x-show="inboxNote" x-text="inboxNote"></span>
+      </div>
+    </section>
+
     {# -------- web prefs -------- #}
     <section class="card onboarding-step" x-show="step === 'web-prefs'">
-      <h2>Step 7 &mdash; Control preferences</h2>
+      <h2>Step 8 &mdash; Control preferences</h2>
       <p class="muted">
         The F6 hotkey instantly hands the keyboard back to you (the bot
         pauses); idle-detect pauses while you're actively using the
@@ -281,15 +322,22 @@
     <section class="card onboarding-step assisted-panel" x-show="step === 'done'">
       <h2>You're set!</h2>
       <p>
-        The dashboard will now start the scheduler the next time you run
-        <code>av3 serve</code>. Anything you want to change later lives
-        in <code>data/user_config.json</code> + <code>data/profile/master.json</code>.
+        The worker starts automatically &mdash; it begins finding and scoring jobs
+        as soon as you open the dashboard. New matches show up there; nothing else
+        to run.
+      </p>
+      <p class="muted small">
+        Want to change your goals later? Edit them right on the dashboard
+        (<strong>Goals &amp; targeting</strong>), or click any step above to revisit it.
+        Optional: connect your email on the dashboard to track replies, and drop a
+        <code>resume.pdf</code> in your data folder for the apply step.
       </p>
       <p class="action-row">
         <a class="primary-btn" href="/">Go to dashboard</a>
       </p>
     </section>
 
+    <p class="validation-note" x-show="validationError" x-text="validationError"></p>
     <p class="muted small" x-show="lastSavedNote" x-text="lastSavedNote"></p>
   </div>
 {% endblock %}

@@ -11,6 +11,7 @@ their subsystems (Phases 1–5).
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
 from enum import Enum
@@ -105,16 +106,35 @@ def check_llm(settings: Settings) -> CheckResult:
             "llm", Status.WARN,
             f"Ollama unreachable at {settings.llm.ollama_host} ({type(exc).__name__}) "
             "- scoring/optimize will fail-closed (no cloud fallback)",
-            fix="start Ollama (`ollama serve`) and pull the configured model",
+            fix="install + start Ollama, then run `av3 setup-llm` to pull the models",
         )
+
+    def _missing(model: str) -> bool:
+        # Match on the full tag OR the base name (so "gemma4:e4b" is satisfied by
+        # a pulled "gemma4:e4b" and "nomic-embed-text" by "nomic-embed-text:latest").
+        return (model not in models
+                and model.split(":")[0] not in {m.split(":")[0] for m in models})
+
     want = settings.llm.ollama_model
-    if want not in models and want.split(":")[0] not in {m.split(":")[0] for m in models}:
+    if _missing(want):
         return CheckResult(
             "llm", Status.WARN,
-            f"Ollama up but model '{want}' not pulled (have: {models or 'none'})",
-            fix=f"run `ollama pull {want}`",
+            f"Ollama up but completion model '{want}' not pulled (have: {models or 'none'})",
+            fix=f"run `av3 setup-llm` (or `ollama pull {want}`)",
         )
-    return CheckResult("llm", Status.PASS, f"Ollama up, model '{want}' available")
+    # The embed model is just as load-bearing — the answer resolver + the embedding
+    # pre-filter need it. A missing embed model used to pass green here and only
+    # surfaced as a runtime EmbeddingError; check it explicitly.
+    embed = settings.llm.embed_model
+    if _missing(embed):
+        return CheckResult(
+            "llm", Status.WARN,
+            f"Ollama up, completion model '{want}' present, but embed model "
+            f"'{embed}' not pulled (have: {models or 'none'})",
+            fix=f"run `av3 setup-llm` (or `ollama pull {embed}`)",
+        )
+    return CheckResult("llm", Status.PASS,
+                       f"Ollama up, models '{want}' + '{embed}' available")
 
 
 def check_backups(settings: Settings) -> CheckResult:
@@ -197,6 +217,37 @@ def check_relay_reachable(settings: Settings) -> CheckResult:
     return CheckResult("relay", Status.PASS, f"relay healthy at {health}")
 
 
+def check_inbox(settings: Settings) -> CheckResult:
+    """Email outcome loop config (Direction 4). Optional + opt-in, so OFF is PASS.
+
+    When enabled, verify the config is COMPLETE (user + ``AV3_IMAP_PASSWORD`` present). A live
+    IMAP login is deliberately NOT done here — it's slow and repeated doctor runs could trip a
+    provider's lockout; the dashboard "connect email" step verifies credentials live at setup
+    time. WARN (never FAIL): email is additive; a missing password just means no outcome
+    ingestion, the rest of the pipeline is unaffected.
+    """
+    inbox = settings.inbox
+    if not inbox.enabled:
+        return CheckResult("inbox", Status.PASS, "email outcome tracking off (optional)")
+    if not inbox.user:
+        return CheckResult(
+            "inbox", Status.WARN,
+            "inbox enabled but no user (email address) set",
+            fix="connect email on the dashboard, or set inbox.user in user_config.json",
+        )
+    if not os.environ.get("AV3_IMAP_PASSWORD"):
+        return CheckResult(
+            "inbox", Status.WARN,
+            f"inbox enabled for {inbox.user} but AV3_IMAP_PASSWORD is not set",
+            fix="connect email on the dashboard, or put a Gmail App Password in .env "
+                "as AV3_IMAP_PASSWORD",
+        )
+    return CheckResult(
+        "inbox", Status.PASS,
+        f"email outcome tracking on for {inbox.user} ({inbox.host})",
+    )
+
+
 def run_doctor() -> list[CheckResult]:
     """Run all checks; return results in display order."""
     results: list[CheckResult] = []
@@ -207,6 +258,7 @@ def run_doctor() -> list[CheckResult]:
     results.append(check_app_db(settings))
     results.append(check_events_db(settings))
     results.append(check_llm(settings))
+    results.append(check_inbox(settings))
     results.append(check_backups(settings))
     results.append(check_relay_reachable(settings))
     return results

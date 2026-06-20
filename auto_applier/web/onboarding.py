@@ -246,6 +246,9 @@ class OnboardingStatus:
             "targeting": self.config.get("targeting") or {},
             "telemetry": self.config.get("telemetry") or {},
             "web": self.config.get("web") or {},
+            # inbox is non-secret config only (host/port/user/enabled). The app
+            # password lives in .env and is NEVER echoed back here.
+            "inbox": self.config.get("inbox") or {},
         }
 
 

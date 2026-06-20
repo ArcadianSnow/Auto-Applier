@@ -180,3 +180,40 @@ def test_install_browser_all_fail_exits_1(monkeypatch):
     res = _run("install-browser")
     assert res.exit_code == 1
     assert "could not install Chromium" in res.output
+
+
+# ----------------------------------------------------------------- setup-llm CLI
+
+def test_setup_llm_pulls_both_models(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/ollama")
+    calls = []
+    def fake_run(args, **kw):
+        calls.append(args)
+        return _Proc(0)
+    monkeypatch.setattr("subprocess.run", fake_run)
+    res = _run("setup-llm")
+    assert res.exit_code == 0, res.output
+    pulled = [a[2] for a in calls]  # [ollama, pull, <model>]
+    assert "gemma4:e4b" in pulled
+    assert "nomic-embed-text" in pulled
+    assert "All required models are installed" in res.output
+
+
+def test_setup_llm_missing_ollama_exits_1_with_manual_commands(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    # subprocess.run must NOT be called when ollama is absent.
+    monkeypatch.setattr("subprocess.run",
+                        lambda *a, **k: pytest.fail("should not pull without ollama"))
+    res = _run("setup-llm")
+    assert res.exit_code == 1
+    assert "Ollama is not installed" in res.output
+    assert "ollama pull gemma4:e4b" in res.output
+    assert "ollama pull nomic-embed-text" in res.output
+
+
+def test_setup_llm_pull_failure_exits_1(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/ollama")
+    monkeypatch.setattr("subprocess.run", lambda args, **kw: _Proc(1, "boom"))
+    res = _run("setup-llm")
+    assert res.exit_code == 1
+    assert "could not pull" in res.output

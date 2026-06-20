@@ -313,7 +313,14 @@ gated on the user's Gmail app-password. What landed:
   `$AV3_IMAP_PASSWORD` set). **Full suite 1253 passed / 13 deselected.** Live-CLI smoked: `--status`,
   the setup nudge, the offline `--eml` path, and the security-code nudge all behave.
 - **✅ LIVE-VERIFIED + configured in production 2026-06-19** (user supplied the Gmail App Password). See
-  the live-findings block below. **Phase D** (wizard + dashboard outcomes surface) still depends on Direction 2.
+  the live-findings block below.
+- **✅ Phase D COMPLETE 2026-06-20 — Direction 4 fully shipped.** The dashboard outcomes/funnel surface
+  landed as Direction 2 Phase B (2026-06-20); the **guided connect-email wizard** landed in the MVP
+  hardening pass (`research/mvp-readiness.md` #3): onboarding **step 7 "Connect email (optional)"** +
+  `POST /api/onboarding/inbox` (LIVE IMAP verify → secret to `<data_dir>/.env`, non-secret to
+  user_config; `load_settings` also loads the data-dir `.env`) + `doctor.check_inbox` + `.env.example`
+  key. So a non-technical user can now turn the email loop on without hand-editing files — the last
+  Phase D gap. Detail: `research/mvp-readiness.md` + `research/web-ui-and-service.md` "MVP first-run hardening".
 
 ## ✅ Phase C LIVE FINDINGS (2026-06-19 — real mailbox, jar8510@gmail.com, 29 APPLIED jobs)
 

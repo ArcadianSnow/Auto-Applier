@@ -1297,3 +1297,52 @@ Evolves the Alpine app (no framework rewrite, per future-directions Direction 2)
   conversational + probe flows. Porting the probe into the card is a later nicety if wanted.
 - **No goal-elicitation chat on the dashboard** — that's the wizard's job (Direction 1 Phase B);
   the card surfaces/edits the structured result.
+
+---
+
+## MVP first-run hardening — onboarding validation, email-connect step, done copy (2026-06-20)
+
+Part of the four-area MVP pass (full analysis: `research/mvp-readiness.md`). The web-layer pieces:
+
+### Guided email connect — wizard step 7 + `POST /api/onboarding/inbox` (Direction 4 Phase D)
+
+The last Phase D gap: turning the inbox loop on used to mean hand-editing `user_config.json` +
+`.env`. Now there's a guided **"Connect email (optional)"** wizard step.
+
+| Surface | Purpose |
+|---|---|
+| `POST /api/onboarding/inbox` | `{user, password, host?, port?}` → **live IMAP login verify FIRST** (`_verify_imap`, returns a user-facing error string), then on success splits storage: secret `AV3_IMAP_PASSWORD` → `<data_dir>/.env` (via dotenv `set_key` + `os.environ` for the live process), non-secret `{enabled,user,host,port}` → `user_config.json`. 400 (saves nothing) on a bad/typo'd password. |
+| `settings.load_settings` | Now ALSO `load_dotenv(<data_dir>/.env, override=False)` so a packaged install (no project checkout) picks up the wizard-written secret; an existing project-root `.env` (the owner's setup) stays authoritative. |
+| `onboarding_status.to_dict` | Echoes `inbox` (non-secret only — the password is NEVER returned). |
+| `doctor.check_inbox` | OFF→PASS (opt-in); enabled-but-incomplete (no user / no `AV3_IMAP_PASSWORD`)→WARN; complete→PASS. No live login in doctor (slow + lockout risk). |
+| wizard step 7 (`onboarding.html`/`.js`) | Email + App Password + host/port form, App-Password instructions, "Connect & continue" (verifies) / "Skip for now". Optional — not in the `is_complete` gate (`STEPS`/`_firstIncomplete`/`isDone` treat `email` like `web-prefs`: `null` gate). |
+
+**Load-bearing decisions:**
+- **Verify-before-save.** The #1 app-password failure is a typo; a live login at setup time surfaces
+  it in the wizard instead of as a silent no-op at the next scheduler cycle. The endpoint is
+  testable because `_verify_imap` uses `imaplib.IMAP4_SSL`, which tests monkeypatch (a `_FakeIMAP`
+  that simulates connect/login outcomes) — no network in CI.
+- **Secret split holds.** Password ONLY to `.env` (the project's .env-only rule); a test asserts the
+  password never appears in `user_config.json` nor in `/api/onboarding/state`.
+- **Takes effect on next worker restart** — the inbox gather stage is built at scheduler start
+  (`creds_from_settings` is read then); stated honestly via the endpoint's `note`.
+- **⚠️ Alpine gotcha (re-hit):** `x-text` is evaluated even when its wrapping `x-show` is false. The
+  "currently connected" line read `status.inbox.user` while `status` was still `null` on first paint
+  → console TypeError. Fix: optional-chain the inner bindings (`status?.inbox?.user`). Rule: any
+  `x-text` that dereferences an async-loaded object must use `?.`, regardless of an outer `x-show`.
+
+### Inline required-field validation + rewritten "done" screen
+
+- `saveContact`/`saveWorkHistory`/`saveSkills` now validate before POST (name+email, ≥1 role with
+  company+title, ≥1 skill) and set a red `.validation-note` instead of silently "saving" empties
+  that leave the gate false + the banner stuck. Cleared on `goto()`.
+- The done screen no longer says "edit `data/user_config.json` to change things" (a dead end for a
+  non-technical user). New copy: the worker starts automatically, edit goals on the dashboard's
+  Goals card, optionally connect email + drop a `resume.pdf`.
+- Browser-verified: empty contact save shows the message + stays on the step; email step renders +
+  Skip advances; done copy correct; 0 console errors.
+
+### NOT here (CLI, see mvp-readiness.md)
+The scheduler `resume.pdf`-gate relax (`run_cmd`/`serve_cmd` → fact-bank-only), `av3 setup-llm`, the
+`doctor.check_llm` embed-model check, and the `av3-launcher.{cmd,sh}` stale-module-path fix are CLI/
+distribution changes documented in `research/observability-and-distribution.md` + `mvp-readiness.md`.

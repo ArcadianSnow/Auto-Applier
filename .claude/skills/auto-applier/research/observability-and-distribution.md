@@ -620,3 +620,42 @@ v3.0-core (phases 0–5) is complete; Phase 6 = v3.1.
   (apply worker still reads a single `artifacts/resume.pdf` fallback — Phase 3
   carry-over); live Greenhouse auto-pass-rate gated submit (Phase 1 decision
   gate). Neither is Phase 5 scope.
+
+---
+
+## MVP first-run setup — `av3 setup-llm`, doctor model/inbox checks, launcher fix (2026-06-20)
+
+First-run friction pass for the non-technical-friend MVP (full analysis + the onboarding/email web
+pieces: `research/mvp-readiness.md`). The CLI/distribution changes:
+
+- **`av3 setup-llm`** (`cli/main.py`, the `install-browser` analog) — pulls the two configured Ollama
+  models (`settings.llm.ollama_model` = `gemma4:e4b`, `embed_model` = `nomic-embed-text`) with live
+  `ollama pull` progress; if the `ollama` binary isn't on PATH, prints the download link + the exact
+  copy-paste `ollama pull` commands and exits 1. Idempotent. Tests: `test_update.py` (×3, subprocess +
+  `shutil.which` monkeypatched).
+- **`doctor.check_llm` now checks BOTH models.** The embed model was never checked → a missing
+  `nomic-embed-text` reported green and only failed at runtime (EmbeddingError in the resolver /
+  pre-filter). Now: unreachable→WARN, completion missing→WARN, **embed missing→WARN** (new), both
+  present→PASS; every fix hint points to `av3 setup-llm`. Tests: `test_doctor_llm.py` (×5). Tag-tolerant
+  (`nomic-embed-text` satisfied by `nomic-embed-text:latest`).
+- **`doctor.check_inbox`** (new, registered in `run_doctor`) — email loop config completeness;
+  OFF→PASS (opt-in), enabled-but-missing-user/password→WARN, complete→PASS. No live IMAP login.
+  Tests: `test_doctor_inbox.py` (×4).
+- **Scheduler `resume.pdf` gate relaxed** (`run_cmd:~2227`, `serve_cmd:~2494`) → **fact-bank-only**. A
+  missing `resume.pdf` is a non-blocking note, not a hard exit/block: discovery+scoring+optimize never
+  read it (it's only the apply-stage upload fallback, and optimize generates a per-job résumé; the
+  apply driver fails closed if neither exists). This killed the "finished onboarding but the scheduler
+  stays Stopped" cliff (the wizard never writes `resume.pdf`). `av3 apply` (the explicit per-stage
+  command) still requires it — that's a deliberate apply invocation. Test:
+  `test_cli_run.py::test_preflight_missing_resume_warns_but_runs`.
+- **🐛 Launcher fix (real MVP blocker):** `scripts/av3-launcher.{cmd,sh}` invoked `python -m
+  av3.cli.main launch` — the `av3` package was renamed to `auto_applier` at the v2 cutover, so the
+  double-click launcher would `ModuleNotFoundError` immediately. Fixed both to `auto_applier.cli.main`.
+  (`launch_cmd` itself already spawns the correct `auto_applier.cli.main serve` — only the wrappers
+  were stale.) Also fixed the stale "Cloud fallback (Gemini) will be used" string in
+  `installer/post_install.ps1` (Gemini was removed; now points to `av3 setup-llm`).
+- **`scripts/register-discovery-task.ps1`** (new) — registers a daily `av3 discover` Windows
+  Scheduled Task (gather-only, never applies) for users who don't keep `av3 run` alive 24/7;
+  `-Time`/`-DataDir`/`-TaskName`/`-Unregister`. README "Keeping the job list fresh" documents the
+  cadence (discovery daily is plenty; re-`seed-boards` quarterly / on targeting change; the bundled
+  company CSV needs no refresh — dead slugs are dropped on probe).

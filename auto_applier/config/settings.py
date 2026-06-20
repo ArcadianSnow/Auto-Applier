@@ -435,11 +435,19 @@ def load_settings(data_dir: Path | str | None = None) -> Settings:
     ``user_config.json`` if present → overlay secrets from ``.env``. Validation
     (weight sums, ordered thresholds) raises on bad config — caught by ``doctor``.
     """
-    load_dotenv()  # populate os.environ from .env if present (no-op if absent)
+    load_dotenv()  # populate os.environ from a project-root/CWD .env (no-op if absent)
 
     if data_dir is None:
         data_dir = os.environ.get("AV3_DATA_DIR", str(DEFAULT_DATA_DIR))
     data_dir = Path(data_dir)
+
+    # Also load a .env inside the data dir — this is where the onboarding "connect
+    # email" step writes AV3_IMAP_PASSWORD, so a packaged/non-dev install (no project
+    # checkout) still picks up the secret. override=False so an existing project-root
+    # .env (the dev/owner setup) stays authoritative.
+    data_env = data_dir / ".env"
+    if data_env.exists():
+        load_dotenv(data_env, override=False)
 
     cfg_path = data_dir / "user_config.json"
     file_data: dict = {}

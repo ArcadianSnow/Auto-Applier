@@ -136,7 +136,7 @@ if ($DoOllama -eq '1') {
                 Start-Process $url
             }
             else {
-                Write-Log "User declined Ollama download. Cloud fallback (Gemini) will be used."
+                Write-Log "User declined Ollama download. Install it later from $url, then run 'av3 setup-llm' to pull the required models (scoring/generation fail-closed without them — there is no cloud fallback)."
             }
         }
         catch {

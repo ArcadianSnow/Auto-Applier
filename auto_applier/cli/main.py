@@ -2226,13 +2226,16 @@ def run_cmd(max_cycles: int | None, quiet_hours: str | None,
 
     resume_path = settings.artifacts_dir / "resume.pdf"
     if not resume_path.exists():
-        click.echo(f"  x FAIL resume: missing at {resume_path}", err=True)
+        # Non-blocking: the apply worker uses per-job optimize-generated résumés and
+        # only falls back to this global resume.pdf when none exists. Discovery /
+        # scoring / optimize don't read it, so a missing resume.pdf must NOT stop the
+        # loop (that was the old "finished onboarding but nothing runs" cliff).
         click.echo(
-            "        fix -> drop a resume.pdf into the artifacts dir until the "
-            "apply worker reads per-job optimize-generated paths.",
+            f"  ! resume.pdf not found at {resume_path} — discovery + scoring run "
+            "normally; the apply stage will use per-job generated résumés (drop a "
+            "resume.pdf there for an upload fallback).",
             err=True,
         )
-        sys.exit(2)
 
     bank = FactBank.load(fact_bank_path)
     conn = init_app_db(settings.app_db_path)
@@ -2487,12 +2490,20 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
     )
 
     # Decide whether to spin up the scheduler. Pre-onboarding the fact bank
-    # and resume don't exist yet; rather than failing the whole command, drop
-    # into read-only diagnostics mode so the user can still reach the (future
-    # 5/M) onboarding wizard from the dashboard.
+    # doesn't exist yet; rather than failing the whole command, drop into
+    # read-only diagnostics mode so the user can still reach the onboarding
+    # wizard from the dashboard.
+    #
+    # The FACT BANK is the only hard prerequisite — discovery, scoring, and
+    # optimize all derive from it. resume.pdf is NOT required to start: it's
+    # only an upload fallback for the apply stage, and the optimize worker
+    # generates a per-job résumé anyway. Gating the whole scheduler on it
+    # produced the "I finished onboarding but nothing runs" cliff (the wizard
+    # never writes resume.pdf). So discovery+scoring (the MVP) run on the fact
+    # bank alone; a missing resume.pdf is a non-blocking note below.
     fact_bank_path = settings.data_dir / "profile" / "master.json"
     resume_path = settings.artifacts_dir / "resume.pdf"
-    scheduler_ready = fact_bank_path.exists() and resume_path.exists()
+    scheduler_ready = fact_bank_path.exists()
 
     service: SchedulerService | None = None
     # Holder for the BrowserSession the scheduler factory starts. Defined at
@@ -2508,20 +2519,26 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
     elif not scheduler_ready:
         # ASCII-only echo to match doctor/status output style.
         click.echo(
-            "! scheduler not started: missing prerequisites — run onboarding "
-            "first.",
+            "! scheduler not started: fact bank missing — finish onboarding first.",
             err=True,
         )
-        if not fact_bank_path.exists():
-            click.echo(f"        fact bank: missing at {fact_bank_path}", err=True)
-        if not resume_path.exists():
-            click.echo(f"        resume:    missing at {resume_path}", err=True)
+        click.echo(f"        fact bank: missing at {fact_bank_path}", err=True)
         click.echo(
             "        web UI still available at "
-            f"http://{effective_host}:{effective_port} (read-only).",
+            f"http://{effective_host}:{effective_port} (open it and run the wizard).",
             err=True,
         )
     else:
+        # Non-blocking note: the apply stage falls back to the global resume.pdf
+        # only when no per-job optimize-generated PDF exists. Discovery+scoring
+        # don't touch it, so this is informational, not a blocker.
+        if not resume_path.exists():
+            click.echo(
+                f"! resume.pdf not found at {resume_path} — discovery + scoring run "
+                "normally; the apply stage will use per-job generated résumés (drop a "
+                "resume.pdf there for an upload fallback).",
+                err=True,
+            )
         # Build the factory the SchedulerService will call with our pause
         # predicate. Same construction as ``av3 run`` (see run_cmd) — keep in
         # sync if knobs change.
@@ -3330,6 +3347,61 @@ def install_browser_cmd(backend: str) -> None:
         err=True,
     )
     sys.exit(1)
+
+
+@cli.command("setup-llm")
+def setup_llm_cmd() -> None:
+    """Install the local Ollama models the pipeline needs (first-run step).
+
+    The pipeline runs fully local on Ollama (spec §6 — zero cost, zero egress). It needs two
+    models: the completion model (scoring / résumé + cover generation / extraction) and the
+    embedding model (the discovery pre-filter + the answer resolver). This is the Ollama analog
+    of `av3 install-browser`: it pulls both models the config names so a non-technical user
+    doesn't have to know the tags. Idempotent — re-running just re-verifies the pulls.
+
+    If Ollama itself isn't installed, this prints the download link + the exact `ollama pull`
+    commands to run by hand. Run `av3 doctor` afterwards to confirm.
+    """
+    import shutil
+    import subprocess
+
+    settings = load_settings()
+    models = [settings.llm.ollama_model, settings.llm.embed_model]
+
+    ollama = shutil.which("ollama")
+    if ollama is None:
+        click.echo("  x Ollama is not installed (the `ollama` command was not found).",
+                   err=True)
+        click.echo("        fix -> install Ollama from https://ollama.com/download, "
+                   "then re-run `av3 setup-llm`.", err=True)
+        click.echo("        (or, once it's installed, pull the models by hand:)", err=True)
+        for m in models:
+            click.echo(f"            ollama pull {m}", err=True)
+        sys.exit(1)
+
+    failed: list[str] = []
+    for m in models:
+        click.echo(f"Pulling {m} (first run can take a while — these are multi-GB models) ...")
+        try:
+            # No capture_output: let `ollama pull` stream its own progress bars.
+            proc = subprocess.run([ollama, "pull", m])
+        except OSError as exc:
+            click.echo(f"  ! could not run `ollama pull {m}`: {exc}", err=True)
+            failed.append(m)
+            continue
+        if proc.returncode != 0:
+            click.echo(f"  ! `ollama pull {m}` failed (rc={proc.returncode}).", err=True)
+            failed.append(m)
+        else:
+            click.echo(f"  + {m} ready.")
+
+    if failed:
+        click.echo(f"  x FAIL could not pull: {', '.join(failed)}", err=True)
+        click.echo("        fix -> make sure Ollama is running (`ollama serve`) and you have "
+                   "disk space, then re-run `av3 setup-llm`.", err=True)
+        sys.exit(1)
+
+    click.echo("+ All required models are installed. Run `av3 doctor` to verify.")
 
 
 @cli.command("backup")

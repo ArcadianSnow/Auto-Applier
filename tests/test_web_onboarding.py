@@ -637,3 +637,112 @@ class TestFullFlowCompletes:
             r = client.get("/api/onboarding/state")
         body = r.json()
         assert body["is_complete"] is True
+
+
+# --------------------------------------------------------------- connect-email endpoint (Direction 4 Phase D)
+
+class _FakeIMAP:
+    """Stand-in for imaplib.IMAP4_SSL. Configure class attrs per test to simulate
+    connect/login outcomes. Records login calls so tests can assert credentials flowed."""
+
+    raise_on_connect = False
+    raise_on_login = False     # raises imaplib.IMAP4.error (auth failure)
+    last_login: tuple | None = None
+
+    def __init__(self, host, port, timeout=None):
+        if type(self).raise_on_connect:
+            raise OSError("connection refused")
+        self.host = host
+
+    def login(self, user, password):
+        import imaplib
+        if type(self).raise_on_login:
+            raise imaplib.IMAP4.error("auth failed")
+        type(self).last_login = (user, password)
+
+    def logout(self):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _reset_fake_imap(monkeypatch):
+    _FakeIMAP.raise_on_connect = False
+    _FakeIMAP.raise_on_login = False
+    _FakeIMAP.last_login = None
+    # Register the env key with monkeypatch so any write by the endpoint is reverted on teardown.
+    monkeypatch.setenv("AV3_IMAP_PASSWORD", "")
+    monkeypatch.delenv("AV3_IMAP_PASSWORD", raising=False)
+    yield
+
+
+class TestInboxConnect:
+    """The guided email-setup endpoint: verify creds live, then split secret (.env) from
+    non-secret config (user_config.json). The wizard's alternative to hand-editing files."""
+
+    def test_connect_persists_config_and_secret(self, web_state: WebState, monkeypatch):
+        monkeypatch.setattr("imaplib.IMAP4_SSL", _FakeIMAP)
+        with _make_client(web_state) as client:
+            r = client.post("/api/onboarding/inbox", json={
+                "user": "me@gmail.com", "password": "abcd efgh ijkl mnop",
+            })
+        assert r.status_code == 200, r.text
+        assert r.json()["ok"] is True
+        # Non-secret config → user_config.json
+        cfg = load_user_config(web_state.settings.data_dir)
+        assert cfg["inbox"]["enabled"] is True
+        assert cfg["inbox"]["user"] == "me@gmail.com"
+        assert cfg["inbox"]["host"] == "imap.gmail.com"
+        # Secret → .env in the data dir, NEVER user_config.json
+        assert "abcd" not in json.dumps(cfg)
+        env_text = (web_state.settings.data_dir / ".env").read_text(encoding="utf-8")
+        assert "AV3_IMAP_PASSWORD" in env_text
+        assert "abcd efgh ijkl mnop" in env_text
+        # Current process can see it immediately
+        import os as _os
+        assert _os.environ["AV3_IMAP_PASSWORD"] == "abcd efgh ijkl mnop"
+        # The live verify actually ran with the given creds
+        assert _FakeIMAP.last_login == ("me@gmail.com", "abcd efgh ijkl mnop")
+
+    def test_auth_failure_400_and_saves_nothing(self, web_state: WebState, monkeypatch):
+        _FakeIMAP.raise_on_login = True
+        monkeypatch.setattr("imaplib.IMAP4_SSL", _FakeIMAP)
+        with _make_client(web_state) as client:
+            r = client.post("/api/onboarding/inbox", json={
+                "user": "me@gmail.com", "password": "wrong",
+            })
+        assert r.status_code == 400
+        assert "authentication failed" in r.json()["detail"].lower()
+        # Nothing persisted on a failed verify.
+        cfg = load_user_config(web_state.settings.data_dir)
+        assert "inbox" not in cfg
+        assert not (web_state.settings.data_dir / ".env").exists()
+
+    def test_connect_failure_400(self, web_state: WebState, monkeypatch):
+        _FakeIMAP.raise_on_connect = True
+        monkeypatch.setattr("imaplib.IMAP4_SSL", _FakeIMAP)
+        with _make_client(web_state) as client:
+            r = client.post("/api/onboarding/inbox", json={
+                "user": "me@gmail.com", "password": "x", "host": "imap.bad.example",
+            })
+        assert r.status_code == 400
+        assert "could not connect" in r.json()["detail"].lower()
+
+    def test_missing_fields_400_without_imap_call(self, web_state: WebState, monkeypatch):
+        def _boom(*a, **k):
+            raise AssertionError("must not attempt IMAP without both fields")
+        monkeypatch.setattr("imaplib.IMAP4_SSL", _boom)
+        with _make_client(web_state) as client:
+            r = client.post("/api/onboarding/inbox", json={"user": "me@gmail.com"})
+        assert r.status_code == 400
+
+    def test_state_echoes_inbox_without_password(self, web_state: WebState, monkeypatch):
+        monkeypatch.setattr("imaplib.IMAP4_SSL", _FakeIMAP)
+        with _make_client(web_state) as client:
+            client.post("/api/onboarding/inbox", json={
+                "user": "me@gmail.com", "password": "secret-pw-here",
+            })
+            body = client.get("/api/onboarding/state").json()
+        assert body["inbox"]["enabled"] is True
+        assert body["inbox"]["user"] == "me@gmail.com"
+        # The status snapshot must never carry the password.
+        assert "secret-pw-here" not in json.dumps(body)

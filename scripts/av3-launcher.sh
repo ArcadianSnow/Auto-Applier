@@ -20,4 +20,4 @@ echo "Starting Auto Applier v3 ..."
 echo "(Ctrl-C to stop the server.)"
 echo
 
-exec "$PYTHON" -m av3.cli.main launch
+exec "$PYTHON" -m auto_applier.cli.main launch

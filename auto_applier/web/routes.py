@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -1327,6 +1328,84 @@ async def onboarding_web_prefs(request: Request) -> dict:
     cfg["web"] = web_cfg
     save_user_config(web_state.settings.data_dir, cfg)
     return onboarding_status(web_state.settings.data_dir).to_dict()
+
+
+def _verify_imap(host: str, port: int, user: str, password: str) -> str | None:
+    """Best-effort IMAP login check. Returns ``None`` on success, else a short, user-facing
+    error string. Most app-password setups fail on a typo'd password, so verifying before we
+    save is the single highest-value friction-reducer for a non-technical user."""
+    import imaplib
+
+    try:
+        conn = imaplib.IMAP4_SSL(host, port, timeout=10)
+    except Exception as exc:  # noqa: BLE001 — DNS/refused/TLS all surface the same way to the user
+        return f"could not connect to {host}:{port} ({type(exc).__name__})"
+    try:
+        conn.login(user, password)
+    except imaplib.IMAP4.error:
+        try:
+            conn.logout()
+        except Exception:  # noqa: BLE001
+            pass
+        return "authentication failed — double-check the email and the 16-char App Password"
+    except Exception as exc:  # noqa: BLE001
+        return f"sign-in error ({type(exc).__name__})"
+    try:
+        conn.logout()
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+@api_router.post("/onboarding/inbox")
+async def onboarding_inbox(request: Request) -> dict:
+    """Connect the user's mailbox for the email outcome loop (Direction 4 Phase D).
+
+    The guided alternative to hand-editing ``user_config.json`` + ``.env``. Payload:
+    ``{"user": "you@gmail.com", "password": "<16-char app password>", "host"?, "port"?}``.
+    Verifies the credentials with a live IMAP login FIRST (so a typo'd password fails here,
+    not silently at the next scheduler cycle); only on success does it persist. The non-secret
+    fields (enabled/user/host/port) go to ``user_config.json``; the **password goes ONLY to
+    ``<data_dir>/.env`` as ``AV3_IMAP_PASSWORD``** — never to the JSON (the project's .env-only
+    secrets rule). Takes effect for the inbox gather stage on the next worker restart.
+    """
+    from dotenv import set_key
+
+    payload = await _read_json_dict(request)
+    user = str(payload.get("user") or "").strip()
+    password = str(payload.get("password") or "").strip()
+    host = str(payload.get("host") or "imap.gmail.com").strip() or "imap.gmail.com"
+    try:
+        port = int(payload.get("port") or 993)
+    except (TypeError, ValueError):
+        port = 993
+    if not user or not password:
+        raise HTTPException(status_code=400,
+                            detail="email address and App Password are both required")
+
+    err = _verify_imap(host, port, user, password)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+
+    web_state = _get_state(request)
+    data_dir = web_state.settings.data_dir
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    # Secret → .env (never user_config.json). set_key creates the file if absent + quotes safely.
+    env_path = data_dir / ".env"
+    env_path.touch(exist_ok=True)
+    set_key(str(env_path), "AV3_IMAP_PASSWORD", password)
+    os.environ["AV3_IMAP_PASSWORD"] = password  # available to this process immediately
+
+    # Non-secret config → user_config.json (merge so we don't clobber other inbox knobs).
+    cfg = load_user_config(data_dir)
+    inbox = cfg.get("inbox", {}) or {}
+    inbox.update(enabled=True, user=user, host=host, port=port)
+    cfg["inbox"] = inbox
+    save_user_config(data_dir, cfg)
+
+    return {"ok": True, "user": user, "host": host, "port": port,
+            "note": "Email connected. Outcome tracking starts on the next worker restart."}
 
 
 async def _read_json_dict(request: Request) -> dict:

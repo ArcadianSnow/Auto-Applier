@@ -472,6 +472,7 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .onboarding-step input[type="text"],
 .onboarding-step input[type="email"],
 .onboarding-step input[type="tel"],
+.onboarding-step input[type="password"],
 .onboarding-step input[type="number"],
 .onboarding-step select,
 .onboarding-step textarea {
@@ -833,3 +834,11 @@ pre.copilot-answer {
 }
 .goals-boards-edit legend { color: var(--fg-muted); font-size: 0.9rem; padding: 0 0.3rem; }
 .goals-boards-edit label { color: var(--fg-muted); font-size: 0.9rem; }
+
+/* ---- onboarding inline validation message ---- */
+.validation-note {
+  color: var(--err);
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0.4rem 0;
+}

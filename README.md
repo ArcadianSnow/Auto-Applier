@@ -66,11 +66,15 @@ Requires **Python 3.11+**.
 ```bash
 pip install -e ".[v3]"        # core deps (FastAPI, pydantic, httpx, …)
 av3 install-browser           # fetch Chromium on first run (real Chrome via channel is the primary path)
+av3 setup-llm                 # pull the local Ollama models (gemma4:e4b + nomic-embed-text)
 av3 init-db                   # create the data dir + app.db + events.db
-av3 doctor                    # preflight: config, DBs, LLM reachable, backups — exits non-zero on FAIL
+av3 doctor                    # preflight: config, DBs, LLM + models, backups — exits non-zero on FAIL
 ```
 
-You'll also want [Ollama](https://ollama.com) running locally for scoring/generation.
+The pipeline runs fully local on **[Ollama](https://ollama.com)** (free, offline — no cloud). Install
+Ollama first, then `av3 setup-llm` pulls the two models it needs: **`gemma4:e4b`** (scoring / résumé +
+cover generation / extraction) and **`nomic-embed-text`** (the discovery pre-filter + answer resolver).
+`av3 doctor` verifies both are present.
 
 ## Run
 
@@ -88,6 +92,20 @@ av3 errors [--since 2h] [--stage X]      av3 stats [--since 7d]      av3 status
 
 `--dry-run` is the default everywhere an apply could fire; `--no-dry-run` is the gated path that
 submits real applications.
+
+### Keeping the job list fresh
+
+- **Job discovery.** While `av3 run` / `av3 launch` is running, the scheduler sweeps your company
+  boards every cycle automatically — nothing to schedule. If you'd rather not keep a process
+  running, register a daily sweep (gather only, never applies):
+  ```powershell
+  pwsh ./scripts/register-discovery-task.ps1 -Time 08:00     # remove with -Unregister
+  ```
+  Once or twice a day is plenty — ATS boards post a few times daily at most.
+- **Company list.** The bundled company directory (~10k boards) backs the onboarding "find
+  companies" probe. It doesn't expire — dead boards are dropped automatically when probed. Re-run
+  `av3 seed-boards` (or the wizard's button) whenever you broaden your targeting or want more
+  coverage; a quarterly refresh is more than enough.
 
 ## Manual mode (discovery + scoring only, you apply)
 

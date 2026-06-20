@@ -15,6 +15,7 @@ const STEPS = [
   { key: 'work-auth',    title: 'Work auth' },
   { key: 'targeting',    title: 'Targeting' },
   { key: 'telemetry',    title: 'Telemetry' },
+  { key: 'email',        title: 'Email (optional)' },
   { key: 'web-prefs',    title: 'Control prefs' },
   { key: 'done',         title: 'Done' },
 ];
@@ -25,6 +26,7 @@ function onboarding() {
     step: 'contact',
     busy: false,
     lastSavedNote: '',
+    validationError: '',   // inline "required field missing" message for the current step
     status: null,
     extracting: false,
     extractNote: '',
@@ -46,6 +48,9 @@ function onboarding() {
     targetingTitlesText: '',
     targetingLocationsText: '',
     telemetry: { enabled: false, handle: '', relay_url: '' },
+    inbox: { user: '', password: '', host: 'imap.gmail.com', port: 993 },
+    inboxBusy: false,
+    inboxNote: '',
     webPrefs: {
       hotkey_enabled: true, hotkey: 'F6',
       idle_detect_enabled: false, idle_threshold_s: 60,
@@ -109,6 +114,15 @@ function onboarding() {
       this.targetingTitlesText = (t.titles || []).join('\n');
       this.targetingLocationsText = (t.locations || []).join('\n');
       this.telemetry = { ...this.telemetry, ...(state.telemetry || {}) };
+      // Inbox: hydrate the non-secret fields only — the password is never echoed back,
+      // so the field stays blank (re-entering it is how you change/confirm it).
+      const ib = state.inbox || {};
+      this.inbox = {
+        user: ib.user || '',
+        password: '',
+        host: ib.host || 'imap.gmail.com',
+        port: ib.port || 993,
+      };
       this.webPrefs = { ...this.webPrefs, ...(state.web || {}) };
     },
 
@@ -122,6 +136,7 @@ function onboarding() {
         'work-auth':    'has_work_auth',
         'targeting':    'has_targeting',
         'telemetry':    'has_telemetry_decision',
+        'email':        null,   // optional — no completion gate
         'web-prefs':    null,   // optional — no completion gate
       };
       for (const s of STEPS) {
@@ -134,6 +149,7 @@ function onboarding() {
 
     goto(key) {
       this.step = key;
+      this.validationError = '';  // a stale "required field" message shouldn't follow the user
       // Re-hydrate from the (latest) status snapshot so the step's
       // fields reflect what was last saved, not what was in the
       // textbox before navigation.
@@ -141,6 +157,8 @@ function onboarding() {
     },
 
     isDone(key) {
+      // Email is optional + not in the completion gate; reflect whether it's connected.
+      if (key === 'email') return !!this.status?.inbox?.enabled;
       const flagMap = {
         'contact':      'has_contact',
         'work-history': 'has_work_history',
@@ -278,35 +296,55 @@ function onboarding() {
       }
     },
 
+    /** Set the inline validation message + bail; returns false so callers can `if (!_invalid(...))`. */
+    _invalid(msg) {
+      this.validationError = msg;
+      this.lastSavedNote = '';
+      return false;
+    },
+
     async saveContact() {
+      this.validationError = '';
+      // Required fields: without name + email the has_contact gate stays false and the
+      // dashboard banner persists — surface that NOW instead of silently "saving" empties.
+      if (!(this.contact.name || '').trim() || !(this.contact.email || '').trim()) {
+        return this._invalid('Name and email are required.');
+      }
       if (await this._post('/api/onboarding/contact', this.contact)) {
         this.step = 'work-history';
       }
     },
 
     async saveWorkHistory() {
-      const payload = {
-        work_history: this.workHistory.map(w => ({
-          company: w.company,
-          title: w.title,
-          start: w.start,
-          end: w.end,
-          bullets: (w.bulletsText || '')
-            .split('\n')
-            .map(line => line.trim())
-            .filter(Boolean),
-        })),
-      };
-      if (await this._post('/api/onboarding/work-history', payload)) {
+      this.validationError = '';
+      const roles = this.workHistory.map(w => ({
+        company: w.company,
+        title: w.title,
+        start: w.start,
+        end: w.end,
+        bullets: (w.bulletsText || '')
+          .split('\n')
+          .map(line => line.trim())
+          .filter(Boolean),
+      }));
+      // At least one role with a company + title — an empty list leaves has_work_history false.
+      if (!roles.some(r => (r.company || '').trim() && (r.title || '').trim())) {
+        return this._invalid('Add at least one role with a company and title.');
+      }
+      if (await this._post('/api/onboarding/work-history', { work_history: roles })) {
         this.step = 'skills';
       }
     },
 
     async saveSkills() {
+      this.validationError = '';
       const skills = (this.skillsText || '')
         .split(/[,\n]/)
         .map(s => s.trim())
         .filter(Boolean);
+      if (skills.length === 0) {
+        return this._invalid('Add at least one skill.');
+      }
       if (await this._post('/api/onboarding/skills', { skills })) {
         this.step = 'work-auth';
       }
@@ -346,6 +384,54 @@ function onboarding() {
       if (await this._post('/api/onboarding/targeting', payload)) {
         this.step = 'telemetry';
       }
+    },
+
+    // ---- connect email (Direction 4 Phase D) — optional outcome tracking ----------------------
+    // Writes inbox config to user_config.json + the App Password to <data_dir>/.env. The endpoint
+    // verifies the credentials with a live IMAP login first, so a typo'd password fails HERE.
+
+    async saveInbox() {
+      this.inboxNote = '';
+      const user = (this.inbox.user || '').trim();
+      const password = (this.inbox.password || '').trim();
+      if (!user || !password) {
+        this.inboxNote = 'Enter your email address and a 16-char App Password (or Skip).';
+        return;
+      }
+      this.inboxBusy = true;
+      try {
+        const r = await fetch('/api/onboarding/inbox', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user, password,
+            host: this.inbox.host || 'imap.gmail.com',
+            port: Number(this.inbox.port) || 993,
+          }),
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this.inboxNote = `Could not connect: ${body.detail || r.statusText}`;
+          return;
+        }
+        // Refresh status so the step shows the connected checkmark, then advance.
+        this.inbox.password = '';   // never keep the secret in component state
+        try {
+          const sr = await fetch('/api/onboarding/state');
+          if (sr.ok) this.status = await sr.json();
+        } catch (e) { /* best-effort */ }
+        this.inboxNote = body.note || 'Email connected.';
+        this.step = 'web-prefs';
+      } catch (e) {
+        this.inboxNote = `Error: ${e}`;
+      } finally {
+        this.inboxBusy = false;
+      }
+    },
+
+    skipInbox() {
+      this.inboxNote = '';
+      this.step = 'web-prefs';
     },
 
     // ---- goal-elicitation chat (Direction 1, Phase B) ---------------------------------------

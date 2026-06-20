@@ -126,10 +126,15 @@ def test_preflight_missing_fact_bank_exits_2(tmp_path, monkeypatch):
     assert "fix ->" in result.output
 
 
-def test_preflight_missing_resume_exits_2(tmp_path, monkeypatch):
-    result = _invoke(tmp_path, monkeypatch, [], seed_resume=False)
-    assert result.exit_code == 2
-    assert "resume" in result.output
+def test_preflight_missing_resume_warns_but_runs(tmp_path, monkeypatch):
+    # A missing resume.pdf must NOT block the loop — discovery + scoring + optimize
+    # don't read it (it's only an apply-stage upload fallback). The run proceeds
+    # (scheduler stubbed → exits 0) and surfaces a non-blocking note.
+    result = _invoke(tmp_path, monkeypatch, ["--max-cycles", "1"], seed_resume=False)
+    assert result.exit_code == 0, result.output
+    assert "resume.pdf not found" in result.output
+    # The scheduler was actually constructed (not short-circuited).
+    assert _RecordingScheduler.last_init is not None
 
 
 # --------------------------------------------------------------- summary line
