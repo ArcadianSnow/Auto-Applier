@@ -382,13 +382,17 @@ Gusto ×2, Monzo ×2). Read-only throughout; no production writes (dry-run analy
     responses, but the older ~19 days weren't scanned, and the cursor (`last_uid`) has now advanced past
     the newest UID, so a re-run fetches only NEWER mail (incremental) — a full backfill needs raising the
     cap or resetting the cursor. Ongoing scheduler runs are correctly primed (idempotent via message_id).
-  - **Duplicate (job, rejection) rows = HARMLESS.** The 7 prior hand-marks (note='') + the 7 email-sourced
-    rejections (note='email:…') give 7 jobs two rejection rows each. VERIFIED no analytics impact:
-    `compute_conversion_report` → `_furthest_per_job` collapses per `job_id` to the furthest outcome, so
-    same-kind duplicates can't inflate any metric. Left as-is (append-only audit trail). NB the worker
-    dedupes per *message_id* (won't re-record the same email) but not per (job, kind) across sources — a
-    confirmation + later a rejection are SUPPOSED to both record (ladder progression), so per-(job,kind)
-    dedup would need care; deferred as a possible tidiness pass, not a correctness bug.
+  - **Duplicate (job, rejection) rows — TIDIED 2026-06-19 (user asked).** The 7 prior hand-marks (note='')
+    + the 7 email-sourced rejections (note='email:…') gave 7 jobs two rejection rows each. They were
+    HARMLESS (VERIFIED: `compute_conversion_report` → `_furthest_per_job` collapses per `job_id` to the
+    furthest outcome, so same-kind duplicates can't inflate any metric) but redundant. Cleanup: `av3 backup`
+    first (snapshot app.20260620T022938Z.db), then deleted ONLY the 7 email-sourced rejection rows whose job
+    ALSO had a non-email rejection (guarded to exactly 7 — abort otherwise), KEEPING the user's hand-marks.
+    Vanta + Dataiku "Data Engineer" (email rejections with no hand-mark) and all 9 responses preserved.
+    Post: total outcomes 25→18, (job,kind) duplicates=0; analytics provably unchanged. NB the worker dedupes
+    per *message_id* (won't re-record the same email — and the deleted emails stay marked processed, so they
+    won't reappear) but not per (job, kind) across sources; a confirmation + later a rejection are SUPPOSED
+    to both record (ladder progression), so a per-(job,kind) worker guard would need care — not pursued.
 
 ## The plan (phased — original sketch; see the GROUNDED correction above for the authoritative cut)
 - **Phase A — Read-only IMAP ingestion.** `telemetry`-style local module: connect (host/port/user/
