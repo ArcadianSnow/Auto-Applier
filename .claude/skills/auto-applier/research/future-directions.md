@@ -344,7 +344,7 @@ Gusto ×2, Monzo ×2). Read-only throughout; no production writes (dry-run analy
   before comparing. **Result: 7/7 hand-marked rejections now detected, each to the exact job.**
 - **✅ RESOLVED — classifier precision pass (INTERVIEW / OFFER / RESPONSE false positives).** Measured the
   *real* FP rate by classifying 544 live messages (30 days) read-only (diagnostic `%TEMP%\
-  inbox_interview_fp_check.py`, reusable: `python … <days> <KIND>`). Findings + fixes (commit `<this>`):
+  inbox_interview_fp_check.py`, reusable: `python … <days> <KIND>`). Findings + fixes (commit `4140225`):
   - **INTERVIEW: 13 FPs / 0 TPs.** 12 fired on bare **"next steps"** (Snowflake/Gusto/Vanta/dbt/Render
     "thanks for applying" confirmations + a Dept-of-Ed + an Experis newsletter), 1 on **"schedule a"**
     (Venmo marketing). A co-occurrence guard ("next steps" + the word "interview") STILL leaked, because
@@ -368,8 +368,27 @@ Gusto ×2, Monzo ×2). Read-only throughout; no production writes (dry-run analy
     **UNMATCHED → review** (no false outcome) — acceptable, left as-is.
 - **Net:** rejection auto-detection complete on real data (7/7, exact-job) AND the classifier is now
   precision-cleared for INTERVIEW/OFFER/RESPONSE on 30 days of live mail. Honesty/safety held throughout
-  (no APPLIED writes, no auto-submit, ambiguous→review). **The deterministic classifier is now safe for
-  the first real `av3 inbox` recording scan** (the remaining gate is user go-ahead).
+  (no APPLIED writes, no auto-submit, ambiguous→review).
+
+- **✅ FIRST REAL RECORDING SCAN DONE 2026-06-19** (`av3 inbox --since-days 30` against the production
+  `JobSearch/av3data`, user-authorized; outcomes WRITTEN). `fetched=200 outcomes=18 review=20 ignored=162
+  sec-code=3 errors=0` (~6.5 min). **All 18 outcomes correct** (verified read-only: every one a
+  deterministic `company+role` match to an APPLIED job) — 9 rejections (incl. all 7 prior hand-marked +
+  Vanta, each to the exact role; the multi-role matcher distinguished Dataiku I/II and both Monzo roles)
+  + 9 "application received" responses. Zero marketing/utility/interview FPs on real mail — the precision
+  pass held. Honesty invariants intact (only `OutcomeRepo.add`, never `set_state(APPLIED)`).
+  - **⚠️ `max_messages=200` cap** — a 30-day window has ~544 msgs, so the (newest-first cold-start) fetch
+    covered only the newest ~200 (~11 days). It still captured all 7 hand-marked rejections + the recent
+    responses, but the older ~19 days weren't scanned, and the cursor (`last_uid`) has now advanced past
+    the newest UID, so a re-run fetches only NEWER mail (incremental) — a full backfill needs raising the
+    cap or resetting the cursor. Ongoing scheduler runs are correctly primed (idempotent via message_id).
+  - **Duplicate (job, rejection) rows = HARMLESS.** The 7 prior hand-marks (note='') + the 7 email-sourced
+    rejections (note='email:…') give 7 jobs two rejection rows each. VERIFIED no analytics impact:
+    `compute_conversion_report` → `_furthest_per_job` collapses per `job_id` to the furthest outcome, so
+    same-kind duplicates can't inflate any metric. Left as-is (append-only audit trail). NB the worker
+    dedupes per *message_id* (won't re-record the same email) but not per (job, kind) across sources — a
+    confirmation + later a rejection are SUPPOSED to both record (ladder progression), so per-(job,kind)
+    dedup would need care; deferred as a possible tidiness pass, not a correctness bug.
 
 ## The plan (phased — original sketch; see the GROUNDED correction above for the authoritative cut)
 - **Phase A — Read-only IMAP ingestion.** `telemetry`-style local module: connect (host/port/user/
