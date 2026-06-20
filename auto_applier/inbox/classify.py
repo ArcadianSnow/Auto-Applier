@@ -58,26 +58,52 @@ _REJECTION = (
     "we have decided not to",
     "pursue other candidates",
 )
+# Only UNAMBIGUOUS interview invitations — an explicit invite or a concrete scheduling
+# action aimed at the candidate. Deliberately NOT here: soft cues like "next steps",
+# "schedule a", "your availability". VERIFIED on 30 days of live mail — bare "next steps"
+# alone produced 12 false INTERVIEW positives (Snowflake/Gusto/Vanta/dbt/Render "thanks
+# for applying" confirmations + a newsletter), "schedule a" 1 more (Venmo marketing), and
+# ZERO true positives; even gating "next steps" on the word "interview" still leaked,
+# because confirmations DESCRIBE their interview process. So a genuinely ambiguous
+# interview email (a soft cue with no explicit invite) deliberately falls through to the
+# LLM fallback rather than being guessed deterministically.
 _INTERVIEW = (
     "invitation to interview",
     "invite you to interview",
-    "schedule a",
-    "phone screen",
+    "invite you to an interview",
+    "like to interview you",
+    "interview invitation",
+    "schedule an interview",
+    "schedule a call",
+    "schedule a phone",
     "set up a call",
+    "set up a time to",
+    "set up an interview",
+    "phone screen",
+    "phone interview",
+    "video interview",
     "calendly",
-    "your availability",
-    "available to chat",
-    "next steps",
     "would love to chat",
+    "available to chat",
+    "hop on a call",
+    "jump on a call",
 )
+# Only unambiguous EMPLOYMENT-offer phrases. Deliberately NOT here: "your offer" /
+# "job offer" — VERIFIED to produce 5 marketing false positives over 30 days of live
+# mail ("your offer" fired on Ally Invest / Capital One promos), zero true positives.
+# OFFER is the highest-severity outcome, so a real offer must NAME the act.
 _OFFER = (
     "offer of employment",
-    "pleased to offer",
-    "we'd like to extend",
-    "we would like to extend",
-    "job offer",
-    "your offer",
+    "pleased to offer you",
+    "we are pleased to offer",
+    "delighted to offer you",
+    "happy to offer you",
     "extend an offer",
+    "extend a formal offer",
+    "your offer letter",
+    "offer you the position",
+    "offer you the role",
+    "offer you a position",
 )
 _RESPONSE = (
     "thank you for applying",
@@ -86,7 +112,9 @@ _RESPONSE = (
     "application received",
     "thanks for your interest in",
     "thank you for your interest in",
-    "has been received",
+    # "application has been received" not bare "has been received" — the latter fired on
+    # utility/payment mail ("your payment has been received": Atmos Energy, Paymentus).
+    "application has been received",
     "received your application",
     "thanks for applying",
 )
@@ -110,11 +138,6 @@ _NEWSLETTER = (
     "new opportunities for you",
     "jobs matching your",
 )
-
-# Interview phrases that should NOT fire on their own without an interview cue
-# (handled by ordering below — interview before response so "next steps … interview"
-# wins, but we still require an explicit interview token).
-
 
 def _haystack(email: FetchedEmail) -> str:
     # Normalize the curly apostrophe (U+2019, what most mail clients emit) to a straight

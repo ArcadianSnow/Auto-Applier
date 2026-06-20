@@ -82,6 +82,85 @@ class TestDeterministic:
             cls = classify_deterministic(parse_message(raw))
             assert cls is not None and cls.kind is OutcomeKind.REJECTION
 
+    def test_thanks_for_applying_next_steps_is_response_not_interview(self):
+        """Live FP regression: a "thanks for applying … next steps" confirmation
+        (Snowflake / Gusto / Vanta / dbt / Render shape) must classify RESPONSE, not
+        INTERVIEW. Bare "next steps" is not an interview invite — verified to produce
+        12/13 false INTERVIEW positives over 30 days of live mail, zero true positives.
+        """
+        raw = (
+            "From: Snowflake Hiring Team <careers@snowflake.com>\r\n"
+            "Subject: Thank you for applying to Snowflake | Senior Data Platform Architect\r\n"
+            "Message-ID: <s@snowflake.com>\r\n"
+            'Content-Type: text/plain; charset="utf-8"\r\n'
+            "\r\n"
+            "Hi Joseph, Thank you for your interest in pursuing a career with Snowflake. "
+            "We have received your application. If it meets the requirements, a recruiter "
+            "will reach out about next steps.\r\n"
+        ).encode("utf-8")
+        cls = classify_deterministic(parse_message(raw))
+        assert cls is not None and cls.kind is OutcomeKind.RESPONSE
+
+    def test_confirmation_describing_interview_process_is_not_interview(self):
+        """The dbt-Labs leak: a confirmation that DESCRIBES its interview process (so the
+        body contains the word "interview") plus "next steps" must still be RESPONSE — the
+        word "interview" in prose is not an invitation."""
+        raw = (
+            "From: dbt Labs <no-reply@us.greenhouse-mail.io>\r\n"
+            "Subject: Thank you for applying to dbt Labs, Joseph!\r\n"
+            "Message-ID: <d@dbt.com>\r\n"
+            'Content-Type: text/plain; charset="utf-8"\r\n'
+            "\r\n"
+            "Thank you for applying for the Senior Solutions Engineer role. Our interview "
+            "process has three stages; we will be in touch about next steps.\r\n"
+        ).encode("utf-8")
+        cls = classify_deterministic(parse_message(raw))
+        assert cls is not None and cls.kind is OutcomeKind.RESPONSE
+
+    def test_marketing_your_offer_is_not_offer(self):
+        """Live FP regression: financial marketing ("your offer" promos — Ally Invest,
+        Capital One) must NOT classify OFFER. A real offer names the act. Verified: bare
+        "your offer" produced 5 false OFFER positives over 30 days, zero true positives.
+        OFFER is the highest-severity outcome, so this guard matters most."""
+        raw = (
+            "From: Ally Invest <offers@ally-invest.com>\r\n"
+            "Subject: A 3.5% Ally Invest IRA contribution match could be yours\r\n"
+            "Message-ID: <a@ally.com>\r\n"
+            'Content-Type: text/plain; charset="utf-8"\r\n'
+            "\r\n"
+            "Don't miss out — your offer is waiting. Open an Ally Invest IRA today.\r\n"
+        ).encode("utf-8")
+        cls = classify_deterministic(parse_message(raw))
+        assert cls is None or cls.kind is not OutcomeKind.OFFER
+
+    def test_payment_received_is_not_response(self):
+        """Live FP regression: a utility "payment has been received" (Atmos Energy,
+        Paymentus) must NOT classify RESPONSE — only an APPLICATION receipt does."""
+        raw = (
+            "From: Atmos Energy <no-reply@atmosenergy.com>\r\n"
+            "Subject: Your Atmos Energy payment has been received\r\n"
+            "Message-ID: <p@atmos.com>\r\n"
+            'Content-Type: text/plain; charset="utf-8"\r\n'
+            "\r\n"
+            "Your payment has been received. Thank you for being a customer.\r\n"
+        ).encode("utf-8")
+        cls = classify_deterministic(parse_message(raw))
+        assert cls is None or cls.kind is not OutcomeKind.RESPONSE
+
+    def test_passive_application_received_is_response(self):
+        """The passive form "your application has been received" must still be RESPONSE
+        after the "has been received" → "application has been received" tightening."""
+        raw = (
+            "From: Acme Careers <no-reply@acme.com>\r\n"
+            "Subject: Application update\r\n"
+            "Message-ID: <ar@acme.com>\r\n"
+            'Content-Type: text/plain; charset="utf-8"\r\n'
+            "\r\n"
+            "Your application has been received and is under review.\r\n"
+        ).encode("utf-8")
+        cls = classify_deterministic(parse_message(raw))
+        assert cls is not None and cls.kind is OutcomeKind.RESPONSE
+
     def test_newsletter_ignored(self):
         cls = classify_deterministic(_email("newsletter.eml"))
         assert cls is not None              # confident enough to not hit the LLM

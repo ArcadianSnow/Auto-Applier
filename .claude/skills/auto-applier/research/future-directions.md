@@ -342,16 +342,34 @@ Gusto ×2, Monzo ×2). Read-only throughout; no production writes (dry-run analy
   haystack + add the contraction phrase. (2) **company match** — the email's domain hint "gusto" never
   equalled the ATS legal name "Gusto, Inc."; fix: strip trailing legal suffixes (inc/llc/ltd/corp/co/…)
   before comparing. **Result: 7/7 hand-marked rejections now detected, each to the exact job.**
-- **⚠️ OPEN (safe) — classifier false positives.** A Quora "BREAKING…" digest and CapitalOne CreditWise
-  mails tripped a `_REJECTION` keyword, and some "Thanks for applying" *confirmations* (Gusto, Snowflake)
-  classified as INTERVIEW via the over-eager `_INTERVIEW` phrase "next steps". The rejection-FPs are
-  UNMATCHED → route to review (no false outcome). The **interview-FP is the more important one**: a
-  confirmation mislabeled INTERVIEW that DOES match an applied job would record a wrong INTERVIEW outcome.
-  Next classifier-precision pass: tighten `_INTERVIEW` ("next steps"/"schedule a" need an interview cue),
-  and split RESPONSE vs INTERVIEW more carefully. (Not yet done — flagged for the next pass.)
-- **Net:** rejection auto-detection is complete on real data (7/7, exact-job), honesty/safety held
-  throughout (no APPLIED writes, no auto-submit, ambiguous→review). Highest-value next improvement =
-  the classifier-precision pass above (interview-FP), before a real recording scan banks outcomes.
+- **✅ RESOLVED — classifier precision pass (INTERVIEW / OFFER / RESPONSE false positives).** Measured the
+  *real* FP rate by classifying 544 live messages (30 days) read-only (diagnostic `%TEMP%\
+  inbox_interview_fp_check.py`, reusable: `python … <days> <KIND>`). Findings + fixes (commit `<this>`):
+  - **INTERVIEW: 13 FPs / 0 TPs.** 12 fired on bare **"next steps"** (Snowflake/Gusto/Vanta/dbt/Render
+    "thanks for applying" confirmations + a Dept-of-Ed + an Experis newsletter), 1 on **"schedule a"**
+    (Venmo marketing). A co-occurrence guard ("next steps" + the word "interview") STILL leaked, because
+    confirmations **describe their interview process**. ⇒ **Strong-only fix:** `_INTERVIEW` keeps only
+    explicit invitations / concrete scheduling actions (invite to interview, phone screen, calendly,
+    schedule a call, …); soft cues are dropped entirely. A genuinely ambiguous interview email (soft cue,
+    no explicit invite) deliberately falls through to the **LLM fallback** rather than a deterministic
+    guess. Result: deterministic-INTERVIEW **13 → 0**; the real invite (`interview.eml`) still classifies.
+  - **OFFER: 5 FPs / 0 TPs** — all `"your offer"` financial marketing (Ally Invest IRA, Capital One/BJ's).
+    OFFER is the highest-severity outcome and **Capital One is a plausible real employer** (latent
+    collision). ⇒ dropped `"your offer"` / `"job offer"`; `_OFFER` now requires the named act
+    ("offer of employment", "pleased to offer you", "extend an offer", "your offer letter", …). **5 → 0**;
+    `offer.eml` still classifies.
+  - **RESPONSE: 2 FPs** — utility "payment **has been received**" (Atmos Energy, Paymentus). ⇒ bare
+    `"has been received"` → `"application has been received"` (keeps the passive-form receipt, drops
+    payment mail). **31 → 29** (all 29 genuine confirmations).
+  - Net deterministic breakdown over 30d after the pass: RESPONSE 29, REJECTION 14, OFFER 0, INTERVIEW 0,
+    none/LLM 501. The 7 removed FPs route to the LLM/none (review), never a wrong outcome. Five regression
+    tests encode the real shapes in `tests/test_inbox_classify.py`.
+  - **Rejection-FPs** (Quora digest / CreditWise tripping a `_REJECTION` keyword) remain but are
+    **UNMATCHED → review** (no false outcome) — acceptable, left as-is.
+- **Net:** rejection auto-detection complete on real data (7/7, exact-job) AND the classifier is now
+  precision-cleared for INTERVIEW/OFFER/RESPONSE on 30 days of live mail. Honesty/safety held throughout
+  (no APPLIED writes, no auto-submit, ambiguous→review). **The deterministic classifier is now safe for
+  the first real `av3 inbox` recording scan** (the remaining gate is user go-ahead).
 
 ## The plan (phased — original sketch; see the GROUNDED correction above for the authoritative cut)
 - **Phase A — Read-only IMAP ingestion.** `telemetry`-style local module: connect (host/port/user/
