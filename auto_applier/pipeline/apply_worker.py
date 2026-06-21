@@ -110,8 +110,8 @@ from auto_applier.resume.generate import (
     archive_resume,
     existing_job_cover,
     existing_job_resume,
-    generated_cover_letter_path,
-    generated_resume_path,
+    resolve_generated_cover_letter,
+    resolve_generated_resume,
 )
 from auto_applier.resume.salary import (
     build_market_source,
@@ -682,15 +682,19 @@ class ApplyWorker:
         if manual_resume is not None:
             resume_used = str(manual_resume)
         else:
-            pdf = generated_resume_path(self._settings, job.id)
-            resume_used = str(pdf) if pdf.exists() else self._resume_path
+            # ``resolve_generated_resume`` tolerates the on-disk name-scheme drift (legacy
+            # bare ``{job_id}.pdf`` vs the readable name, + a name-change between optimize-write
+            # and apply-read) — a plain ``generated_resume_path(...).exists()`` would orphan any
+            # pre-rename artifact and fall through to the (often-absent) global résumé.
+            pdf = resolve_generated_resume(self._settings, job.id)
+            resume_used = str(pdf) if pdf is not None else self._resume_path
 
         manual_cover = existing_job_cover(self._settings, job.id)
         if manual_cover is not None:
             cover_used = str(manual_cover)
         else:
-            optimize_cover = generated_cover_letter_path(self._settings, job.id)
-            cover_used = str(optimize_cover) if optimize_cover.exists() else ""
+            optimize_cover = resolve_generated_cover_letter(self._settings, job.id)
+            cover_used = str(optimize_cover) if optimize_cover is not None else ""
         return resume_used, cover_used
 
     # -- recovery + telemetry ----------------------------------------------

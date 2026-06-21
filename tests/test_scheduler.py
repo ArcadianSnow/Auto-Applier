@@ -85,6 +85,7 @@ def _build_scheduler(
     cycle_interval_s: float = 1.0,
     quiet_hours_raw: str | None = None,
     pause_predicate=None,
+    apply_gate=None,
     now_value: datetime | None = None,
 ):
     """Helper to wire a Scheduler with fakes + injected sleep/now."""
@@ -99,6 +100,7 @@ def _build_scheduler(
         cycle_interval_s=cycle_interval_s,
         quiet_hours=parse_quiet_hours(quiet_hours_raw),
         pause_predicate=pause_predicate,
+        apply_gate=apply_gate,
         sleep=sleep,
         now=now,
     )
@@ -160,6 +162,41 @@ def test_outside_quiet_hours_apply_runs_normally():
     assert "apply" in call_log
     assert a.call_count == 1
     assert summary.cycles[0].apply_skipped_quiet_hours is False
+
+
+# --------------------------------------------------------------- manual-takeover apply gate
+
+def test_manual_takeover_skips_apply_only():
+    """A manual takeover masks ONLY apply (the user is hands-on in the bot browser);
+    filter/score/optimize keep running so discovery never stalls."""
+    scheduler, call_log, _, _, _, a, _ = _build_scheduler(apply_gate=lambda: True)
+    summary = asyncio.run(scheduler.run(max_cycles=1))
+    assert call_log == ["filter", "score", "optimize"]
+    assert a.call_count == 0
+    assert summary.cycles[0].apply_skipped_takeover is True
+    assert summary.cycles[0].apply_skipped_quiet_hours is False
+
+
+def test_no_takeover_apply_runs():
+    """apply_gate False (no takeover) → apply runs normally."""
+    scheduler, call_log, _, _, _, a, _ = _build_scheduler(apply_gate=lambda: False)
+    summary = asyncio.run(scheduler.run(max_cycles=1))
+    assert a.call_count == 1
+    assert summary.cycles[0].apply_skipped_takeover is False
+
+
+def test_quiet_hours_takes_precedence_over_takeover_flag():
+    """Inside quiet hours, apply is skipped and labelled quiet_hours even if a takeover is
+    also active — the gates are checked quiet-first, so the badge is unambiguous."""
+    scheduler, call_log, _, _, _, a, _ = _build_scheduler(
+        quiet_hours_raw="12:00-14:00",
+        now_value=datetime(2026, 5, 29, 13, 0),
+        apply_gate=lambda: True,
+    )
+    summary = asyncio.run(scheduler.run(max_cycles=1))
+    assert a.call_count == 0
+    assert summary.cycles[0].apply_skipped_quiet_hours is True
+    assert summary.cycles[0].apply_skipped_takeover is False
 
 
 def test_no_quiet_hours_apply_always_runs():

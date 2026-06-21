@@ -39,7 +39,9 @@ method.
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
+from typing import Callable
 
 
 # Canonical source identifiers. The HTTP API accepts only these — anything
@@ -168,3 +170,69 @@ class ControlState:
             SOURCE_HOTKEY: "F6 control-handoff",
             SOURCE_IDLE: "user active",
         }.get(source, source)
+
+
+# Default safety window: a takeover whose tab-close we never observe (the user wandered
+# off, the browser crashed) auto-releases after this long so the apply stage can never be
+# stuck-paused forever. 15 minutes is comfortably longer than finishing one application.
+_TAKEOVER_TIMEOUT_S = 900.0
+
+
+class ManualTakeover:
+    """Tracks active *manual* browser takeovers so the scheduler can mask ONLY the apply
+    stage while the user is hands-on in the shared Chrome window.
+
+    The apply worker drives its own tabs in the bot's persistent Chrome profile; when the
+    user opens a job in that *same* window (login-on-demand, assisted submit, "Open in
+    browser") the apply worker keeps opening/navigating tabs and steals focus. This is the
+    apply-only analog of quiet hours: while a takeover is active the scheduler skips the
+    apply stage but keeps every gather stage (discover/filter/score/optimize) running, so
+    discovery never stalls just because the user is finishing one application.
+
+    Lifecycle: :meth:`engage` on open (returns a token), :meth:`release` on that tab's
+    ``close`` event. A safety timeout auto-releases a takeover whose close we never saw, so
+    apply can never wedge. Each engage is independent (counted by token) — N open takeovers
+    keep apply masked until the last one releases or times out.
+    """
+
+    def __init__(
+        self,
+        *,
+        timeout_s: float = _TAKEOVER_TIMEOUT_S,
+        now: Callable[[], float] | None = None,
+    ):
+        self._timeout_s = timeout_s
+        self._now = now or time.monotonic
+        self._lock = threading.Lock()
+        self._active: dict[int, float] = {}  # token -> engaged-at (monotonic)
+        self._next_token = 0
+
+    def engage(self) -> int:
+        """Begin a takeover; returns a token to pass back to :meth:`release`."""
+        with self._lock:
+            token = self._next_token
+            self._next_token += 1
+            self._active[token] = self._now()
+            return token
+
+    def release(self, token: int) -> None:
+        """End the takeover for ``token`` (idempotent — releasing twice is a no-op)."""
+        with self._lock:
+            self._active.pop(token, None)
+
+    def is_active(self) -> bool:
+        """The apply-gate predicate handed to the Scheduler. True iff at least one
+        non-timed-out takeover is in progress. Prunes timed-out takeovers as a side
+        effect so a forgotten-open tab self-clears."""
+        with self._lock:
+            if not self._active:
+                return False
+            cutoff = self._now() - self._timeout_s
+            for token in [t for t, at in self._active.items() if at < cutoff]:
+                self._active.pop(token, None)
+            return bool(self._active)
+
+    @property
+    def count(self) -> int:
+        with self._lock:
+            return len(self._active)

@@ -99,6 +99,23 @@ class _RecordingPage:
         self.url_visited = url
 
 
+class _RecordingPageWithClose(_RecordingPage):
+    """A page that records its Playwright-style ``on('close', handler)`` so a test can fire
+    the close event and assert the manual takeover is released."""
+
+    def __init__(self):
+        super().__init__()
+        self._close_handlers: list = []
+
+    def on(self, event: str, handler):
+        if event == "close":
+            self._close_handlers.append(handler)
+
+    def fire_close(self):
+        for h in list(self._close_handlers):
+            h(self)
+
+
 class TestHeadedBrowserLauncher:
 
     def test_no_url_returns_unavailable(self):
@@ -123,6 +140,42 @@ class TestHeadedBrowserLauncher:
             assert result.mode == "bot_browser"
             assert result.url == "https://login.example.com"
             assert page.url_visited == "https://login.example.com"
+        asyncio.run(_go())
+
+    def test_manual_takeover_engaged_on_open_released_on_close(self):
+        """Opening in the bot browser engages a manual takeover (so the scheduler masks
+        apply); closing the tab releases it."""
+        from auto_applier.web.control import ManualTakeover
+
+        async def _go():
+            page = _RecordingPageWithClose()
+
+            async def _new_page():
+                return page
+
+            takeover = ManualTakeover()
+            launcher = HeadedBrowserLauncher(new_page=_new_page, takeover=takeover)
+            assert takeover.is_active() is False
+            await launcher.open("https://job.example/apply")
+            assert takeover.is_active() is True   # engaged while the tab is open
+            page.fire_close()
+            assert takeover.is_active() is False  # released when the tab closes
+        asyncio.run(_go())
+
+    def test_takeover_engaged_even_when_page_has_no_close_hook(self):
+        """A stub/odd page with no ``on()`` still engages the takeover (apply is masked);
+        the safety timeout is what releases it."""
+        from auto_applier.web.control import ManualTakeover
+
+        async def _go():
+            takeover = ManualTakeover()
+
+            async def _new_page():
+                return _RecordingPage()  # no .on()
+
+            launcher = HeadedBrowserLauncher(new_page=_new_page, takeover=takeover)
+            await launcher.open("https://job.example/apply")
+            assert takeover.is_active() is True
         asyncio.run(_go())
 
     def test_falls_back_to_default_browser_when_no_session(self):

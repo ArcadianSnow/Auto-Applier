@@ -71,6 +71,7 @@ class ResolutionSource(str, Enum):
     FACT_BANK = "fact_bank"     # work-auth pulled from the fact bank directly
     USER_CONFIG = "user_config"  # e.g. salary expectation from user_config.json
     PROFILE = "profile"         # contact/profile field (LinkedIn, city, name) from the bank
+    DISCOVERY = "discovery"     # "how did you hear?" derived from how the bot found the job
     REVIEW = "review"           # bailed; human must answer
 
 
@@ -395,9 +396,11 @@ def _is_authorized(bank) -> bool:
 
 
 # "How did you hear about us?" — a referral-source PICKER (select/combobox), NOT an essay.
-# It matches the open-ended "how did you…" pattern, so without a dedicated route it bails to
-# assisted (live dbt Labs 2026-06-14: "How did you hear about us?" bailed while Grafana's
-# "…about this opportunity" matched the seeded answer). Route it to the banked channel.
+# It matches the open-ended "how did you…" pattern, so it needs a dedicated route to keep it
+# away from the bank/LLM/essay tiers (which must never invent a source). The route is HONESTY-
+# first: because the bot discovers every job by automated search, there is no authentic answer
+# here — it bails to the human by default and only uses a value the user EXPLICITLY banked for
+# this question (owner directive 2026-06-21; a blank how-heard is by design, not a config gap).
 _HOW_HEARD_PATTERNS = [
     r"\bhear about\b",
     r"\bhow did you (hear|find|learn|come across)\b",
@@ -409,6 +412,63 @@ _HOW_HEARD_PATTERNS = [
 
 def _is_how_heard(label: str) -> bool:
     return _matches_any(label or "", _HOW_HEARD_PATTERNS)
+
+
+# "How did you hear about this?" is HONESTLY answerable from how the bot actually found the
+# job (per-job ``job.source``), so neither the bot nor the user has to invent anything (owner
+# directive 2026-06-21). ATS adapters query the company's OWN application portal → "Company
+# Website"; jobspy stores the actual board name as ``source`` (indeed/linkedin/…) → that board.
+_HOW_HEARD_ATS_SOURCES = frozenset({"greenhouse", "lever", "ashby"})
+_HOW_HEARD_BOARD_LABELS = {
+    "indeed": "Indeed",
+    "linkedin": "LinkedIn",
+    "zip_recruiter": "ZipRecruiter",
+    "ziprecruiter": "ZipRecruiter",
+    "glassdoor": "Glassdoor",
+    "google": "Google",
+    "monster": "Monster",
+}
+#: Owner-chosen label for a company-portal (ATS) discovery (2026-06-21).
+_HOW_HEARD_COMPANY_SITE = "Company Website"
+#: Option-text cues that mean "the company's own site" — so we match the derived
+#: "Company Website" against a form's nearest equivalent ("Company career site", etc.).
+_COMPANY_SITE_OPTION_CUES = ("company", "employer", "career")
+
+
+def _how_heard_source_label(source: str) -> str:
+    """Map a job's discovery ``source`` to an honest 'how did you hear' label. ``""`` when
+    there's no source to derive from (→ the caller bails to the human)."""
+    s = (source or "").strip().lower()
+    if not s:
+        return ""
+    if s in _HOW_HEARD_ATS_SOURCES:
+        return _HOW_HEARD_COMPANY_SITE
+    if s in _HOW_HEARD_BOARD_LABELS:
+        return _HOW_HEARD_BOARD_LABELS[s]
+    # An unknown board → title-case the raw site name (still honest: that's where it was found).
+    return s.replace("_", " ").title()
+
+
+def _match_how_heard_option(label: str, options: list[str]) -> str | None:
+    """Pick the form option that best matches the derived ``label`` (case-insensitive). For
+    "Company Website" we also accept a company/employer/career-site phrasing. Falls back to an
+    "Other" option when present; ``None`` when nothing fits (→ the caller bails to the human)."""
+    want = label.strip().lower()
+    norm = [(o, (o or "").strip().lower()) for o in options]
+    # 1. Direct containment either way ("LinkedIn" ⊆ "LinkedIn job post", or vice versa).
+    for original, low in norm:
+        if low and (want in low or low in want):
+            return original
+    # 2. Company-site synonyms for the ATS "Company Website" label.
+    if want == _HOW_HEARD_COMPANY_SITE.lower():
+        for original, low in norm:
+            if any(cue in low for cue in _COMPANY_SITE_OPTION_CUES):
+                return original
+    # 3. A neutral "Other" is honest when our specific channel isn't offered.
+    for original, low in norm:
+        if low == "other" or low.startswith("other"):
+            return original
+    return None
 
 
 # "Are you located in or willing to relocate to <country>?" — a yes/no the bank answered
@@ -629,9 +689,9 @@ class AnswerResolver:
             # contact fields keep their bail (a missing LinkedIn/city must never be guessed).
             if resolved.value or profile not in _OPTIONAL_PROFILE_EXTRAS:
                 return resolved
-        # "How did you hear about us?" is a referral-source PICKER, not an essay — but it
-        # matches the open-ended "how did you…" pattern, so without this it bails. Route it
-        # to the banked channel before the essay/LLM tiers can (live dbt Labs 2026-06-14).
+        # "How did you hear about us?" — intercept BEFORE the bank/LLM/essay tiers so none of
+        # them can invent a source. It's a human-fill field by design (the bot discovered the
+        # job programmatically, so there's no authentic answer; owner directive 2026-06-21).
         if _is_how_heard(question.label):
             return self._resolve_how_heard(question)
         # "located in / willing to relocate to <country>?" — Yes only for the residence/
@@ -841,8 +901,19 @@ class AnswerResolver:
         )
 
     def _resolve_how_heard(self, question: CustomQuestion) -> Resolution:
-        """'How did you hear about us?' → the banked referral channel (a picker, not an
-        essay). Reads the seeded answer; bails if none is banked (never invents a channel)."""
+        """'How did you hear about us?' → derived HONESTLY from how the bot actually found
+        this job (owner directive 2026-06-21).
+
+        There IS a truthful per-job answer: ``job.source`` records the discovery channel.
+        ATS adapters (greenhouse/lever/ashby) query the company's OWN application portal →
+        "Company Website"; jobspy stores the real board name → that board (LinkedIn/Indeed/…).
+        So neither the bot nor the user has to invent anything — and a *static* seed (the thing
+        that WOULD be a fabrication) is never needed.
+
+        Order: (1) honour an answer the user EXPLICITLY banked (their own override); (2) derive
+        from the job's discovery source — for a dropdown, match the derived label to an offered
+        option (or "Other"); for free text, fill the label. Bails to the human only when there's
+        no discovery source to derive from, or the form's options don't include our channel."""
         for key in ("How did you hear about this opportunity?", question.label):
             banked = self.answer_repo.get(key)
             if banked is not None and banked.answer:
@@ -850,11 +921,33 @@ class AnswerResolver:
                     question=question,
                     value=banked.answer,
                     source=ResolutionSource.BANK,
-                    note="how-heard referral channel from answer bank",
+                    note="how-heard: using the answer you explicitly banked for this question",
                 )
-        return self._review(
-            question,
-            note="how-heard: no referral channel banked — seed one to auto-fill",
+        source = getattr(self.current_job, "source", "") if self.current_job else ""
+        label = _how_heard_source_label(source)
+        if not label:
+            return self._review(
+                question,
+                note="how-heard: no discovery source on this job to derive an honest answer "
+                     "from — handed to you (pick one at submit)",
+            )
+        options = list(getattr(question, "options", None) or [])
+        if options:
+            picked = _match_how_heard_option(label, options)
+            if picked is None:
+                return self._review(
+                    question,
+                    note=f"how-heard: found via '{source}' (≈ {label}) but that isn't an "
+                         "option on this form — pick the closest one at submit",
+                )
+            value = picked
+        else:
+            value = label
+        return Resolution(
+            question=question,
+            value=value,
+            source=ResolutionSource.DISCOVERY,
+            note=f"how-heard derived from how the bot found this job (source: {source})",
         )
 
     def _resolve_relocation(self, question: CustomQuestion) -> Resolution:

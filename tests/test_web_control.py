@@ -34,10 +34,52 @@ from auto_applier.web.control import (
     SOURCE_IDLE,
     SOURCE_MANUAL,
     ControlState,
+    ManualTakeover,
 )
 from auto_applier.web.hotkey import HotkeyWatcher, build_hotkey_toggle
 from auto_applier.web.idle import IdleWatcher
 from auto_applier.web.service import sync_factory
+
+
+# --------------------------------------------------------------- ManualTakeover
+
+class TestManualTakeover:
+    def test_inactive_when_empty(self):
+        assert ManualTakeover().is_active() is False
+
+    def test_engage_then_release(self):
+        t = ManualTakeover()
+        token = t.engage()
+        assert t.is_active() is True
+        assert t.count == 1
+        t.release(token)
+        assert t.is_active() is False
+        assert t.count == 0
+
+    def test_release_is_idempotent(self):
+        t = ManualTakeover()
+        token = t.engage()
+        t.release(token)
+        t.release(token)  # second release is a no-op, never raises
+        assert t.is_active() is False
+
+    def test_multiple_takeovers_keep_apply_masked_until_last_releases(self):
+        t = ManualTakeover()
+        a, b = t.engage(), t.engage()
+        assert t.count == 2
+        t.release(a)
+        assert t.is_active() is True   # b still open
+        t.release(b)
+        assert t.is_active() is False
+
+    def test_safety_timeout_auto_releases_stale_takeover(self):
+        clock = [1000.0]
+        t = ManualTakeover(timeout_s=900.0, now=lambda: clock[0])
+        t.engage()
+        assert t.is_active() is True
+        clock[0] += 901.0            # past the safety window
+        assert t.is_active() is False
+        assert t.count == 0          # pruned as a side effect
 
 
 # --------------------------------------------------------------- ControlState

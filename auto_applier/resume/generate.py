@@ -63,6 +63,8 @@ __all__ = [
     "job_resume_upload_path",
     "parse_cover_letter",
     "parse_generated_resume",
+    "resolve_generated_cover_letter",
+    "resolve_generated_resume",
 ]
 
 #: File extensions an ATS cover-letter upload accepts (Greenhouse's #cover_letter accept
@@ -178,6 +180,52 @@ def generated_cover_letter_path(settings: Settings, job_id: str) -> Path:
     work. Same parent dir + readable-name scheme as the résumé (``..._Cover_..._48b5b857.txt``).
     """
     return settings.artifacts_dir / "generated" / f"{_artifact_stem(settings, job_id, 'Cover')}.txt"
+
+
+def _resolve_generated(settings: Settings, job_id: str, kind: str, ext: str) -> Path | None:
+    """Find an optimize-generated artifact for a job, tolerant of name-scheme drift.
+
+    The on-disk name changed 2026-06-21 from the bare ``{job_id}`` to a human-readable stem
+    (``{Name}_{kind}_{Company}_{Title}_{id8}``). Optimize-write and apply-read derive the same
+    name *only* while the inputs (master.json ``contact.name`` + the job row) are stable, so a
+    plain ``generated_*_path(...).exists()`` check silently misses two real cases:
+
+      1. Files written **before** the change (bare ``{job_id}.pdf`` / ``{job_id}_cover.txt``).
+      2. Files whose readable stem no longer matches because the applicant **name changed**
+         between optimize (write) and apply (read).
+
+    Resolution order — readable (preferred, exact) → legacy bare → a glob on the deterministic
+    ``_{job_id[:8]}`` id-suffix (catches the name-drift case; only adopted when it's unambiguous,
+    i.e. a single match). Returns ``None`` when nothing matches. ``ext`` includes the dot.
+    """
+    readable = (
+        generated_cover_letter_path(settings, job_id)
+        if kind == "Cover"
+        else generated_resume_path(settings, job_id)
+    )
+    if readable.exists():
+        return readable
+    folder = settings.artifacts_dir / "generated"
+    legacy = folder / (f"{job_id}_cover{ext}" if kind == "Cover" else f"{job_id}{ext}")
+    if legacy.exists():
+        return legacy
+    if folder.exists():
+        matches = sorted(folder.glob(f"*_{job_id[:8]}{ext}"))
+        if len(matches) == 1:
+            return matches[0]
+    return None
+
+
+def resolve_generated_resume(settings: Settings, job_id: str) -> Path | None:
+    """The optimize-generated résumé PDF for a job, tolerant of name-scheme drift (legacy
+    bare ``{job_id}.pdf`` + post-rename readable names). ``None`` if none on disk."""
+    return _resolve_generated(settings, job_id, "Resume", ".pdf")
+
+
+def resolve_generated_cover_letter(settings: Settings, job_id: str) -> Path | None:
+    """The optimize-generated cover-letter ``.txt`` for a job, tolerant of name-scheme drift
+    (legacy bare ``{job_id}_cover.txt`` + post-rename readable names). ``None`` if none on disk."""
+    return _resolve_generated(settings, job_id, "Cover", ".txt")
 
 
 def _job_upload_dir(settings: Settings, job_id: str) -> Path:

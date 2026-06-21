@@ -36,7 +36,10 @@ from __future__ import annotations
 import logging
 import webbrowser
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
+
+if TYPE_CHECKING:
+    from auto_applier.web.control import ManualTakeover
 
 logger = logging.getLogger(__name__)
 
@@ -81,12 +84,18 @@ class HeadedBrowserLauncher:
         *,
         new_page: Callable[[], Awaitable[Any]] | None = None,
         fallback_open: Callable[[str], bool] | None = None,
+        takeover: ManualTakeover | None = None,
     ):
         self._new_page = new_page
         # Indirection so tests can verify the fallback path was taken without
         # actually launching a browser on the runner. Production passes None
         # and we use ``webbrowser.open``.
         self._fallback_open = fallback_open or webbrowser.open
+        # When set, opening a URL in the bot's profile registers a *manual takeover*
+        # (engage now, release on the tab's close event) so the scheduler masks the apply
+        # stage while the user is hands-on in that shared Chrome window. None → no masking
+        # (the apply worker isn't running anyway in the fallback/no-session posture).
+        self._takeover = takeover
 
     @property
     def has_bot_browser(self) -> bool:
@@ -95,6 +104,27 @@ class HeadedBrowserLauncher:
         Drives the dashboard's "warning: this will open in your default
         browser" copy when False."""
         return self._new_page is not None
+
+    def _register_takeover(self, page: Any) -> None:
+        """Engage a manual takeover for ``page`` and release it when the tab closes.
+
+        Best-effort: if no takeover tracker is wired, or the page object doesn't expose a
+        Playwright-style ``on('close', ...)`` hook, we still engage (so apply is masked) and
+        rely on the takeover's safety timeout to auto-release. Never raises — a takeover that
+        can't register must not break opening the page."""
+        if self._takeover is None:
+            return
+        try:
+            token = self._takeover.engage()
+        except Exception as exc:  # noqa: BLE001 — masking is best-effort, never fatal
+            logger.warning("headed launcher: takeover.engage() failed: %s", exc)
+            return
+        try:
+            page.on("close", lambda _p=None: self._takeover.release(token))
+        except Exception as exc:  # noqa: BLE001
+            # No close hook (stub page / odd driver) → the safety timeout still releases it.
+            logger.debug("headed launcher: could not bind page close → relying on "
+                         "takeover timeout: %s", exc)
 
     async def open(self, url: str) -> LaunchResult:
         """Open ``url`` and return a structured result for the API response.
@@ -114,6 +144,10 @@ class HeadedBrowserLauncher:
         if self._new_page is not None:
             try:
                 page = await self._new_page()
+                # The user is now hands-on in the bot's shared Chrome window — register a
+                # manual takeover so the scheduler masks the apply stage (stops churning
+                # tabs underneath them) until this tab closes or the safety timeout fires.
+                self._register_takeover(page)
                 # Best-effort navigation. ``page.goto`` raises on net errors;
                 # we still consider the launch a partial success because the
                 # tab IS open and the user can fix the URL by hand.

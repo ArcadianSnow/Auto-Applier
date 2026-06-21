@@ -127,6 +127,7 @@ class CycleSummary:
     inbox_summary: InboxRunSummary | None = None
     apply_summary: ApplyRunSummary | None = None
     apply_skipped_quiet_hours: bool = False
+    apply_skipped_takeover: bool = False  # apply masked: user is hands-on in the bot browser
     paused: bool = False
     maintenance_ran: bool = False
     stage_errors: dict[str, str] = field(default_factory=dict)  # stage -> error str
@@ -171,6 +172,7 @@ class Scheduler:
         cycle_interval_s: float = 60.0,
         quiet_hours: QuietHours | None = None,
         pause_predicate: Callable[[], bool] | None = None,
+        apply_gate: Callable[[], bool] | None = None,
         maintenance: MaintenanceHook | None = None,
         maintenance_interval_s: float = 3600.0,
         sleep: _Sleep | None = None,
@@ -192,6 +194,11 @@ class Scheduler:
         self._cycle_interval_s = cycle_interval_s
         self._quiet_hours = quiet_hours or parse_quiet_hours(None)
         self._pause_predicate = pause_predicate or (lambda: False)
+        # Apply-only mask (apply analog of quiet hours). Returns True while the user is
+        # hands-on in the bot's Chrome window (a manual takeover) — the apply stage is
+        # skipped so it stops opening/navigating tabs and stealing focus, but every gather
+        # stage keeps running. None → never masked (e.g. ``av3 run`` with no web launcher).
+        self._apply_gate = apply_gate or (lambda: False)
         self._maintenance = maintenance
         self._maintenance_interval_s = maintenance_interval_s
         # Monotonic time stamp of last maintenance run. None means "never";
@@ -261,7 +268,9 @@ class Scheduler:
         if self._inbox is not None:
             await self._run_stage(cs, "inbox", self._inbox)
 
-        # Apply stage is the only one gated by quiet hours.
+        # Apply stage is the only one gated by quiet hours OR a manual takeover (the user
+        # is hands-on in the bot's Chrome window — don't churn tabs underneath them). Both
+        # mask only apply; the gather stages above always ran.
         now_local = self._now()
         if self._quiet_hours.is_quiet(now_local):
             cs.apply_skipped_quiet_hours = True
@@ -272,6 +281,12 @@ class Scheduler:
                     "reason": "quiet_hours",
                     "window": self._quiet_hours.raw,
                 },
+            )
+        elif self._apply_gate():
+            cs.apply_skipped_takeover = True
+            self._emit_cycle(
+                "skip", cycle_idx,
+                context={"stage": "apply", "reason": "manual_takeover"},
             )
         else:
             await self._run_stage(cs, "apply", self._apply)

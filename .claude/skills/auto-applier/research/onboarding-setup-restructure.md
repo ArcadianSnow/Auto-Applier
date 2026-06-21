@@ -179,6 +179,88 @@ the headed launcher's `new_page`, transitioning REVIEW→QUEUED_APPLY, halting a
 + risky (real browser apply trigger, state + artifact handling), so deferred from this batch — E1 + the
 existing "Open the application" (submit group) cover open-in-browser meanwhile.
 
+## Live-test issue fixes — SESSION 2 (SHIPPED 2026-06-21, after the handoff `%TEMP%\handoff-...T1822Z.md`)
+
+A `/clear` + handoff followed live dashboard testing. This session fixed the 2 confirmed regressions,
+acted on an owner honesty directive, and produced the E2 design. Full suite **1382 green** (+18 tests).
+**Commit-only, not pushed** (owner cadence; `av3` editable = working tree live). Files: `resume/generate.py`,
+`pipeline/apply_worker.py`, `resume/answer_resolver.py`, `pipeline/scheduler.py`, `web/control.py`,
+`web/headed.py`, `cli/main.py` + tests.
+
+### #1 — artifact "missing résumé/cover" regression (the readable-filename orphan) — FIXED
+Root cause as the handoff predicted: fix-C's readable names (`{Name}_Resume_{Company}_{Title}_{id8}.pdf`)
+meant `generated_resume_path(...).exists()` returned False for any artifact written under the OLD bare
+`{job_id}.pdf`, so `apply_worker._artifacts_for` fell through to the (absent) global `resume.pdf`.
+**Fix:** new `resolve_generated_resume` / `resolve_generated_cover_letter` in `generate.py` (exported),
+used by `_artifacts_for`. Resolution order: **readable (preferred) → legacy bare `{job_id}.pdf` /
+`{job_id}_cover.txt` → a glob on the deterministic `_{job_id[:8]}` suffix** (adopted only when
+unambiguous). The id8 glob also covers the latent determinism risk (master.json `contact.name` changing
+between optimize-write and apply-read) — the legacy-bare check alone does NOT (it's a different readable
+name, not the bare id). Tests: `test_picks_up_legacy_bare_named_artifacts`,
+`test_resolve_generated_prefers_readable_then_legacy_then_id8`.
+
+### #3 — "How did you hear about this job" — DERIVE HONESTLY FROM THE DISCOVERY SOURCE (owner directive)
+Two-round directive. Round 1: *"I'll never know how I heard since you do all the searching, so a seeded
+answer is impossible"* (→ don't seed a static "LinkedIn"). Round 2 (the key correction): *"that's not a
+better design — how am I supposed to answer it either?"* — i.e. **routing it to the human is ALSO wrong; the
+human can't answer it any better than the bot.** The resolution: there IS a truthful per-job answer — the
+**discovery source is stored on the job row** (`job.source`). ATS adapters (greenhouse/lever/ashby) query
+the company's OWN application portal; jobspy stores the actual board (`indeed`/`linkedin`/`zip_recruiter`/…)
+as the source. So how-heard is **derived honestly, per-job, auto-filled — no seed, no human guessing.**
+
+`_resolve_how_heard` now (answer_resolver.py): (1) still honours a value the user EXPLICITLY banked
+(override); (2) `_how_heard_source_label(job.source)` → ATS ⇒ **"Company Website"** (owner-chosen label,
+2026-06-21), known boards ⇒ their name, unknown board ⇒ title-cased site; (3) for a **dropdown**,
+`_match_how_heard_option` matches the label to an offered option (company/employer/career-site synonyms for
+"Company Website"), falls back to **"Other"**, else bails; for **free text**, fills the label; (4) bails only
+when there's no `job.source` (resolver used outside the apply loop) or the form lacks our channel + no
+"Other". New `ResolutionSource.DISCOVERY` for honest provenance. Still intercepted BEFORE the bank/LLM/essay
+tiers so the LLM can never fabricate one. Tests (7): derive-ATS / derive-board / dropdown-match /
+other-fallback / bail-no-option / bail-no-source / never-invokes-LLM, + explicit-bank-override.
+**Takeaways for future sessions: (a) do NOT seed how-heard; (b) do NOT route it to the human — derive it
+from `job.source`; (c) "Company Website" is the owner-approved label for ATS-portal discoveries.**
+
+### #3 — config-gap diagnosis (the other test-dir blanks) = CONFIG, not code
+The handoff's `@what-actually-works` already proved nationality/gender/notice/years fill correctly from a
+COMPLETE bank (they fall THROUGH to bank/LLM tiers). The test-dir blanks were the fresh dir lacking the
+optional "More details" wizard step + a real fact bank — **config, not a regression.** No code change beyond
+how-heard. (Owner's production dir `C:\Users\jar85\JobSearch` is fully configured → "worked for just me.")
+
+### #2 — scheduler apply-worker vs manual "Open in browser" CLASH — FIXED (apply-only auto-pause)
+Root cause: `_launcher_new_page` opens a tab in the SAME persistent Chrome context the scheduler's apply
+worker drives, so the apply worker keeps opening/navigating tabs and steals focus while the human works.
+**Owner chose:** pause ONLY the apply stage during a manual takeover, auto-engage on open, auto-release on
+tab close + safety timeout (gather stages keep running). **Built:**
+- `web/control.py` `ManualTakeover` — token-counted active-takeover tracker; `engage()`/`release(token)`/
+  `is_active()`; a `_TAKEOVER_TIMEOUT_S = 900s` safety window auto-prunes a takeover whose tab-close was
+  never seen (apply can never wedge). Injectable `now` for tests.
+- `pipeline/scheduler.py` — new `apply_gate: Callable[[],bool]` param (apply analog of quiet hours) +
+  `CycleSummary.apply_skipped_takeover`. Apply stage now skipped if `quiet_hours OR apply_gate()`
+  (quiet-first, so the badge is unambiguous). Gather stages always run.
+- `web/headed.py` — `HeadedBrowserLauncher(takeover=...)`; on a bot-browser open it `engage()`s and binds
+  `page.on("close", release)`. Best-effort: a page with no `.on` still engages (timeout releases it).
+- `cli/main.py serve` — one `ManualTakeover` at function scope, passed to the launcher AND
+  `apply_gate=_takeover.is_active` into the scheduler factory (both gated on `service is not None`).
+Tests (8): `TestManualTakeover` (5 — engage/release/idempotent/multi/timeout), scheduler
+`test_manual_takeover_skips_apply_only` + `test_no_takeover_apply_runs` +
+`test_quiet_hours_takes_precedence_over_takeover_flag`, launcher
+`test_manual_takeover_engaged_on_open_released_on_close` + `test_takeover_engaged_even_when_page_has_no_close_hook`.
+**Deferred (small):** a dashboard "apply paused — you're in the browser" badge. `apply_skipped_takeover` is
+in `CycleSummary` but not plumbed to the status API; owner chose auto + auto-release so it's silent for now.
+
+### #4 — "no gray note" on Open-in-browser — wiring intact, LIVE-VERIFY pending
+The per-row `reviewNote[j.id]` (dashboard.html) + the launcher's `LaunchResult.note` are untouched by the
+#2 change (the return shape is unchanged; #2 only adds takeover registration on the success path). The
+handoff judged the missing note "likely disrupted by the clash (#2)" — so it should reappear now the clash
+is fixed. **This is a live step the owner verifies** (no automated repro for a browser-focus race).
+
+### E2 — DESIGN DOC produced (owner chose design-first), NOT built
+Full spec: [e2-on-demand-fill-design.md](e2-on-demand-fill-design.md). Recommends borrowing the scheduler's
+ApplyWorker via a new `prepare_single(job_id, page)` (assisted-only, never dry, single job) reached through
+a worker holder, behind `POST /api/jobs/{id}/assisted/prepare`; promotes a "Needs your decision" job into
+the existing "Ready to finish" lane (REVIEW→QUEUED_APPLY→APPLYING→REVIEW + ASSISTED_PENDING row). Depends on
+#2's takeover gate (already shipped) for clash-free operation. 3 open questions for the owner in the doc.
+
 ## What's next (Phase 2, still deferred)
 
 Embedded-Python + Inno installer (needs Inno Setup 6 on the build host) — see

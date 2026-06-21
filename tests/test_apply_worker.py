@@ -53,6 +53,8 @@ from auto_applier.resume.factbank import Contact, FactBank
 from auto_applier.resume.generate import (
     generated_cover_letter_path,
     generated_resume_path,
+    resolve_generated_cover_letter,
+    resolve_generated_resume,
 )
 from auto_applier.sources.browser.apply_base import (
     Applicant,
@@ -702,6 +704,62 @@ def test_records_per_job_cover_letter_path_when_present(settings, conn):
     apps = ApplicationRepo(conn).list_by_job(job.id)
     assert apps[0].generated_resume_path == str(pdf)
     assert apps[0].cover_letter_path == str(cover)
+
+
+def test_picks_up_legacy_bare_named_artifacts(settings, conn):
+    """Regression (2026-06-21 readable-filename change): an artifact written BEFORE the
+    rename lives on disk as the bare ``{job_id}.pdf`` / ``{job_id}_cover.txt``. The readable
+    path no longer points at it, so the worker must fall back to the legacy name instead of
+    orphaning it to the (often-absent) global résumé."""
+    job = _seed_queued_lever(conn, company="acmeco", source_job_id="legacy-1")
+
+    generated_dir = settings.artifacts_dir / "generated"
+    generated_dir.mkdir(parents=True, exist_ok=True)
+    legacy_pdf = generated_dir / f"{job.id}.pdf"
+    legacy_pdf.write_bytes(b"%PDF legacy\n")
+    legacy_cover = generated_dir / f"{job.id}_cover.txt"
+    legacy_cover.write_text("Dear team (legacy)", encoding="utf-8")
+
+    # Sanity: the readable path does NOT match the on-disk legacy file (the bug's precondition).
+    assert generated_resume_path(settings, job.id) != legacy_pdf
+
+    seen: dict = {}
+    worker = _build_worker(settings, conn, driver=_recording_resume_driver(seen))
+    asyncio.run(worker.run_once())
+
+    assert seen["resume_path"] == str(legacy_pdf)  # legacy file used, NOT "/tmp/resume.pdf"
+    apps = ApplicationRepo(conn).list_by_job(job.id)
+    assert apps[0].generated_resume_path == str(legacy_pdf)
+    assert apps[0].cover_letter_path == str(legacy_cover)
+
+
+def test_resolve_generated_prefers_readable_then_legacy_then_id8(settings, conn):
+    """Unit-level resolution order for the name-drift-tolerant resolvers. The job has a
+    company so its readable name is distinct from the bare ``{job_id}`` (the bug's setup)."""
+    job = _seed_queued_lever(conn, company="acmeco", source_job_id="resolve-1")
+    jid = job.id
+    generated_dir = settings.artifacts_dir / "generated"
+    generated_dir.mkdir(parents=True, exist_ok=True)
+    readable = generated_resume_path(settings, jid)
+    legacy = generated_dir / f"{jid}.pdf"
+    assert readable != legacy  # company present → readable name ≠ bare job_id
+
+    # 1. Nothing on disk → None.
+    assert resolve_generated_resume(settings, jid) is None
+    assert resolve_generated_cover_letter(settings, jid) is None
+
+    # 2. A name-drifted readable file (different prefix, same id8 suffix) is found via glob.
+    drifted = generated_dir / f"Old_Name_Resume_Acme_Eng_{jid[:8]}.pdf"
+    drifted.write_bytes(b"%PDF drift\n")
+    assert resolve_generated_resume(settings, jid) == drifted
+
+    # 3. The legacy bare name is an exact match → wins over the ambiguous glob.
+    legacy.write_bytes(b"%PDF legacy\n")
+    assert resolve_generated_resume(settings, jid) == legacy
+
+    # 4. The exact readable path wins over everything when present.
+    readable.write_bytes(b"%PDF readable\n")
+    assert resolve_generated_resume(settings, jid) == readable
 
 
 def _recording_cover_driver(seen: dict, *, status=ApplicationStatus.APPLIED) -> DriverEntry:

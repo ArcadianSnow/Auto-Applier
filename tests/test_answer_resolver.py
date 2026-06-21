@@ -543,22 +543,100 @@ def test_relocation_willing_country_answers_yes():
     assert res.value == "Yes"
 
 
-def test_how_heard_uses_banked_channel(answer_repo):
-    """'How did you hear about us?' matches the open-ended 'how did you…' pattern, so it
-    used to bail — now it returns the banked referral channel (live dbt Labs 2026-06-14)."""
+def _job(source: str):
+    """Minimal stand-in for the per-job context the worker sets on the resolver — only
+    ``.source`` is read by the how-heard derivation."""
+    from types import SimpleNamespace
+    return SimpleNamespace(source=source)
+
+
+def test_how_heard_uses_explicitly_banked_channel(answer_repo):
+    """An answer the user EXPLICITLY banked for this question wins over the derivation —
+    their deliberate override."""
     asyncio.run(store_answer(answer_repo, embed_client=None,
-                             question="How did you hear about this opportunity?", answer="LinkedIn"))
+                             question="How did you hear about this opportunity?", answer="Referral"))
     resolver = AnswerResolver(_contact_bank(), answer_repo)
+    resolver.current_job = _job("greenhouse")
     res = asyncio.run(resolver.resolve(_q("How did you hear about us?", kind="select", required=False)))
-    assert res.value == "LinkedIn"
+    assert res.value == "Referral"
     assert res.source is ResolutionSource.BANK
     assert res.needs_review is False
 
 
-def test_how_heard_bails_when_no_channel_banked():
+def test_how_heard_derives_company_website_for_ats_source():
+    """Owner directive 2026-06-21: derive an HONEST answer from how the bot found the job.
+    ATS adapters hit the company's own portal → 'Company Website' (free-text fill)."""
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    resolver.current_job = _job("greenhouse")
+    res = asyncio.run(resolver.resolve(_q("How did you hear about us?", kind="input")))
+    assert res.value == "Company Website"
+    assert res.source is ResolutionSource.DISCOVERY
+    assert res.needs_review is False
+
+
+def test_how_heard_derives_board_name_for_jobspy_source():
+    """jobspy stores the real board as the source → that board is the honest answer."""
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    resolver.current_job = _job("linkedin")
+    res = asyncio.run(resolver.resolve(_q("How did you hear about this role?", kind="input")))
+    assert res.value == "LinkedIn"
+    assert res.source is ResolutionSource.DISCOVERY
+
+
+def test_how_heard_matches_dropdown_option_to_derived_label():
+    """A select: the derived label is matched against the offered options (company-site
+    synonym aware)."""
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    resolver.current_job = _job("ashby")
+    res = asyncio.run(resolver.resolve(_q(
+        "How did you hear about us?", kind="select",
+        options=["LinkedIn", "Company career site", "Referral", "Other"])))
+    assert res.value == "Company career site"   # matched the ATS "Company Website" label
+    assert res.source is ResolutionSource.DISCOVERY
+
+
+def test_how_heard_falls_back_to_other_when_channel_not_offered():
+    """If the form doesn't offer our channel but has 'Other', that's the honest pick."""
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    resolver.current_job = _job("greenhouse")
+    res = asyncio.run(resolver.resolve(_q(
+        "How did you hear about us?", kind="select",
+        options=["Referral", "Job fair", "Other"])))
+    assert res.value == "Other"
+    assert res.source is ResolutionSource.DISCOVERY
+
+
+def test_how_heard_bails_when_dropdown_lacks_channel_and_other():
+    """No matching option and no 'Other' → bail to the human (we won't force a wrong pick)."""
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    resolver.current_job = _job("greenhouse")
+    res = asyncio.run(resolver.resolve(_q(
+        "How did you hear about us?", kind="select",
+        options=["Referral", "Job fair", "Recruiter"])))
+    assert res.needs_review is True
+    assert res.source is ResolutionSource.REVIEW
+
+
+def test_how_heard_bails_when_no_discovery_source():
+    """No per-job source to derive from (e.g. resolver used outside the apply loop) → bail."""
     resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
     res = asyncio.run(resolver.resolve(_q("How did you hear about us?", kind="select", required=False)))
     assert res.needs_review is True
+
+
+def test_how_heard_never_invokes_the_llm_even_with_draft_enabled():
+    """Honesty invariant (owner directive 2026-06-21): how-heard is derived deterministically
+    from the discovery source and is intercepted BEFORE the bank/LLM/essay tiers — even as a
+    free-text field with BOTH the LLM tier and freeform drafting enabled, the LLM is never
+    invoked (it can't fabricate a source)."""
+    llm = StubLLM(reply=_draft_reply())
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo(),
+                              llm_client=llm, draft_freeform=True)
+    resolver.current_job = _job("greenhouse")
+    res = asyncio.run(resolver.resolve(_q("How did you hear about us?", kind="textarea")))
+    assert res.value == "Company Website"        # derived, not drafted
+    assert res.source is ResolutionSource.DISCOVERY
+    assert llm.last_prompt == ""                 # the LLM/copilot was NEVER invoked
 
 
 def test_bank_exact_match_ignores_trailing_required_marker(answer_repo):

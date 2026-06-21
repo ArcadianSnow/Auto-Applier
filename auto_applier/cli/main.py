@@ -2514,6 +2514,12 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
     # prerequisites) — the launcher then falls back to the OS default browser.
     _session_holder: dict[str, BrowserSession | None] = {"session": None}
 
+    # Shared manual-takeover tracker: the headed launcher engages it when the user opens a
+    # job in the bot's Chrome window, the scheduler reads it as an apply-only gate so it
+    # stops driving the browser (gather stages keep running) until that tab closes.
+    from auto_applier.web.control import ManualTakeover
+    _takeover = ManualTakeover()
+
     if no_scheduler:
         click.echo("! --no-scheduler: read-only diagnostics mode "
                    "(read-only API answers; no pipeline work).")
@@ -2613,6 +2619,7 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
                 cycle_interval_s=effective_cycle_interval,
                 quiet_hours=quiet_hours_window,
                 pause_predicate=pause_predicate,
+                apply_gate=_takeover.is_active,
                 maintenance=_maintenance,
                 maintenance_interval_s=settings.retention.maintenance_interval_s,
             )
@@ -2667,6 +2674,7 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
 
     launcher = HeadedBrowserLauncher(
         new_page=_launcher_new_page if service is not None else None,
+        takeover=_takeover if service is not None else None,
     )
 
     app = create_app(
