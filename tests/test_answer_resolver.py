@@ -25,6 +25,7 @@ from auto_applier.resume.answer_resolver import (
 from auto_applier.resume.answer_resolver import (
     ProfileField, classify_profile_field, is_open_ended,
 )
+from auto_applier.resume.answer_resolver import _split_location
 from auto_applier.resume.factbank import Contact, FactBank
 from auto_applier.resume.seed_answers import seed_from_v2_file
 from auto_applier.sources.browser.apply_base import CustomQuestion
@@ -843,3 +844,70 @@ def _make_empty_repo():
         def upsert(self, _a): return None
 
     return _Empty()
+
+
+# --------------------------------------------------------------- location parsing (US-aware)
+
+
+class TestSplitLocation:
+    """`_split_location` must not mistake a US state for a country (the 'Country = Texas' bug)."""
+
+    def test_city_state_abbrev_resolves_us_country(self):
+        assert _split_location("Dallas, TX") == ("Dallas", "TX", "United States")
+
+    def test_city_state_fullname_resolves_us_country(self):
+        assert _split_location("Austin, Texas") == ("Austin", "Texas", "United States")
+
+    def test_bare_state_resolves_us_country(self):
+        assert _split_location("Texas") == ("", "Texas", "United States")
+
+    def test_genuine_city_country_unaffected(self):
+        assert _split_location("Amsterdam, Netherlands") == ("Amsterdam", "", "Netherlands")
+
+    def test_three_part_with_country_unchanged(self):
+        assert _split_location("Dallas, TX, United States") == ("Dallas", "TX", "United States")
+
+    def test_bare_country_unchanged(self):
+        assert _split_location("Canada") == ("", "", "Canada")
+
+    def test_empty(self):
+        assert _split_location("") == ("", "", "")
+
+
+# --------------------------------------------------------------- optional onboarding extras
+
+
+class TestOnboardingExtras:
+    """Nationality / notice period / years-of-experience / gender fill from the bank instead of
+    bailing — the fields that were blank in the real test-pass screenshot."""
+
+    def test_nationality_fills_from_bank(self, answer_repo):
+        resolver = AnswerResolver(_bank(primary_nationality="United States"), answer_repo)
+        res = asyncio.run(resolver.resolve(_q("Primary Nationality")))
+        assert res.value == "United States"
+        assert res.needs_review is False
+
+    def test_nationality_unset_bails_to_review(self, answer_repo):
+        res = asyncio.run(AnswerResolver(_bank(), answer_repo).resolve(_q("Primary Nationality")))
+        assert res.needs_review is True
+
+    def test_notice_period_fills_from_bank(self, answer_repo):
+        resolver = AnswerResolver(_bank(notice_period="Two weeks"), answer_repo)
+        res = asyncio.run(resolver.resolve(_q("What is your notice period?")))
+        assert res.value == "Two weeks"
+
+    def test_years_experience_computed_from_work_history(self, answer_repo):
+        from auto_applier.resume.factbank import WorkEntry
+        bank = _bank(work_history=[WorkEntry(company="A", title="DBA", start="2018", end="Present")])
+        res = asyncio.run(AnswerResolver(bank, answer_repo).resolve(
+            _q("Number of relevant work experience")))
+        assert res.value and int(res.value) >= 6      # 2026 − 2018 = 8; robust lower bound
+
+    def test_gender_fills_from_eeo(self, answer_repo):
+        resolver = AnswerResolver(_bank(eeo={"gender": "Male"}), answer_repo)
+        res = asyncio.run(resolver.resolve(_q("What is your gender?")))
+        assert res.value == "Male"
+
+    def test_gender_unset_stays_prefer_not_to_answer(self, answer_repo):
+        res = asyncio.run(AnswerResolver(_bank(), answer_repo).resolve(_q("What is your gender?")))
+        assert res.value == "Prefer not to answer"

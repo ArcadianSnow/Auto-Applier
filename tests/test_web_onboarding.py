@@ -424,6 +424,47 @@ class TestEndpointWorkAuth:
         assert bank.requires_sponsorship is None
 
 
+class TestEndpointExtras:
+    """The optional /api/onboarding/extras step (nationality / notice period / gender)."""
+
+    def test_extras_persist_and_echo(self, settings: Settings, web_state: WebState):
+        with _make_client(web_state) as client:
+            r = client.post("/api/onboarding/extras", json={
+                "primary_nationality": "United States",
+                "notice_period": "Two weeks",
+                "gender": "Male",
+            })
+        assert r.status_code == 200
+        bank = load_fact_bank(settings.data_dir)
+        assert bank.primary_nationality == "United States"
+        assert bank.notice_period == "Two weeks"
+        assert bank.eeo.get("gender") == "Male"
+        body = r.json()  # echoed for wizard prefill
+        assert body["primary_nationality"] == "United States"
+        assert body["eeo"]["gender"] == "Male"
+
+    def test_blank_gender_clears_eeo(self, settings: Settings, web_state: WebState):
+        with _make_client(web_state) as client:
+            client.post("/api/onboarding/extras", json={"gender": "Male"})
+            r = client.post("/api/onboarding/extras", json={"gender": ""})
+        assert r.status_code == 200
+        assert "gender" not in load_fact_bank(settings.data_dir).eeo
+
+    def test_fact_bank_round_trips_extras_and_relocation(self, settings: Settings):
+        # Covers the new fields AND the previously-dropped relocation serialization.
+        bank = FactBank(
+            contact=Contact(name="A", email="a@x"),
+            primary_nationality="Canada", notice_period="One month",
+            eeo={"gender": "Female"}, relocation={"willing": ["Netherlands"]},
+        )
+        save_fact_bank(settings.data_dir, bank)
+        loaded = load_fact_bank(settings.data_dir)
+        assert loaded.primary_nationality == "Canada"
+        assert loaded.notice_period == "One month"
+        assert loaded.eeo == {"gender": "Female"}
+        assert loaded.relocation == {"willing": ["Netherlands"]}
+
+
 class TestEndpointTargeting:
 
     def test_persists_into_user_config(
@@ -536,6 +577,37 @@ class TestGoalChat:
         assert draft["salary_floor"] == 150000           # deterministic parse
         assert draft["preferences"] == ["work-life balance"]
         # The chat does NOT persist — nothing is written until the user saves via /targeting.
+
+    def test_salary_stated_early_skips_comp_step(self, web_state, monkeypatch):
+        client = self._client(web_state, monkeypatch)
+        # Salary volunteered in the roles answer → captured, and the comp step is skipped.
+        r = client.post("/api/onboarding/goal-chat",
+                        json={"step": "roles", "answer": "data analyst, I make $82k", "draft": {}})
+        draft = r.json()["draft"]
+        assert draft["salary_floor"] == 82000
+        r2 = client.post("/api/onboarding/goal-chat",
+                         json={"step": "location", "answer": "remote in the US", "draft": draft})
+        body = r2.json()
+        assert body["next_step"] == "priorities"          # comp was skipped
+        assert "82,000" in body["reply"]
+
+    def test_vague_roles_offer_suggestions(self, web_state, monkeypatch):
+        client = self._client(web_state, monkeypatch)
+        r = client.post("/api/onboarding/goal-chat",
+                        json={"step": "roles", "answer": "something data related", "draft": {}})
+        body = r.json()
+        # With a single parsed title, adjacent roles are offered for the user to opt into.
+        assert body["suggestions"]["roles"]
+
+    def test_relocation_intent_preserved(self, web_state, monkeypatch):
+        client = self._client(web_state, monkeypatch)
+        r = client.post("/api/onboarding/goal-chat",
+                        json={"step": "location",
+                              "answer": "ideally remote but open to relocating abroad with sponsorship",
+                              "draft": {"titles": ["Data Analyst"]}})
+        body = r.json()
+        assert body["draft"]["onsite_ok"] is True
+        assert any("relocation" in p.lower() for p in body["draft"]["preferences"])
         assert client.get("/api/onboarding/state").json()["has_targeting"] is False
 
 

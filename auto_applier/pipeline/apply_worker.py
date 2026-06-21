@@ -331,6 +331,12 @@ class ApplyWorker:
             draft_freeform=settings.draft_freeform_answers,
         )
 
+        # Dry-run leaves jobs in QUEUED_APPLY (no APPLYING transition), so without this the
+        # scheduler re-picks the same jobs every cycle and re-runs the fill forever. The worker
+        # is built once per serve session and reused across cycles, so an in-memory "already
+        # dry-run-tested" set stops the loop (resets on restart — fine for testing).
+        self._dry_run_tested_job_ids: set[str] = set()
+
     # -- public ------------------------------------------------------------
 
     def _effective_mode(self) -> ApplyMode:
@@ -475,6 +481,14 @@ class ApplyWorker:
                 prior_was_apply = False
                 continue
 
+            # Dry-run idempotency: a dry-run job stays in QUEUED_APPLY, so the scheduler would
+            # otherwise re-test it (and re-emit apply events) every cycle. Skip jobs already
+            # dry-run-tested this session — checked HERE so the @stage("apply") wrapper doesn't
+            # even fire for a skip. (Resets on restart — fine for testing.)
+            if self._dry_run and job.id in self._dry_run_tested_job_ids:
+                summary.skipped += 1
+                continue
+
             # Per-job error isolation. The @stage("apply") wrapper inside _process_one
             # records error events; we catch here so one driver crash doesn't kill the
             # rest of the run.
@@ -562,6 +576,8 @@ class ApplyWorker:
 
         if self._dry_run:
             # No state transition (we never went to APPLYING) — job stays in QUEUED_APPLY.
+            # Remember it so the next cycle doesn't re-run the fill on the same job.
+            self._dry_run_tested_job_ids.add(job.id)
             return None
 
         # On a confirmed APPLIED, archive the (generic-named) manually-assigned files — move
@@ -627,8 +643,12 @@ class ApplyWorker:
         market = None
         if cfg.market_source and cfg.market_source.lower() not in ("", "none", "off"):
             market = self._market.estimate(title=job.title, location=job.location)
+        # Fall back to the targeting salary floor: onboarding writes targeting.salary_floor (the
+        # discovery filter), not salary.floor, so without this the user's stated floor never
+        # reaches the salary answer and it bails to REVIEW.
+        user_floor = cfg.floor if cfg.floor else self._settings.targeting.salary_floor
         rec = recommend_ask(
-            user_floor=cfg.floor,
+            user_floor=user_floor,
             user_ceiling=cfg.ceiling,
             posted=posted,
             market=market,

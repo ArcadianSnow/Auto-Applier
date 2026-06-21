@@ -33,10 +33,13 @@ __all__ = [
     "ChatStep",
     "GOAL_STEPS",
     "apply_updates",
+    "detect_relocation",
     "first_step",
     "next_step_after",
     "parse_answer",
+    "scan_salary",
     "step_for_key",
+    "suggest_adjacent_roles",
     "summarize",
 ]
 
@@ -83,6 +86,38 @@ GOAL_STEPS: tuple[ChatStep, ...] = (
 )
 
 _SENIORITY = {"junior", "mid", "senior", "staff"}
+
+# Cues that the user is open to moving for a role (so on-site shouldn't be filtered out, and the
+# intent shouldn't be silently dropped when it's mentioned in the location answer).
+_RELOCATION_CUES = (
+    "relocat", "abroad", "overseas", "visa", "sponsor", "international",
+    "moving", "emigrat", "expat", "another country", "send me",
+)
+
+# Deterministic adjacent-role suggestions for a vague/narrow roles answer. The 8B model is
+# unreliable at "expand this into adjacent titles," so this is a curated map (LLM stays a bounded
+# parser, never the source of suggestions — the same design posture as the rest of this module).
+# Each entry: (keyword needles → suggested titles). First matching family wins; already-chosen
+# titles are filtered out by the caller.
+_ROLE_FAMILIES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("data analyst", "data analysis", "analytics", "business intelligence", "bi ",
+      "data related", "something with data", " data"),
+     ("Data Analyst", "Data Engineer", "Analytics Engineer", "BI Analyst", "Data Scientist")),
+    (("database", "dba", "sql server", "postgres", "oracle"),
+     ("Database Administrator", "Data Engineer", "Database Engineer", "Analytics Engineer")),
+    (("machine learning", "ml engineer", " ml ", "deep learning", " ai "),
+     ("Machine Learning Engineer", "Data Scientist", "MLOps Engineer", "AI Engineer")),
+    (("devops", "sre", "site reliability", "infrastructure", "platform eng"),
+     ("DevOps Engineer", "Site Reliability Engineer", "Platform Engineer", "Cloud Engineer")),
+    (("frontend", "front-end", "front end", "react", "ui engineer"),
+     ("Frontend Engineer", "Full Stack Engineer", "UI Engineer", "Software Engineer")),
+    (("full stack", "fullstack", "full-stack"),
+     ("Full Stack Engineer", "Backend Engineer", "Frontend Engineer", "Software Engineer")),
+    (("backend", "back-end", "back end", "server-side", "api"),
+     ("Backend Engineer", "Software Engineer", "Platform Engineer", "API Engineer")),
+    (("software", "developer", "swe", "programmer", "coding", "engineer"),
+     ("Software Engineer", "Backend Engineer", "Full Stack Engineer", "Platform Engineer")),
+)
 
 
 # --------------------------------------------------------------- flow (deterministic)
@@ -197,6 +232,60 @@ def _parse_comp(answer: str) -> dict:
     return {"salary_floor": int(round(num))}
 
 
+def scan_salary(answer: str) -> int | None:
+    """Opportunistically detect a salary figure stated in free text (e.g. "I make $82k").
+
+    Conservative on purpose: only fires on a number carrying a ``$``/``k``/``m`` cue, or a 4+ digit
+    number near a pay keyword — so "3 years" or a team size won't be misread as salary. Returns
+    annual dollars, or ``None``. Used so the chat doesn't ask for a minimum it was already told."""
+    text = (answer or "").lower()
+    if not text:
+        return None
+    m = re.search(r"\$\s*(\d[\d,]*(?:\.\d+)?)\s*([km])?|\b(\d[\d,]*(?:\.\d+)?)\s*([km])\b", text)
+    if m:
+        if m.group(1) is not None:
+            num = float(m.group(1).replace(",", "")); suffix = m.group(2)
+        else:
+            num = float(m.group(3).replace(",", "")); suffix = m.group(4)
+        if suffix == "k":
+            num *= 1_000
+        elif suffix == "m":
+            num *= 1_000_000
+        elif num < 1000:
+            num *= 1_000
+        return int(round(num))
+    if re.search(r"\b(salary|pay|paid|make|making|earn|earning|comp|compensation|income|wage)\b", text):
+        m2 = re.search(r"\b(\d[\d,]{3,})\b", text)  # 4+ digits → looks like an annual figure
+        if m2:
+            return int(m2.group(1).replace(",", ""))
+    return None
+
+
+def detect_relocation(answer: str) -> bool:
+    """True if the answer signals openness to relocating / working abroad / needing sponsorship."""
+    return any(cue in (answer or "").lower() for cue in _RELOCATION_CUES)
+
+
+def suggest_adjacent_roles(titles: list[str], answer: str, *, limit: int = 5) -> list[str]:
+    """Deterministic adjacent-role suggestions for a vague/narrow roles answer (the "suggest, you
+    confirm" widening). Returns titles NOT already chosen, capped at ``limit``; empty when nothing
+    matches (no guessing — the caller only surfaces these for the user to opt into)."""
+    hay = " " + (" ".join(titles) + " " + (answer or "")).lower() + " "
+    have = {t.strip().lower() for t in titles}
+    out: list[str] = []
+    seen: set[str] = set()
+    for needles, family in _ROLE_FAMILIES:
+        if any(n in hay for n in needles):
+            for role in family:
+                key = role.lower()
+                if key in have or key in seen:
+                    continue
+                seen.add(key)
+                out.append(role)
+            break  # first matching family only — keeps suggestions focused
+    return out[:limit]
+
+
 # --------------------------------------------------------------- per-step finalize
 # Each finalize(raw, answer) merges the LLM's coerced output over the deterministic fallback, so
 # finalize({}, answer) == the pure fallback (the llm=None / LLM-error path reuses the same code).
@@ -236,6 +325,10 @@ def _finalize_location(raw: dict, answer: str) -> dict:
 
     remote_ok = raw["remote_ok"] if isinstance(raw.get("remote_ok"), bool) else remote_default
     onsite_ok = raw["onsite_ok"] if isinstance(raw.get("onsite_ok"), bool) else onsite_default
+    # Openness to relocating/abroad means on-site roles are in play (don't filter them out just
+    # because the literal answer led with "remote") — and the intent must not be silently dropped.
+    if detect_relocation(answer):
+        onsite_ok = True
     return {"locations": locations, "remote_ok": remote_ok, "onsite_ok": onsite_ok}
 
 
@@ -280,20 +373,39 @@ async def parse_answer(step_key: str, answer: str, llm=None) -> dict:
         return _parse_comp(answer)
     finalize = _FINALIZE[step_key]
     if llm is None or not answer:
-        return finalize({}, answer)
-    try:
-        raw = await _llm_parse(step, answer, llm)
-    except Exception:  # noqa: BLE001 — degrade to the deterministic parse, never surface mid-chat
-        raw = {}
-    return finalize(raw, answer)
+        updates = finalize({}, answer)
+    else:
+        try:
+            raw = await _llm_parse(step, answer, llm)
+        except Exception:  # noqa: BLE001 — degrade to the deterministic parse, never surface mid-chat
+            raw = {}
+        updates = finalize(raw, answer)
+    # Opportunistically capture a salary the user volunteered in an earlier free-text answer (e.g.
+    # "...I make $82k") so the dedicated comp step doesn't ask for it a second time.
+    sal = scan_salary(answer)
+    if sal is not None:
+        updates = {**updates, "salary_floor": sal}
+    return updates
 
 
 def apply_updates(draft: dict | None, updates: dict | None) -> dict:
     """Merge a step's field updates into the running draft (a plain dict mirroring TargetingConfig).
-    Lists arrive already cleaned/de-duped from :func:`parse_answer`; scalars overwrite."""
+    Lists arrive already cleaned/de-duped from :func:`parse_answer`; scalars overwrite. ``preferences``
+    is the exception — it ACCUMULATES (union, de-duped) so a relocation note captured at the location
+    step survives the later priorities step instead of being clobbered."""
     merged = dict(draft or {})
     for k, v in (updates or {}).items():
-        merged[k] = v
+        if k == "preferences" and isinstance(v, list):
+            existing = list(merged.get("preferences") or [])
+            seen = {str(x).strip().lower() for x in existing}
+            for item in v:
+                key = str(item).strip().lower()
+                if key and key not in seen:
+                    seen.add(key)
+                    existing.append(item)
+            merged["preferences"] = existing
+        else:
+            merged[k] = v
     return merged
 
 

@@ -23,9 +23,72 @@
       </ol>
     </section>
 
+    {# -------- AI engine setup (first run; surfaced, never gated) -------- #}
+    <section class="card onboarding-step" x-show="step === 'ai-engine'">
+      <h2>Step 1 &mdash; Set up the AI engine</h2>
+      <p class="muted">
+        Auto Applier scores and tailors everything <strong>locally</strong> &mdash; no cloud, no cost.
+        That needs two one-time downloads: the AI models (via Ollama) and a browser for applying.
+        Start them here; you can keep onboarding while they run in the background.
+      </p>
+
+      {# Ollama unreachable → point at the install / start #}
+      <p class="muted small" x-show="setupLlmUnreachable()">
+        Ollama isn&rsquo;t running.
+        <a href="https://ollama.com/download" target="_blank" rel="noopener">Get Ollama</a>,
+        start it, then click &ldquo;Pull AI models&rdquo;.
+      </p>
+
+      <div class="setup-action">
+        <button type="button" class="primary-btn"
+                :disabled="setup.pull.status === 'running'" @click="startPull()">
+          <span x-show="setup.pull.status !== 'running'">Pull AI models</span>
+          <span x-show="setup.pull.status === 'running'">Pulling&hellip;</span>
+        </button>
+        <div class="progress" x-show="setup.pull.status === 'running'">
+          <div class="progress-bar" :style="`width:${setup.pull.percent || 0}%`"></div>
+        </div>
+        <span class="muted small" x-show="setup.pull.status === 'running'"
+              x-text="`${setup.pull.model || ''} (${setup.pull.model_index || 0}/${setup.pull.model_count || 2}) · ${setup.pull.phase || ''} ${setup.pull.detail || ''}`"></span>
+        <span class="muted small" x-show="setup.pull.status === 'done'">&check; Models ready.</span>
+        <span class="muted small" x-show="setup.pull.status === 'error'"
+              x-text="`Pull failed: ${setup.pull.error || ''}`"></span>
+      </div>
+
+      <div class="setup-action">
+        <button type="button" class="secondary-btn"
+                :disabled="setup.browser.status === 'running'" @click="startBrowserInstall()">
+          <span x-show="setup.browser.status !== 'running'">Install the browser</span>
+          <span x-show="setup.browser.status === 'running'">Installing&hellip;</span>
+        </button>
+        <span class="muted small" x-show="setup.browser.status === 'done'">&check; Browser ready.</span>
+        <span class="muted small" x-show="setup.browser.status === 'error'"
+              x-text="`Install failed: ${setup.browser.error || ''}`"></span>
+      </div>
+
+      {# readiness checklist (green when ready; amber items list their fix) #}
+      <ul class="readiness-list" x-show="setup.readiness.length">
+        <template x-for="c in setup.readiness" :key="c.name">
+          <li :class="`readiness-${c.status.toLowerCase()}`">
+            <span class="readiness-dot"></span>
+            <strong x-text="c.name === 'llm' ? 'AI models' : 'Browser'"></strong>
+            <span class="muted small" x-text="c.detail"></span>
+          </li>
+        </template>
+      </ul>
+
+      <p class="muted small">
+        These can finish later &mdash; you don&rsquo;t have to wait. Continue and the dashboard will
+        flag anything still missing.
+      </p>
+      <div class="action-row">
+        <button class="primary-btn" @click="step = 'contact'">Continue</button>
+      </div>
+    </section>
+
     {# -------- contact -------- #}
     <section class="card onboarding-step" x-show="step === 'contact'">
-      <h2>Step 1 &mdash; Contact</h2>
+      <h2>Step 2 &mdash; Contact</h2>
       <p class="muted">
         How forms should fill your name + email + phone fields.
       </p>
@@ -59,7 +122,7 @@
 
     {# -------- work history -------- #}
     <section class="card onboarding-step" x-show="step === 'work-history'">
-      <h2>Step 2 &mdash; Work history</h2>
+      <h2>Step 3 &mdash; Work history</h2>
       <p class="muted">
         Every role the bot can pull from when tailoring résumés. Add
         bullets one per line — the fabrication guard only allows facts
@@ -99,7 +162,7 @@
 
     {# -------- skills -------- #}
     <section class="card onboarding-step" x-show="step === 'skills'">
-      <h2>Step 3 &mdash; Skills</h2>
+      <h2>Step 4 &mdash; Skills</h2>
       <p class="muted">
         Comma- or newline-separated. The bot uses these for the embedding
         pre-filter and the fabrication guard — only listed skills can
@@ -116,7 +179,7 @@
 
     {# -------- work auth -------- #}
     <section class="card onboarding-step" x-show="step === 'work-auth'">
-      <h2>Step 4 &mdash; Work authorization</h2>
+      <h2>Step 5 &mdash; Work authorization</h2>
       <p class="muted">
         Required so the apply path doesn't have to guess. There is no
         silent default — leave the radio on "skip" if you'd rather the
@@ -139,7 +202,7 @@
 
     {# -------- targeting -------- #}
     <section class="card onboarding-step" x-show="step === 'targeting'">
-      <h2>Step 5 &mdash; Targeting</h2>
+      <h2>Step 6 &mdash; Targeting</h2>
       <p class="muted">
         What the bot searches for. Titles + locations seed the discovery
         producer; salary floor filters out below-floor postings before
@@ -164,6 +227,13 @@
             </div>
           </template>
           <div class="muted small" x-show="goalChat.busy">thinking&hellip;</div>
+        </div>
+        <div class="goal-suggest" x-show="goalChat.suggestions && goalChat.suggestions.length" x-cloak>
+          <span class="muted small">Related roles &mdash; tap to add:</span>
+          <template x-for="role in goalChat.suggestions" :key="role">
+            <button type="button" class="chip" @click="addSuggestedRole(role)"
+                    x-text="`+ ${role}`"></button>
+          </template>
         </div>
         <div class="goal-chat-input" x-show="!goalChat.done">
           <input type="text" x-model="goalChat.answer" :disabled="goalChat.busy"
@@ -233,7 +303,7 @@
 
     {# -------- telemetry -------- #}
     <section class="card onboarding-step" x-show="step === 'telemetry'">
-      <h2>Step 6 &mdash; Telemetry (optional)</h2>
+      <h2>Step 7 &mdash; Telemetry (optional)</h2>
       <p class="muted">
         Opt-in error mirror — errors only, no PII, no résumé content. Off
         by default. Helps the maintainers see which selectors and
@@ -254,7 +324,7 @@
 
     {# -------- email (optional, Direction 4 Phase D) -------- #}
     <section class="card onboarding-step" x-show="step === 'email'">
-      <h2>Step 7 &mdash; Connect email (optional)</h2>
+      <h2>Step 8 &mdash; Connect email (optional)</h2>
       <p class="muted">
         Let the bot read your inbox <strong>locally</strong> to track what happens after you apply
         (replies, rejections, interviews) on the dashboard. Read-only, on-device, nothing leaves
@@ -295,7 +365,7 @@
 
     {# -------- web prefs -------- #}
     <section class="card onboarding-step" x-show="step === 'web-prefs'">
-      <h2>Step 8 &mdash; Control preferences</h2>
+      <h2>Step 9 &mdash; Control preferences</h2>
       <p class="muted">
         The F6 hotkey instantly hands the keyboard back to you (the bot
         pauses); idle-detect pauses while you're actively using the
@@ -314,7 +384,44 @@
         <input type="number" x-model.number="webPrefs.idle_threshold_s" min="1" placeholder="60">
       </label>
       <div class="action-row">
-        <button class="primary-btn" :disabled="busy" @click="saveWebPrefs()">Save &amp; finish</button>
+        <button class="primary-btn" :disabled="busy" @click="saveWebPrefs()">Save &amp; continue</button>
+      </div>
+    </section>
+
+    {# -------- extras (optional screener fields) -------- #}
+    <section class="card onboarding-step" x-show="step === 'extras'">
+      <h2>Step 10 &mdash; A few more details (optional)</h2>
+      <p class="muted">
+        Optional answers to common application questions, so the bot can fill them instead of
+        leaving them blank for you. Skip any &mdash; a blank just means the bot hands that field to
+        you to fill. Gender is voluntary self-ID; left blank it stays &ldquo;prefer not to answer.&rdquo;
+      </p>
+      <div class="form-grid">
+        <label>Primary nationality
+          <input type="text" x-model="extras.primary_nationality" placeholder="United States">
+        </label>
+        <label>Notice period
+          <select x-model="extras.notice_period">
+            <option value="">&mdash; skip &mdash;</option>
+            <option value="Immediate">Immediate</option>
+            <option value="One week">One week</option>
+            <option value="Two weeks">Two weeks</option>
+            <option value="One month">One month</option>
+            <option value="Two months">Two months</option>
+          </select>
+        </label>
+        <label>Gender (optional self-ID)
+          <select x-model="extras.gender">
+            <option value="">Prefer not to answer</option>
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
+            <option value="Non-binary">Non-binary</option>
+          </select>
+        </label>
+      </div>
+      <div class="action-row">
+        <button class="primary-btn" :disabled="busy" @click="saveExtras()">Save &amp; finish</button>
+        <button class="secondary-btn" :disabled="busy" @click="skipExtras()">Skip</button>
       </div>
     </section>
 

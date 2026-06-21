@@ -9,6 +9,7 @@
  */
 
 const STEPS = [
+  { key: 'ai-engine',    title: 'Set up the AI engine' },
   { key: 'contact',      title: 'Contact' },
   { key: 'work-history', title: 'Work history' },
   { key: 'skills',       title: 'Skills' },
@@ -17,6 +18,7 @@ const STEPS = [
   { key: 'telemetry',    title: 'Telemetry' },
   { key: 'email',        title: 'Email (optional)' },
   { key: 'web-prefs',    title: 'Control prefs' },
+  { key: 'extras',       title: 'More details (optional)' },
   { key: 'done',         title: 'Done' },
 ];
 
@@ -32,9 +34,16 @@ function onboarding() {
     extractNote: '',
     seed: { status: 'idle', probed: 0, kept: 0, dead: 0, note: '', error: '' },
     _seedPoll: null,
+    // First-run "Set up the AI engine" step: readiness checklist + two in-app bootstrap jobs.
+    setup: {
+      readiness: [],
+      pull: { status: 'idle', percent: 0, phase: '', model: '', model_index: 0, model_count: 2, error: '' },
+      browser: { status: 'idle', phase: '', error: '' },
+    },
+    _setupPoll: { 'pull-models': null, 'install-browser': null },
     goalChat: {
       open: false, busy: false, done: false, applied: false,
-      step: null, answer: '', messages: [], draft: {},
+      step: null, answer: '', messages: [], draft: {}, suggestions: [],
     },
 
     contact: { name: '', email: '', phone: '', location: '', links: {} },
@@ -55,6 +64,8 @@ function onboarding() {
       hotkey_enabled: true, hotkey: 'F6',
       idle_detect_enabled: false, idle_threshold_s: 60,
     },
+    // Optional screener extras so the bot can fill those fields instead of leaving them blank.
+    extras: { primary_nationality: '', notice_period: '', gender: '' },
 
     async load() {
       try {
@@ -77,6 +88,13 @@ function onboarding() {
         if (order.indexOf(this.step) > order.indexOf('work-auth')) {
           this.step = 'work-auth';
         }
+        // A brand-new user (nothing saved yet) should meet the AI-engine setup FIRST —
+        // otherwise scoring/discovery silently fail with no models. Returning/partly-
+        // onboarded users are NOT forced through it (they reach it via the dashboard
+        // "Setup needed" panel); for them the first-incomplete jump above stands.
+        if (this._isFreshProfile()) this.step = 'ai-engine';
+        // Load the setup readiness checklist (LLM models + browser) for the AI-engine step.
+        this.loadReadiness();
         // Reflect an in-flight background board search (e.g. the tab was reopened) and resume
         // polling so the user sees it finish even across a reload.
         try {
@@ -86,6 +104,16 @@ function onboarding() {
             if (this.seed.status === 'running') this._pollSeed();
           }
         } catch (e) { /* ignore */ }
+        // Same for an in-flight model pull / browser install.
+        for (const [action, key] of [['pull-models', 'pull'], ['install-browser', 'browser']]) {
+          try {
+            const r = await fetch(`/api/setup/${action}/status`);
+            if (r.ok) {
+              this.setup[key] = await r.json();
+              if (this.setup[key].status === 'running') this._pollSetup(action, key);
+            }
+          } catch (e) { /* ignore */ }
+        }
       } catch (e) {
         console.error('onboarding load failed', e);
       }
@@ -124,12 +152,18 @@ function onboarding() {
         port: ib.port || 993,
       };
       this.webPrefs = { ...this.webPrefs, ...(state.web || {}) };
+      this.extras = {
+        primary_nationality: state.primary_nationality || '',
+        notice_period: state.notice_period || '',
+        gender: (state.eeo || {}).gender || '',
+      };
     },
 
     _firstIncomplete() {
       // STEPS keys map 1:1 to status flags (with the special 'done'
       // pseudo-step at the end). Walk them in order; first false wins.
       const flagMap = {
+        'ai-engine':    null,   // surfaced, not gated (models can lag onboarding)
         'contact':      'has_contact',
         'work-history': 'has_work_history',
         'skills':       'has_skills',
@@ -138,6 +172,7 @@ function onboarding() {
         'telemetry':    'has_telemetry_decision',
         'email':        null,   // optional — no completion gate
         'web-prefs':    null,   // optional — no completion gate
+        'extras':       null,   // optional — no completion gate
       };
       for (const s of STEPS) {
         if (s.key === 'done') return 'done';
@@ -145,6 +180,11 @@ function onboarding() {
         if (flag && !this.status?.[flag]) return s.key;
       }
       return 'done';
+    },
+
+    _isFreshProfile() {
+      // "Brand new" = no contact saved yet. Used to land first-run users on the AI-engine step.
+      return !this.status?.has_contact;
     },
 
     goto(key) {
@@ -157,6 +197,11 @@ function onboarding() {
     },
 
     isDone(key) {
+      // AI engine: not a completion gate; reflect whether the readiness checks are all green.
+      if (key === 'ai-engine') {
+        return this.setup.readiness.length > 0
+          && this.setup.readiness.every(c => c.status === 'PASS');
+      }
       // Email is optional + not in the completion gate; reflect whether it's connected.
       if (key === 'email') return !!this.status?.inbox?.enabled;
       const flagMap = {
@@ -266,6 +311,61 @@ function onboarding() {
           if (this.seed.status !== 'running') {
             clearInterval(this._seedPoll);
             this._seedPoll = null;
+          }
+        } catch (e) { /* transient — keep polling */ }
+      }, 1500);
+    },
+
+    // ---- AI-engine setup (readiness + in-app model pull / browser install) ----
+
+    async loadReadiness() {
+      try {
+        const r = await fetch('/api/setup/readiness');
+        if (!r.ok) return;
+        const j = await r.json();
+        this.setup.readiness = j.checks || [];
+      } catch (e) { /* best-effort */ }
+    },
+
+    setupLlmUnreachable() {
+      // True when Ollama itself isn't reachable (vs. just missing models) — surface a Get-Ollama link.
+      const llm = (this.setup.readiness || []).find(c => c.name === 'llm');
+      return !!llm && llm.status !== 'PASS' && /unreachable/i.test(llm.detail || '');
+    },
+
+    async startPull() {
+      try {
+        const r = await fetch('/api/setup/pull-models/start', { method: 'POST' });
+        this.setup.pull = await r.json();
+      } catch (e) {
+        this.setup.pull = { status: 'error', error: String(e) };
+        return;
+      }
+      this._pollSetup('pull-models', 'pull');
+    },
+
+    async startBrowserInstall() {
+      try {
+        const r = await fetch('/api/setup/install-browser/start', { method: 'POST' });
+        this.setup.browser = await r.json();
+      } catch (e) {
+        this.setup.browser = { status: 'error', error: String(e) };
+        return;
+      }
+      this._pollSetup('install-browser', 'browser');
+    },
+
+    _pollSetup(action, key) {
+      if (this._setupPoll[action]) clearInterval(this._setupPoll[action]);
+      this._setupPoll[action] = setInterval(async () => {
+        try {
+          const r = await fetch(`/api/setup/${action}/status`);
+          if (!r.ok) return;
+          this.setup[key] = await r.json();
+          if (this.setup[key].status !== 'running') {
+            clearInterval(this._setupPoll[action]);
+            this._setupPoll[action] = null;
+            this.loadReadiness();  // refresh the green/amber checklist
           }
         } catch (e) { /* transient — keep polling */ }
       }, 1500);
@@ -442,7 +542,7 @@ function onboarding() {
     async startGoalChat() {
       this.goalChat = {
         open: true, busy: true, done: false, applied: false,
-        step: null, answer: '', messages: [], draft: {},
+        step: null, answer: '', messages: [], draft: {}, suggestions: [],
       };
       await this._goalPost('');  // empty step => server returns the first question
     },
@@ -474,6 +574,11 @@ function onboarding() {
         this.goalChat.draft = data.draft || this.goalChat.draft;
         this.goalChat.step = data.next_step;
         this.goalChat.done = !!data.done;
+        // "Suggest, you confirm" role widening: keep any chips the server offers until tapped
+        // (only overwrite when a turn actually returns a fresh set).
+        if (data.suggestions && Array.isArray(data.suggestions.roles)) {
+          this.goalChat.suggestions = data.suggestions.roles;
+        }
         if (data.reply) this.goalChat.messages.push({ role: 'bot', text: data.reply });
       } catch (e) {
         this.goalChat.messages.push({ role: 'bot', text: `Error: ${e}` });
@@ -499,6 +604,15 @@ function onboarding() {
       this.goalChat.open = false;
     },
 
+    addSuggestedRole(role) {
+      // Tap a suggested adjacent role → add it to the chat's draft titles (deduped) and drop the chip.
+      const titles = Array.isArray(this.goalChat.draft.titles) ? this.goalChat.draft.titles : [];
+      if (!titles.some(t => String(t).toLowerCase() === role.toLowerCase())) titles.push(role);
+      this.goalChat.draft.titles = titles;
+      this.goalChat.suggestions = this.goalChat.suggestions.filter(r => r !== role);
+      this.goalChat.messages.push({ role: 'bot', text: `Added "${role}".` });
+    },
+
     async saveTelemetry() {
       const payload = {
         enabled: !!this.telemetry.enabled,
@@ -506,7 +620,7 @@ function onboarding() {
         relay_url: this.telemetry.relay_url || null,
       };
       if (await this._post('/api/onboarding/telemetry', payload)) {
-        this.step = 'web-prefs';
+        this.step = 'email';
       }
     },
 
@@ -518,8 +632,23 @@ function onboarding() {
         idle_threshold_s: Number(this.webPrefs.idle_threshold_s) || 60,
       };
       if (await this._post('/api/onboarding/web-prefs', payload)) {
+        this.step = 'extras';
+      }
+    },
+
+    async saveExtras() {
+      const payload = {
+        primary_nationality: this.extras.primary_nationality || '',
+        notice_period: this.extras.notice_period || '',
+        gender: this.extras.gender || '',
+      };
+      if (await this._post('/api/onboarding/extras', payload)) {
         this.step = 'done';
       }
+    },
+
+    skipExtras() {
+      this.step = 'done';
     },
   };
 }

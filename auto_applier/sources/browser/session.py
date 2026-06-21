@@ -17,6 +17,30 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def detect_chrome_channel() -> str | None:
+    """Return ``"chrome"`` if a real Chrome binary is installed, else ``None``.
+
+    Filesystem-only and synchronous (never launches a browser), so it's safe to
+    call from preflight (``doctor.check_browser``) as well as from the session.
+    """
+    if sys.platform == "win32":
+        for p in (
+            Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+            Path.home() / r"AppData\Local\Google\Chrome\Application\chrome.exe",
+        ):
+            if p.exists():
+                return "chrome"
+    elif sys.platform == "darwin":
+        if Path("/Applications/Google Chrome.app").exists():
+            return "chrome"
+    else:
+        for name in ("google-chrome", "google-chrome-stable"):
+            if shutil.which(name):
+                return "chrome"
+    return None
+
+
 class BrowserSession:
     """A persistent, stealthy Chrome context. One shared profile across all sites."""
 
@@ -97,22 +121,7 @@ class BrowserSession:
         return self._context
 
     def _detect_chrome_channel(self) -> str | None:
-        if sys.platform == "win32":
-            for p in (
-                Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
-                Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
-                Path.home() / r"AppData\Local\Google\Chrome\Application\chrome.exe",
-            ):
-                if p.exists():
-                    return "chrome"
-        elif sys.platform == "darwin":
-            if Path("/Applications/Google Chrome.app").exists():
-                return "chrome"
-        else:
-            for name in ("google-chrome", "google-chrome-stable"):
-                if shutil.which(name):
-                    return "chrome"
-        return None
+        return detect_chrome_channel()
 
     async def _apply_stealth(self, pages: list) -> None:
         try:

@@ -591,3 +591,20 @@ def test_canonical_paths_derive_from_job_id(settings):
     assert cover.name == "abc123_cover.txt"
     assert pdf.parent == cover.parent  # both in the same per-job subdir-less folder
     assert pdf.parent == settings.artifacts_dir / "generated"
+
+
+def test_artifact_names_are_human_readable_with_job_and_bank(settings, conn):
+    """With a seeded job + a fact-bank name, the on-disk filename is readable, not a bare UUID,
+    while staying deterministic from job.id (both workers derive the same path)."""
+    from auto_applier.web.onboarding import save_fact_bank
+
+    job = _seed_decided(conn, source_job_id="rd-1", company="Acme", title="Data Engineer")
+    conn.commit()
+    save_fact_bank(settings.data_dir, FactBank(contact=Contact(name="Jane Doe", email="j@x")))
+
+    pdf = generated_resume_path(settings, job.id)
+    cover = generated_cover_letter_path(settings, job.id)
+    assert pdf.name == f"Jane_Doe_Resume_Acme_Data_Engineer_{job.id[:8]}.pdf"
+    assert cover.name == f"Jane_Doe_Cover_Acme_Data_Engineer_{job.id[:8]}.txt"
+    # Deterministic: a second derivation (what the apply worker does) matches.
+    assert generated_resume_path(settings, job.id) == pdf

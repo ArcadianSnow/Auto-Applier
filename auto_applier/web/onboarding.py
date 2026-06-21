@@ -243,6 +243,9 @@ class OnboardingStatus:
             "certifications": list(self.bank.certifications),
             "work_authorization": self.bank.work_authorization,
             "requires_sponsorship": self.bank.requires_sponsorship,
+            "primary_nationality": self.bank.primary_nationality,
+            "notice_period": self.bank.notice_period,
+            "eeo": dict(self.bank.eeo),
             "targeting": self.config.get("targeting") or {},
             "telemetry": self.config.get("telemetry") or {},
             "web": self.config.get("web") or {},
@@ -305,7 +308,12 @@ def _fact_bank_to_dict(bank: FactBank) -> dict:
         "allowed_metrics": list(bank.allowed_metrics),
         "work_authorization": bank.work_authorization,
         "requires_sponsorship": bank.requires_sponsorship,
+        "primary_nationality": bank.primary_nationality,
+        "notice_period": bank.notice_period,
         "eeo": dict(bank.eeo),
+        # Was accepted on read (from_dict) but never written back — round-trip the relocation
+        # preferences too so they survive a save.
+        "relocation": {k: list(v) for k, v in (bank.relocation or {}).items()},
     }
 
 
@@ -394,4 +402,22 @@ def merge_work_auth(bank: FactBank, payload: dict) -> FactBank:
         bank.requires_sponsorship = (
             None if raw is None else bool(raw)
         )
+    return bank
+
+
+def merge_extras(bank: FactBank, payload: dict) -> FactBank:
+    """Optional onboarding extras so the answer resolver can fill common screener fields instead
+    of bailing them to REVIEW. All fields are optional — an empty value clears it (the resolver
+    then bails that field to assisted, never guessing). Gender is a voluntary EEO self-ID stored
+    in the free-form ``eeo`` dict; left blank it stays "prefer not to answer" (honesty invariant)."""
+    if "primary_nationality" in payload:
+        bank.primary_nationality = (payload.get("primary_nationality") or "").strip()
+    if "notice_period" in payload:
+        bank.notice_period = (payload.get("notice_period") or "").strip()
+    if "gender" in payload:
+        gender = (payload.get("gender") or "").strip()
+        if gender:
+            bank.eeo = {**bank.eeo, "gender": gender}
+        else:
+            bank.eeo = {k: v for k, v in bank.eeo.items() if k != "gender"}
     return bank

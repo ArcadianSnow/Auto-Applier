@@ -11,6 +11,36 @@
       </span>
     </div>
 
+    {# ------- first-run "Setup needed" card (spec §11a) ------- #}
+    <section class="card setup-card" x-cloak x-show="setupNotReady()">
+      <h2>Setup needed</h2>
+      <p class="muted">
+        The local AI engine isn&rsquo;t fully set up yet &mdash; without it, scoring and applying
+        can&rsquo;t run. Fix these here (no terminal needed):
+      </p>
+      <ul class="readiness-list">
+        <template x-for="c in readiness.filter(c => c.status !== 'PASS')" :key="c.name">
+          <li :class="`readiness-${c.status.toLowerCase()}`">
+            <span class="readiness-dot"></span>
+            <strong x-text="c.name === 'llm' ? 'AI models' : 'Browser'"></strong>
+            <span class="muted small" x-text="c.detail"></span>
+            <button class="link-btn" x-show="c.name === 'llm'"
+                    :disabled="!!setupBusy['pull-models']" @click="runSetup('pull-models')">
+              Pull models
+            </button>
+            <button class="link-btn" x-show="c.name === 'browser'"
+                    :disabled="!!setupBusy['install-browser']" @click="runSetup('install-browser')">
+              Install browser
+            </button>
+            <span class="muted small" x-show="c.name === 'llm' && setupNote['pull-models']"
+                  x-text="setupNote['pull-models']"></span>
+            <span class="muted small" x-show="c.name === 'browser' && setupNote['install-browser']"
+                  x-text="setupNote['install-browser']"></span>
+          </li>
+        </template>
+      </ul>
+    </section>
+
     {# ------- header / scheduler status ------- #}
     <section class="card status-bar" :class="status.scheduler.paused ? 'is-paused' : ''">
       <div class="status-line">
@@ -30,6 +60,12 @@
           </span>
           <span class="muted" x-show="!status.last_cycle && status.scheduler.running && pauseReasonsList().length === 0">
             &middot; warming up...
+          </span>
+          {# Stopped but onboarding IS done (the "finish onboarding" banner doesn't cover this) —
+             explain why it's idle and what to do, so the dashboard never leaves the user guessing. #}
+          <span class="muted" x-show="!status.scheduler.running && onboarding && onboarding.is_complete">
+            &middot; worker idle &mdash; start it with <code>av3 serve</code> (no <code>--no-scheduler</code>)
+            <span x-show="readiness.some(c => c.status !== 'PASS')">after finishing setup above</span>
           </span>
         </span>
         <span class="status-right">
@@ -108,6 +144,8 @@
               <h3 class="assisted-group-head">Ready to finish
                 <span class="count" x-text="reviewGroups().submit.length"></span>
               </h3>
+              <p class="muted small">The bot filled these. <strong>Open the application</strong>,
+                review + submit it in the window that opens, then click <strong>I submitted it</strong>.</p>
               <ul class="job-list">
                 <template x-for="j in reviewGroups().submit" :key="j.id">
                   <li>
@@ -144,6 +182,8 @@
               <h3 class="assisted-group-head">Sign-in needed
                 <span class="count" x-text="reviewGroups().login.length"></span>
               </h3>
+              <p class="muted small"><strong>Log in</strong> once in the bot's browser; it resumes
+                from there. Or <strong>Open in browser</strong> to apply manually now.</p>
               <ul class="job-list">
                 <template x-for="j in reviewGroups().login" :key="j.id">
                   <li>
@@ -160,6 +200,9 @@
                               :disabled="!!sourceBusy[j.source]"
                               @click="sourceLogin(j.source)"
                               title="Open the sign-in page in the bot's Chrome profile">Log in</button>
+                      <button class="secondary-btn"
+                              :disabled="!!reviewBusy[j.id]"
+                              @click="openInBrowser(j.id)">Open in browser</button>
                       <a class="link-btn" :href="`/jobs/${j.id}`">Details</a>
                     </div>
                     <p class="muted small" x-show="reviewNote[j.id]" x-text="reviewNote[j.id]"></p>
@@ -175,6 +218,9 @@
               <h3 class="assisted-group-head">Needs your decision
                 <span class="count" x-text="reviewGroups().decide.length"></span>
               </h3>
+              <p class="muted small">The bot couldn't complete these. <strong>Open in browser</strong>
+                to take over in the bot's Chrome, or <strong>Mark applied</strong> if you already
+                applied yourself.</p>
               <ul class="job-list">
                 <template x-for="j in reviewGroups().decide" :key="j.id">
                   <li>
@@ -187,6 +233,9 @@
                       <span class="status-pill pill-reason" x-text="j.reason"></span>
                     </div>
                     <div class="action-row">
+                      <button class="secondary-btn"
+                              :disabled="!!reviewBusy[j.id]"
+                              @click="openInBrowser(j.id)">Open in browser</button>
                       <button class="primary-btn"
                               :disabled="!!reviewBusy[j.id]"
                               @click="markApplied(j.id)">Mark applied</button>

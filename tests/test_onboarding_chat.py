@@ -14,10 +14,13 @@ import pytest
 from auto_applier.onboarding_chat import (
     GOAL_STEPS,
     apply_updates,
+    detect_relocation,
     first_step,
     next_step_after,
     parse_answer,
+    scan_salary,
     step_for_key,
+    suggest_adjacent_roles,
     summarize,
 )
 
@@ -185,3 +188,71 @@ class TestMergeAndSummary:
         assert "remote" in text
         assert "$150,000" in text
         assert "work-life balance" in text
+
+
+# --------------------------------------------------------------- widening + salary capture
+
+
+class TestSalaryScan:
+
+    def test_dollar_k(self):
+        assert scan_salary("I currently make $82k and don't want a drop") == 82_000
+
+    def test_bare_k(self):
+        assert scan_salary("around 95k would be good") == 95_000
+
+    def test_keyword_plus_number(self):
+        assert scan_salary("my salary is 110000 a year") == 110_000
+
+    def test_no_false_positive_on_years(self):
+        # No $/k cue and no pay keyword → not a salary.
+        assert scan_salary("I have 8 years of experience on a team of 12") is None
+
+    def test_empty(self):
+        assert scan_salary("") is None
+
+    def test_opportunistic_capture_in_roles_answer(self):
+        # Stated in the roles step → captured so the comp step needn't ask again.
+        updates = _run(parse_answer("roles", "data analyst, I make $82k now", llm=None))
+        assert updates["salary_floor"] == 82_000
+
+
+class TestRelocation:
+
+    def test_detects_cues(self):
+        assert detect_relocation("open to relocating abroad with visa sponsorship")
+        assert detect_relocation("a company that could help with relocation")
+        assert not detect_relocation("fully remote in the US")
+
+    def test_location_keeps_onsite_open_when_relocating(self):
+        # "fully remote ... but open to moving abroad" must NOT switch on-site off.
+        updates = _run(parse_answer(
+            "location", "ideally fully remote but open to relocating abroad", llm=None))
+        assert updates["onsite_ok"] is True
+
+
+class TestRoleSuggestions:
+
+    def test_suggests_adjacent_data_roles(self):
+        out = suggest_adjacent_roles(["Data Analyst"], "something data related")
+        assert "Data Engineer" in out
+        assert "Data Analyst" not in out          # already chosen → not re-suggested
+        assert len(out) <= 5
+
+    def test_empty_when_no_family_matches(self):
+        assert suggest_adjacent_roles(["Chef"], "kitchen work") == []
+
+
+class TestPreferenceAccumulation:
+
+    def test_preferences_union_not_clobbered(self):
+        # A relocation note added at the location step survives the later priorities step.
+        draft = apply_updates({}, {"preferences": ["open to relocation / visa sponsorship"]})
+        draft = apply_updates(draft, {"preferences": ["work-life balance"]})
+        assert draft["preferences"] == [
+            "open to relocation / visa sponsorship", "work-life balance",
+        ]
+
+    def test_preferences_dedup(self):
+        draft = apply_updates({"preferences": ["wlb"]}, {"preferences": ["WLB", "no on-call"]})
+        assert draft["preferences"] == ["wlb", "no on-call"]

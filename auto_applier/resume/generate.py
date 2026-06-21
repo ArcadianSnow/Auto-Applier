@@ -33,8 +33,10 @@ live in the schema, spec §4).
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
+import sqlite3
 from pathlib import Path
 
 from auto_applier.config.settings import Settings
@@ -107,24 +109,75 @@ def _trim_jd_for_cover(job_description: str) -> str:
 
 # --------------------------------------------------------------- canonical paths
 
+def _slug(text: str, maxlen: int = 28) -> str:
+    """ASCII-safe filename fragment: non-alphanumerics → ``_``, trimmed + length-capped."""
+    s = re.sub(r"[^A-Za-z0-9]+", "_", (text or "").strip()).strip("_")
+    return s[:maxlen].strip("_")
+
+
+def _applicant_name(settings: Settings) -> str:
+    """Read the candidate name from the fact bank (master.json). ``""`` on any failure —
+    read directly (not via web.onboarding) to keep the resume layer free of a web import."""
+    try:
+        data = json.loads(
+            (settings.data_dir / "profile" / "master.json").read_text(encoding="utf-8")
+        )
+        return str((data.get("contact") or {}).get("name", "") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def _job_company_title(settings: Settings, job_id: str) -> tuple[str, str]:
+    """(company, title) for a job, read straight from app.db. ``("", "")`` on any failure
+    (missing DB / row / uncommitted job) so the stem degrades to the bare id."""
+    try:
+        conn = sqlite3.connect(str(settings.app_db_path))
+        try:
+            row = conn.execute(
+                "SELECT company, title FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        if row:
+            return str(row[0] or ""), str(row[1] or "")
+    except sqlite3.Error:
+        pass
+    return "", ""
+
+
+def _artifact_stem(settings: Settings, job_id: str, kind: str) -> str:
+    """Human-readable, still-deterministic-from-job_id artifact stem
+    (``"{Name}_{kind}_{Company}_{Title}_{id8}"``). Derives the readable bits from the job
+    (DB) + applicant (master.json); on ANY missing data falls back to the bare ``job_id`` so
+    behaviour degrades safely and callers/tests with no seeded job/bank are unaffected.
+    Both the optimize worker (write) and the apply worker (read) call the path helpers with the
+    same ``job_id``, so they always derive the identical path — no DB hand-off needed."""
+    company, title = _job_company_title(settings, job_id)
+    bits = [b for b in (_slug(_applicant_name(settings), 24), kind, _slug(company), _slug(title)) if b]
+    if len(bits) <= 1:  # nothing readable beyond the kind label → keep the legacy name exactly
+        return f"{job_id}_cover" if kind == "Cover" else job_id
+    bits.append(job_id[:8])
+    return "_".join(bits)
+
+
 def generated_resume_path(settings: Settings, job_id: str) -> Path:
     """Where the per-job tailored résumé PDF lives.
 
-    Deterministic from ``job.id`` so the optimize worker writes and the apply
-    worker reads without any DB hand-off. ``settings.artifacts_dir / "generated"``
-    is the parent — created by the renderer on first write.
+    Deterministic from ``job.id`` so the optimize worker writes and the apply worker reads
+    without any DB hand-off. The on-disk name is human-readable (``Jane_Doe_Resume_Acme_Data
+    _Engineer_48b5b857.pdf``) when the job + fact bank are available, else the bare id.
+    ``settings.artifacts_dir / "generated"`` is the parent — created by the renderer on first write.
     """
-    return settings.artifacts_dir / "generated" / f"{job_id}.pdf"
+    return settings.artifacts_dir / "generated" / f"{_artifact_stem(settings, job_id, 'Resume')}.pdf"
 
 
 def generated_cover_letter_path(settings: Settings, job_id: str) -> Path:
     """Where the per-job tailored cover letter text lives.
 
-    Plain ``.txt`` — apply drivers paste into a textarea, so PDF rendering would
-    be wasted work. Same parent dir as the résumé so a per-job artifacts dir
-    listing shows both side-by-side.
+    Plain ``.txt`` — apply drivers paste into a textarea, so PDF rendering would be wasted
+    work. Same parent dir + readable-name scheme as the résumé (``..._Cover_..._48b5b857.txt``).
     """
-    return settings.artifacts_dir / "generated" / f"{job_id}_cover.txt"
+    return settings.artifacts_dir / "generated" / f"{_artifact_stem(settings, job_id, 'Cover')}.txt"
 
 
 def _job_upload_dir(settings: Settings, job_id: str) -> Path:

@@ -341,6 +341,35 @@ class TestAssistedOpen:
         assert r.status_code == 422
 
 
+# --------------------------------------------------------------- open (manual takeover)
+
+class TestOpenJobInBrowser:
+    """`/api/jobs/{id}/open` — opens ANY review job's listing for manual takeover, with NO
+    pre-filled ASSISTED_PENDING attempt required (the 'Needs your decision' / 'Sign-in' path)."""
+
+    def test_open_launches_job_url_without_pending(
+        self, web_state: WebState, conn: sqlite3.Connection
+    ):
+        _seed_job(conn, id="d1", state=JobState.REVIEW, url="https://x.example/jobs/9")
+        launcher = _StubLauncher()
+        with _make_client(web_state, launcher=launcher) as client:
+            r = client.post("/api/jobs/d1/open")
+        assert r.status_code == 200
+        assert r.json()["launch"]["ok"] is True
+        assert launcher.opened == ["https://x.example/jobs/9"]
+
+    def test_open_404_when_job_missing(self, web_state: WebState):
+        with _make_client(web_state) as client:
+            r = client.post("/api/jobs/nope/open")
+        assert r.status_code == 404
+
+    def test_open_422_when_no_url(self, web_state: WebState, conn: sqlite3.Connection):
+        _seed_job(conn, id="d2", state=JobState.REVIEW, url="")
+        with _make_client(web_state) as client:
+            r = client.post("/api/jobs/d2/open")
+        assert r.status_code == 422
+
+
 # --------------------------------------------------------------- assisted/confirm
 
 class TestAssistedConfirm:

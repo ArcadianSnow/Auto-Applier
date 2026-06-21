@@ -1,5 +1,11 @@
 # Exe distribution viability + onboarding restructure (research, 2026-06-20)
 
+> **UPDATE 2026-06-21 — Phase 1 (the onboarding/setup restructure below) SHIPPED.** Terminal-free
+> first-run setup is live (in-app model pull + browser install + readiness panel) for both the exe
+> and pip paths. See [onboarding-setup-restructure.md](onboarding-setup-restructure.md). The
+> packaging work (Phase 2: embedded-Python + Inno installer) remains deferred/unbuilt, and the
+> owner decisions in §@open below are still open.
+
 **Status:** RESEARCH / pre-build. The owner asked: for non-technical friends the program "must be
 startable from an exe" — then redirected to *"research viability of all of this and consider
 restructuring the onboarding/setup to facilitate an exe"* before building anything. This doc is that

@@ -58,6 +58,10 @@ class FactBank:
     #: Explicitly captured in onboarding — NO silent default (corrects the v2 US-yes bug).
     work_authorization: str = ""      # e.g. "US citizen" | "H-1B" | ""
     requires_sponsorship: bool | None = None
+    #: Optional onboarding extras so the resolver can fill common screener fields instead of
+    #: bailing. Blank ⇒ the resolver bails that field to assisted (never guessed).
+    primary_nationality: str = ""     # e.g. "United States" | "Canada" | ""
+    notice_period: str = ""           # e.g. "Immediate" | "Two weeks" | "1 month" | ""
     #: Voluntary EEO self-ID; blank ⇒ "prefer not to answer". Never mirrored to telemetry.
     eeo: dict[str, str] = field(default_factory=dict)
     #: Relocation preferences for "willing to relocate to <country>?" screeners. Keys
@@ -96,6 +100,8 @@ class FactBank:
             allowed_metrics=list(data.get("allowed_metrics", [])),
             work_authorization=data.get("work_authorization", ""),
             requires_sponsorship=data.get("requires_sponsorship"),
+            primary_nationality=data.get("primary_nationality", ""),
+            notice_period=data.get("notice_period", ""),
             eeo=dict(data.get("eeo", {})),
             relocation=dict(data.get("relocation", {})),
         )

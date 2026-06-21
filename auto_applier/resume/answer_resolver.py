@@ -276,6 +276,16 @@ class ProfileField(str, Enum):
     COUNTRY = "country"
     COUNTRY_TIMEZONE = "country_timezone"
     LOCATION = "location"        # full "City, State, Country"
+    NATIONALITY = "nationality"          # bank.primary_nationality (optional onboarding extra)
+    NOTICE_PERIOD = "notice_period"      # bank.notice_period (optional onboarding extra)
+    YEARS_EXPERIENCE = "years_experience"  # computed from work_history start dates
+
+
+# Optional onboarding extras: when the fact bank can't answer them the resolver falls through to
+# the bank/LLM tiers rather than bailing (unlike core contact fields, which must never be guessed).
+_OPTIONAL_PROFILE_EXTRAS = frozenset(
+    {ProfileField.NATIONALITY, ProfileField.NOTICE_PERIOD, ProfileField.YEARS_EXPERIENCE}
+)
 
 
 # Order matters: most-specific first. GitHub before generic website; preferred-name before
@@ -302,6 +312,15 @@ _PROFILE_PATTERNS: list[tuple[ProfileField, list[str]]] = [
     (ProfileField.LOCATION,
      [r"\bwhere are you (located|based)\b", r"\bcurrent location\b",
       r"\byour location\b", r"\bcity[,/ ]+state\b"]),
+    # Optional onboarding extras — specific labels, so order vs. the above doesn't matter.
+    (ProfileField.NATIONALITY,
+     [r"\bnationalit(y|ies)\b", r"\bprimary nationalit", r"\bcountry of (citizenship|origin)\b"]),
+    (ProfileField.NOTICE_PERIOD,
+     [r"\bnotice period\b", r"\bperiod of notice\b", r"\bhow much notice\b",
+      r"\bnotice (required|needed)\b"]),
+    (ProfileField.YEARS_EXPERIENCE,
+     [r"\b(years|yrs)\b.{0,24}\bexperience\b", r"\bexperience\b.{0,16}\b(years|yrs)\b",
+      r"\bnumber of (relevant )?(years|work)\b", r"\bhow many years\b"]),
 ]
 
 
@@ -479,17 +498,69 @@ def _is_yes_no_question(question: CustomQuestion) -> bool:
     return False
 
 
+# US states (abbreviations + full names), lowercased — so "Dallas, TX" / "Austin, Texas" resolve
+# the country to "United States" instead of mistaking the state for the country.
+_US_STATE_ABBR = {
+    "al", "ak", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "hi", "id", "il", "in", "ia",
+    "ks", "ky", "la", "me", "md", "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj",
+    "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "vt",
+    "va", "wa", "wv", "wi", "wy", "dc",
+}
+_US_STATE_NAMES = {
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut",
+    "delaware", "florida", "georgia", "hawaii", "idaho", "illinois", "indiana", "iowa",
+    "kansas", "kentucky", "louisiana", "maine", "maryland", "massachusetts", "michigan",
+    "minnesota", "mississippi", "missouri", "montana", "nebraska", "nevada", "new hampshire",
+    "new jersey", "new mexico", "new york", "north carolina", "north dakota", "ohio",
+    "oklahoma", "oregon", "pennsylvania", "rhode island", "south carolina", "south dakota",
+    "tennessee", "texas", "utah", "vermont", "virginia", "washington", "west virginia",
+    "wisconsin", "wyoming", "district of columbia",
+}
+
+
+def _is_us_state(token: str) -> bool:
+    t = (token or "").strip().lower()
+    return t in _US_STATE_ABBR or t in _US_STATE_NAMES
+
+
 def _split_location(location: str) -> tuple[str, str, str]:
-    """Parse "City, State, Country" → (city, state/region, country). Tolerant of 1–3 parts:
-    one part → country; two → (city, country); three+ → (city, region, country)."""
+    """Parse a location into ``(city, state/region, country)``. Tolerant of 1–3 comma parts.
+
+    US-aware: a bare state ("Texas") or a "City, ST" / "City, State" pair resolves the country to
+    "United States" instead of mistaking the state for the country — the old 2-part rule read
+    "Dallas, TX" as ``(city="Dallas", country="TX")``, which filled "Country of Residence" with a
+    state. Genuine "City, Country" pairs (parts[1] not a US state) are unaffected.
+    """
     parts = [p.strip() for p in (location or "").split(",") if p.strip()]
     if not parts:
         return "", "", ""
     if len(parts) == 1:
+        if _is_us_state(parts[0]):
+            return "", parts[0], "United States"
         return "", "", parts[0]
     if len(parts) == 2:
+        if _is_us_state(parts[1]):
+            return parts[0], parts[1], "United States"
         return parts[0], "", parts[1]
     return parts[0], parts[1], parts[-1]
+
+
+def _compute_years_experience(work_history) -> str:
+    """Approximate total years of experience as (current year − earliest start year). Deterministic
+    from the fact bank's work history; ``""`` when no start year is parseable (→ resolver bails).
+    A span (not a sum of durations) — overlapping/with-gaps roles still give a sensible career length
+    that the user can adjust in assisted review."""
+    from datetime import datetime
+
+    starts: list[int] = []
+    for w in work_history or []:
+        m = re.search(r"(19|20)\d{2}", str(getattr(w, "start", "") or ""))
+        if m:
+            starts.append(int(m.group(0)))
+    if not starts:
+        return ""
+    span = datetime.now().year - min(starts)
+    return str(span) if span > 0 else ""
 
 
 # --------------------------------------------------------------------- resolver
@@ -552,7 +623,12 @@ class AnswerResolver:
         # lookups, NOT questions — resolve them before the LLM can yes/no them.
         profile = classify_profile_field(question.label)
         if profile is not ProfileField.NONE:
-            return self._resolve_profile(question, profile)
+            resolved = self._resolve_profile(question, profile)
+            # Optional extras (nationality/notice/years) fall THROUGH to the bank/semantic/LLM
+            # tiers when the fact bank can't answer them — a seeded answer may still have it. Core
+            # contact fields keep their bail (a missing LinkedIn/city must never be guessed).
+            if resolved.value or profile not in _OPTIONAL_PROFILE_EXTRAS:
+                return resolved
         # "How did you hear about us?" is a referral-source PICKER, not an essay — but it
         # matches the open-ended "how did you…" pattern, so without this it bails. Route it
         # to the banked channel before the essay/LLM tiers can (live dbt Labs 2026-06-14).
@@ -743,8 +819,14 @@ class AnswerResolver:
     def _resolve_profile(self, question: CustomQuestion, field: ProfileField) -> Resolution:
         """Fill a contact/profile field from the fact bank. Missing value → BAIL (assisted),
         never a negation. A blank the human fills beats "No, I have not built a website"."""
-        contact = self.fact_bank.contact
-        value = self._profile_value(field, contact)
+        if field is ProfileField.NATIONALITY:
+            value = (self.fact_bank.primary_nationality or "").strip()
+        elif field is ProfileField.NOTICE_PERIOD:
+            value = (self.fact_bank.notice_period or "").strip()
+        elif field is ProfileField.YEARS_EXPERIENCE:
+            value = _compute_years_experience(self.fact_bank.work_history)
+        else:
+            value = self._profile_value(field, self.fact_bank.contact)
         if not value:
             return self._review(
                 question,

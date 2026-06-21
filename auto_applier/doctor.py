@@ -11,10 +11,13 @@ their subsystems (Phases 1–5).
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import sqlite3
+import sys
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 import httpx
 
@@ -138,6 +141,76 @@ def check_llm(settings: Settings) -> CheckResult:
                        f"Ollama up, models '{want}' + '{embed}' available")
 
 
+def _browser_registry_dirs() -> list[Path]:
+    """Candidate Playwright/patchright browser-cache roots for the current OS.
+
+    Honours ``PLAYWRIGHT_BROWSERS_PATH`` (the override pinned by the installer);
+    otherwise the per-OS defaults for both the ``ms-playwright`` and ``patchright``
+    registries (patchright is a fork that keeps its own cache).
+    """
+    override = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if override and override != "0":
+        return [Path(override)]
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        return [base / "ms-playwright", base / "patchright"]
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Caches"
+        return [base / "ms-playwright", base / "patchright"]
+    base = Path.home() / ".cache"
+    return [base / "ms-playwright", base / "patchright"]
+
+
+def _bundled_chromium_present() -> bool:
+    """True if a downloaded Chromium build exists in any browser-cache root.
+
+    Read-only filesystem glob (never launches a browser), so it's safe in preflight.
+    """
+    for root in _browser_registry_dirs():
+        if not root.exists():
+            continue
+        for pat in ("chromium-*", "chromium_headless_shell-*"):
+            if any(root.glob(pat)):
+                return True
+    return False
+
+
+def check_browser(settings: Settings) -> CheckResult:
+    """Browser readiness for the apply path (spec §8c).
+
+    WARN (never FAIL): real Chrome via ``channel="chrome"`` is the primary apply path,
+    and a fresh install legitimately hasn't run ``av3 install-browser`` yet — being
+    blocked here would be wrong. Detection is read-only (import probe + a cache glob +
+    the same filesystem Chrome check the session uses); it never launches a browser.
+    """
+    from auto_applier.sources.browser.session import detect_chrome_channel
+
+    has_driver = (
+        importlib.util.find_spec("patchright") is not None
+        or importlib.util.find_spec("playwright") is not None
+    )
+    if not has_driver:
+        return CheckResult(
+            "browser", Status.WARN,
+            "browser driver package not installed (no patchright/playwright)",
+            fix="install the v3 extras (`pip install -e \".[v3]\"`) then run `av3 install-browser`",
+        )
+
+    real_chrome = detect_chrome_channel() is not None
+    bundled = _bundled_chromium_present()
+    if real_chrome:
+        extra = " + bundled Chromium" if bundled else ""
+        return CheckResult("browser", Status.PASS,
+                           f"real Chrome found (channel=chrome){extra}")
+    if bundled:
+        return CheckResult("browser", Status.PASS, "bundled Chromium installed")
+    return CheckResult(
+        "browser", Status.WARN,
+        "no Chromium or real Chrome found — the apply step needs a browser",
+        fix="run `av3 install-browser` (or install Google Chrome)",
+    )
+
+
 def check_backups(settings: Settings) -> CheckResult:
     """Last backup recency check (spec §4 backups).
 
@@ -259,6 +332,7 @@ def run_doctor() -> list[CheckResult]:
     results.append(check_app_db(settings))
     results.append(check_events_db(settings))
     results.append(check_llm(settings))
+    results.append(check_browser(settings))
     results.append(check_inbox(settings))
     results.append(check_backups(settings))
     results.append(check_relay_reachable(settings))

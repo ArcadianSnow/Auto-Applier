@@ -52,10 +52,10 @@ def cli() -> None:
 @cli.command("init-db")
 def init_db() -> None:
     """Create the data dir and initialize app.db + events.db (idempotent)."""
+    from auto_applier import setup_ops
+
     settings = load_settings()
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
-    settings.backups_dir.mkdir(parents=True, exist_ok=True)
+    setup_ops.ensure_data_dirs(settings)
     conn = init_app_db(settings.app_db_path)
     conn.close()
     EventSink(settings.events_db_path).close()
@@ -2473,9 +2473,10 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
     from auto_applier.telemetry import configure_sink
     from auto_applier.web import SchedulerService, WebState, create_app
 
+    from auto_applier import setup_ops
+
     settings = load_settings()
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
+    setup_ops.ensure_data_dirs(settings)
 
     effective_host = host if host is not None else settings.web.host
     effective_port = port if port is not None else settings.web.port
@@ -2690,6 +2691,17 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
         f"(scheduler={'on' if service is not None else 'off'} "
         f"hotkey={hotkey_label} idle-detect={idle_label})"
     )
+    ui_host = "127.0.0.1" if effective_host in ("0.0.0.0", "::") else effective_host
+    click.echo(f"  -> Open the DASHBOARD in your browser:  http://{ui_host}:{effective_port}/")
+    if service is not None:
+        # The scheduler eagerly starts the bot's headed apply browser, so a blank Chrome
+        # window appears at about:blank before any apply runs — flag it so it isn't mistaken
+        # for the dashboard (or a crash). `av3 launch` opens the dashboard tab for you.
+        click.echo(
+            "  -> A separate Chrome window (the bot's apply browser) will also open and sit "
+            "blank at about:blank — that's normal, leave it running. Tip: `av3 launch` opens "
+            "the dashboard automatically."
+        )
 
     try:
         uvicorn.run(
@@ -3366,30 +3378,22 @@ def install_browser_cmd(backend: str) -> None:
     on first launch. Real Chrome (via channel) is the primary apply path (spec
     §8c) — this Chromium is the stealth driver + the busy-Chrome fallback the
     BrowserSession uses. Idempotent: re-running just re-verifies the download.
-    """
-    import subprocess
 
-    order = (
-        ["patchright", "playwright"] if backend == "auto" else [backend]
-    )
-    last_err = ""
-    for pkg in order:
-        click.echo(f"Installing Chromium via {pkg} ...")
-        try:
-            proc = subprocess.run(
-                [sys.executable, "-m", pkg, "install", "chromium"],
-                capture_output=True, text=True,
-            )
-        except FileNotFoundError as exc:
-            last_err = f"{pkg}: {exc}"
-            continue
-        if proc.returncode == 0:
-            click.echo(f"+ Chromium installed via {pkg}.")
-            return
-        last_err = (proc.stderr or proc.stdout or "").strip()[:300]
-        click.echo(f"! {pkg} install failed (rc={proc.returncode}); trying next backend.",
-                   err=True)
-    click.echo(f"  x FAIL could not install Chromium: {last_err}", err=True)
+    Shares its implementation with the dashboard's in-app "Install the browser"
+    step via ``setup_ops.install_browser`` (spec §11a).
+    """
+    from auto_applier import setup_ops
+
+    def _echo(frag: dict) -> None:
+        phase = frag.get("phase", "")
+        if phase:
+            click.echo(f"{phase} ...")
+
+    result = setup_ops.install_browser(progress_cb=_echo, backend=backend)
+    if result.ok:
+        click.echo(f"+ Chromium installed via {result.backend_used}.")
+        return
+    click.echo(f"  x FAIL could not install Chromium: {result.error}", err=True)
     click.echo(
         "        fix -> ensure the v3 extras are installed "
         "(`pip install -e \".[v3]\"`) then re-run `av3 install-browser`.",

@@ -54,6 +54,7 @@ from auto_applier.web.onboarding import (
     load_user_config,
     merge_contact,
     merge_education,
+    merge_extras,
     merge_skills,
     merge_work_auth,
     merge_work_history,
@@ -738,6 +739,23 @@ async def assisted_open(request: Request, job_id: str) -> dict:
     }
 
 
+@api_router.post("/jobs/{job_id}/open")
+async def open_job_in_browser(request: Request, job_id: str) -> dict:
+    """Open a job's listing in the bot's headed Chrome (logged-in profile) so the user can take
+    it over manually — for assisted-queue jobs the bot couldn't complete ("Needs your decision")
+    or that need a sign-in. Unlike ``/assisted/open`` this needs NO pre-filled attempt; it just
+    navigates to the listing. Errors: 404 (no job) / 422 (no URL on the row)."""
+    web_state = _get_state(request)
+    with web_state.app_conn() as conn:
+        job = JobRepo(conn).get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+    if not job.url:
+        raise HTTPException(status_code=422, detail=f"job {job_id} has no URL to open")
+    result = await _get_launcher(request).open(job.url)
+    return {"job_id": job_id, "launch": result.to_dict()}
+
+
 @api_router.post("/jobs/{job_id}/assisted/confirm")
 async def assisted_confirm(request: Request, job_id: str) -> dict:
     """Mark the latest ASSISTED_PENDING attempt as APPLIED — used after the
@@ -1091,6 +1109,21 @@ async def onboarding_work_auth(request: Request) -> dict:
     return onboarding_status(web_state.settings.data_dir).to_dict()
 
 
+@api_router.post("/onboarding/extras")
+async def onboarding_extras(request: Request) -> dict:
+    """Save the OPTIONAL extra screener fields so the answer resolver can fill them instead of
+    bailing to REVIEW. Payload: ``{"primary_nationality": "United States", "notice_period":
+    "Two weeks", "gender": "Male"}`` — every field optional; blank clears it (resolver then bails
+    that field to assisted, never guessing). Gender is a voluntary EEO self-ID (honesty invariant:
+    blank stays "prefer not to answer")."""
+    payload = await _read_json_dict(request)
+    web_state = _get_state(request)
+    bank = load_fact_bank(web_state.settings.data_dir)
+    merge_extras(bank, payload)
+    save_fact_bank(web_state.settings.data_dir, bank)
+    return onboarding_status(web_state.settings.data_dir).to_dict()
+
+
 @api_router.post("/onboarding/targeting")
 async def onboarding_targeting(request: Request) -> dict:
     """Save job-targeting config — the SINGLE writer for ``targeting`` (the onboarding
@@ -1156,10 +1189,12 @@ async def onboarding_goal_chat(request: Request) -> dict:
     from auto_applier.llm.complete import build_default
     from auto_applier.onboarding_chat import (
         apply_updates,
+        detect_relocation,
         first_step,
         next_step_after,
         parse_answer,
         step_for_key,
+        suggest_adjacent_roles,
         summarize,
     )
 
@@ -1187,13 +1222,39 @@ async def onboarding_goal_chat(request: Request) -> dict:
         llm = None
 
     updates = await parse_answer(step_key, answer, llm)
+
+    notes: list[str] = []
+    # Preserve relocation/abroad intent stated at the location step (it was being collapsed to a
+    # narrow "country, remote"); record it as a priority so it isn't lost.
+    if step_key == "location" and detect_relocation(answer):
+        updates = apply_updates(updates, {"preferences": ["open to relocation / visa sponsorship"]})
+        notes.append("Noted that you're open to relocating — I've kept on-site roles in and added "
+                     "visa sponsorship to your priorities.")
+
     draft = apply_updates(draft, updates)
+
+    # "Suggest, you confirm" role widening: when the roles answer was vague/narrow, offer adjacent
+    # titles the user can tap to add (never auto-added).
+    suggestions: dict = {}
+    if step_key == "roles" and len(draft.get("titles") or []) <= 2:
+        extra = suggest_adjacent_roles(list(draft.get("titles") or []), answer)
+        if extra:
+            suggestions["roles"] = extra
+
     nxt = next_step_after(step_key)
+    # Don't ask for a minimum salary we already captured from earlier free-text.
+    if nxt is not None and nxt.key == "comp" and draft.get("salary_floor"):
+        notes.append(f"Using ${int(draft['salary_floor']):,} as your minimum (from earlier).")
+        nxt = next_step_after("comp")
+
     if nxt is None:
-        return {"reply": summarize(draft), "next_step": None, "draft": draft,
-                "done": True, "updates": updates}
-    return {"reply": nxt.question, "next_step": nxt.key, "draft": draft,
-            "done": False, "updates": updates}
+        body = summarize(draft)
+        reply = (" ".join(notes) + "\n\n" + body) if notes else body
+        return {"reply": reply, "next_step": None, "draft": draft, "done": True,
+                "updates": updates, "suggestions": suggestions}
+    reply = (" ".join(notes) + "\n\n" + nxt.question) if notes else nxt.question
+    return {"reply": reply, "next_step": nxt.key, "draft": draft, "done": False,
+            "updates": updates, "suggestions": suggestions}
 
 
 # -- background "find companies" (seed-boards) for the targeting step ----------------
@@ -1283,6 +1344,93 @@ async def onboarding_seed_boards_status(request: Request) -> dict:
     """Current state of the background seed-boards job: idle | running | done | error, plus the
     live probed / kept / dead counters."""
     return dict(_SEED)
+
+
+# -- first-run setup: readiness + in-app bootstrap (pull models / install browser) -----------
+# Same one-job-at-a-time, module-level pattern as seed-boards above. The heavy work (multi-GB
+# model pull, browser download) is blocking, so each job runs in a thread via asyncio.to_thread
+# and the dashboard polls /status. Models/browser are SURFACED here, never a hard gate — the
+# scheduler-ready gate stays fact-bank-only (spec §11a onboarding restructure).
+_SETUP_ACTIONS = ("pull-models", "install-browser")
+_SETUP: dict = {action: {"status": "idle"} for action in _SETUP_ACTIONS}
+_SETUP_TASKS: dict = {}  # action -> asyncio.Task (kept so the running task isn't GC'd)
+
+
+async def _run_pull_models_job(settings) -> None:
+    from auto_applier import setup_ops
+
+    def _progress(frag: dict) -> None:  # called from the worker thread (GIL-safe dict writes)
+        _SETUP["pull-models"].update(frag)
+
+    try:
+        result = await asyncio.to_thread(setup_ops.pull_models, settings, _progress)
+        _SETUP["pull-models"].update(
+            status="done" if result.ok else "error",
+            error="" if result.ok else (result.error or "pull failed"),
+        )
+    except Exception as exc:  # noqa: BLE001 — surface as an error status, never crash the loop
+        _SETUP["pull-models"].update(status="error", error=str(exc))
+
+
+async def _run_install_browser_job(settings) -> None:
+    from auto_applier import setup_ops
+
+    def _progress(frag: dict) -> None:
+        _SETUP["install-browser"].update(frag)
+
+    try:
+        result = await asyncio.to_thread(setup_ops.install_browser, _progress)
+        _SETUP["install-browser"].update(
+            status="done" if result.ok else "error",
+            backend=result.backend_used,
+            error="" if result.ok else (result.error or "install failed"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        _SETUP["install-browser"].update(status="error", error=str(exc))
+
+
+_SETUP_JOBS = {
+    "pull-models": _run_pull_models_job,
+    "install-browser": _run_install_browser_job,
+}
+
+
+@api_router.get("/setup/readiness")
+async def setup_readiness(request: Request) -> dict:
+    """First-run readiness: the LLM-models + browser checks as JSON (reuses `av3 doctor`)."""
+    from auto_applier import setup_ops
+
+    web_state = _get_state(request)
+    checks = setup_ops.readiness(web_state.settings)
+    return {
+        "checks": [
+            {"name": c.name, "status": c.status.value, "detail": c.detail, "fix": c.fix}
+            for c in checks
+        ]
+    }
+
+
+@api_router.post("/setup/{action}/start")
+async def setup_start(action: str, request: Request) -> dict:
+    """Kick off a BACKGROUND setup job (``pull-models`` | ``install-browser``). Returns
+    immediately; poll ``/setup/{action}/status``. Idempotent while running (a second call
+    returns the in-flight job instead of starting another)."""
+    if action not in _SETUP_ACTIONS:
+        raise HTTPException(status_code=404, detail=f"unknown setup action: {action}")
+    if _SETUP[action].get("status") == "running":
+        return dict(_SETUP[action])
+    web_state = _get_state(request)
+    _SETUP[action] = {"status": "running", "percent": 0, "phase": "starting", "error": ""}
+    _SETUP_TASKS[action] = asyncio.create_task(_SETUP_JOBS[action](web_state.settings))
+    return dict(_SETUP[action])
+
+
+@api_router.get("/setup/{action}/status")
+async def setup_status(action: str) -> dict:
+    """Current state of a background setup job: idle | running | done | error (+ progress)."""
+    if action not in _SETUP_ACTIONS:
+        raise HTTPException(status_code=404, detail=f"unknown setup action: {action}")
+    return dict(_SETUP[action])
 
 
 @api_router.post("/onboarding/telemetry")

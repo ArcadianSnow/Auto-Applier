@@ -388,6 +388,41 @@ def test_dry_run_leaves_job_in_queued_apply(settings, conn):
     assert ApplicationRepo(conn).list_by_job(job.id) == []
 
 
+def test_dry_run_second_cycle_skips_already_tested_job(settings, conn):
+    """Dry-run jobs stay in QUEUED_APPLY; the worker must not re-test them every cycle
+    (the infinite dry-run re-apply loop)."""
+    job = _seed_queued_lever(conn, company="acmeco", source_job_id="abc-8")
+    worker = _build_worker(
+        settings, conn,
+        driver=_fake_driver(_make_outcome(status=None)),
+        dry_run=True,
+    )
+
+    first = asyncio.run(worker.run_once())
+    assert first.attempted == 1 and first.dry_run_count == 1
+
+    second = asyncio.run(worker.run_once())
+    assert second.attempted == 0          # NOT re-tested
+    assert second.skipped >= 1
+    assert JobRepo(conn).get(job.id).state is JobState.QUEUED_APPLY
+
+
+def test_salary_ask_falls_back_to_targeting_floor(settings, conn):
+    """When salary.floor is unset, the per-job salary ask falls back to targeting.salary_floor
+    (onboarding writes the latter, not the former)."""
+    settings.salary.floor = None
+    settings.targeting.salary_floor = 82000
+    job = _seed_queued_lever(conn, company="acmeco", source_job_id="sal-1")
+    worker = _build_worker(
+        settings, conn,
+        driver=_fake_driver(_make_outcome(status=None)),
+        dry_run=True,
+    )
+    worker._apply_salary_ask(JobRepo(conn).get(job.id))
+    assert worker._resolver.salary_expectation          # non-empty (was "" before the fix)
+    assert "82" in worker._resolver.salary_expectation
+
+
 # --------------------------------------------------------------- pacing
 
 def test_pacing_sleep_called_between_successful_applies(settings, conn):

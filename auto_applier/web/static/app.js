@@ -70,6 +70,9 @@ function dashboard() {
     controlBusy: false,
     sourceBusy: {},        // {sourceName: bool} — per-row spinner gate for (4/M)
     onboarding: null,      // (5/M) onboarding status snapshot for the banner
+    readiness: [],         // first-run setup checks (LLM models + browser) → "Setup needed" card
+    setupBusy: {},         // {action: bool} — per-button gate while a pull/install runs
+    setupNote: {},         // {action: string} — transient per-action status note
     _pollTimer: null,
     _eventSource: null,
     _pollInFlight: false,
@@ -100,7 +103,7 @@ function dashboard() {
       if (this._pollInFlight) return;
       this._pollInFlight = true;
       try {
-        const [status, sources, queue, reviewQueue, history, outcomes, targeting, onboarding] = await Promise.all([
+        const [status, sources, queue, reviewQueue, history, outcomes, targeting, onboarding, readiness] = await Promise.all([
           fetch('/api/status').then(r => r.json()),
           fetch('/api/sources').then(r => r.json()),
           fetch('/api/queue').then(r => r.json()),
@@ -112,6 +115,9 @@ function dashboard() {
           // install (it's wired in (5/M)); the banner just stays hidden.
           fetch('/api/onboarding/state').then(r => r.ok ? r.json() : null)
             .catch(() => null),
+          // First-run readiness (LLM models + browser); drives the "Setup needed" card.
+          fetch('/api/setup/readiness').then(r => r.ok ? r.json() : null)
+            .catch(() => null),
         ]);
         this.status = status;
         this.sources = sources.sources || [];
@@ -122,12 +128,56 @@ function dashboard() {
         // Don't overwrite the card while the user is editing it — the draft owns the view.
         if (!this.goalsEditing) this.targeting = targeting;
         this.onboarding = onboarding;
+        // Don't clobber the card while a pull/install is running (the poller owns it).
+        if (readiness && !Object.values(this.setupBusy).some(Boolean)) {
+          this.readiness = readiness.checks || [];
+        }
       } catch (e) {
         // Best-effort: keep stale data on screen rather than blanking.
         console.error('refreshAll failed', e);
       } finally {
         this._pollInFlight = false;
       }
+    },
+
+    setupNotReady() {
+      return (this.readiness || []).some(c => c.status !== 'PASS');
+    },
+
+    /**
+     * Kick off an in-app setup job (pull-models | install-browser) from the
+     * dashboard "Setup needed" card and poll it to completion, then refresh the
+     * readiness checks so the row flips green. Mirrors the onboarding wizard's
+     * setup flow — same /api/setup endpoints.
+     */
+    async runSetup(action) {
+      if (this.setupBusy[action]) return;
+      this.setupBusy[action] = true;
+      this.setupNote[action] = 'starting…';
+      try {
+        await fetch(`/api/setup/${action}/start`, { method: 'POST' });
+      } catch (e) {
+        this.setupBusy[action] = false;
+        this.setupNote[action] = `Failed to start: ${e}`;
+        return;
+      }
+      const poll = setInterval(async () => {
+        try {
+          const r = await fetch(`/api/setup/${action}/status`);
+          if (!r.ok) return;
+          const s = await r.json();
+          this.setupNote[action] = s.phase
+            ? `${s.phase}${s.percent ? ` · ${s.percent}%` : ''}`
+            : s.status;
+          if (s.status !== 'running') {
+            clearInterval(poll);
+            this.setupBusy[action] = false;
+            this.setupNote[action] = s.status === 'done' ? 'done' : `error: ${s.error || ''}`;
+            const rr = await fetch('/api/setup/readiness').then(x => x.ok ? x.json() : null).catch(() => null);
+            if (rr) this.readiness = rr.checks || [];
+          }
+        } catch (e) { /* transient — keep polling */ }
+      }, 1500);
     },
 
     _openEventStream() {
@@ -561,6 +611,31 @@ function dashboard() {
      * Record a human-attested manual apply for a "needs your decision" job →
      * APPLIED. confirm()-guarded; optimistic refresh, 409-graceful re-fetch.
      */
+    async openInBrowser(jobId) {
+      // Open ANY review job's listing in the bot's headed Chrome (logged-in profile) for a
+      // manual takeover — no pre-filled attempt required (unlike assistedOpen).
+      if (this.reviewBusy[jobId]) return;
+      this._setReviewBusy(jobId, true);
+      this._setReviewNote(jobId, '');
+      try {
+        const r = await fetch(`/api/jobs/${jobId}/open`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        });
+        if (!r.ok) {
+          const e = await r.json().catch(() => ({}));
+          this._setReviewNote(jobId, `Couldn't open: ${e.detail || r.statusText}`);
+          return;
+        }
+        const data = await r.json();
+        this._setReviewNote(jobId,
+          (data.launch && data.launch.note) || 'Opened in the bot browser — finish + submit there.');
+      } catch (e) {
+        this._setReviewNote(jobId, `Error: ${e}`);
+      } finally {
+        this._setReviewBusy(jobId, false);
+      }
+    },
+
     async markApplied(jobId) {
       if (this.reviewBusy[jobId]) return;
       if (!confirm('Mark this job as APPLIED? Do this if you applied to it '
