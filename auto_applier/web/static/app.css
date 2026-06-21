@@ -189,6 +189,14 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .status-bar.is-paused .pause-btn { border-color: var(--warn); }
 
 /* ---------------- pipeline panel ---------------- */
+.pipeline-activity {
+  margin: 0 0 0.8rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--bg-soft);
+  border-left: 3px solid var(--accent, #4a90d9);
+  border-radius: 4px;
+  font-size: 0.95rem;
+}
 .pipeline {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));

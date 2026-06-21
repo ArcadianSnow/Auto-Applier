@@ -2520,6 +2520,28 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
     from auto_applier.web.control import ManualTakeover
     _takeover = ManualTakeover()
 
+    # LAZY browser start. The bot's headed Chrome is started on FIRST real need (the first
+    # apply, or the first manual "Open in browser"/login) — NOT eagerly at startup — so plain
+    # discovery/scoring runs never pop a blank ``about:blank`` window (the #1 confusion on
+    # launch). ``_ensure_session`` is single-flighted so the apply worker and the launcher
+    # can't double-start it; both call ``_lazy_new_page``. The lock binds to uvicorn's loop on
+    # first await (created here in sync context is fine on 3.10+).
+    import asyncio as _asyncio
+    _session_lock = _asyncio.Lock()
+
+    async def _ensure_session() -> BrowserSession:
+        async with _session_lock:
+            sess = _session_holder.get("session")
+            if sess is None:
+                sess = BrowserSession(settings.browser_profile_dir)
+                await sess.start()
+                _session_holder["session"] = sess
+            return sess
+
+    async def _lazy_new_page():
+        sess = await _ensure_session()
+        return await sess.new_page()
+
     if no_scheduler:
         click.echo("! --no-scheduler: read-only diagnostics mode "
                    "(read-only API answers; no pipeline work).")
@@ -2592,9 +2614,8 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
         # reach the session from outside this branch.
 
         async def _factory(pause_predicate):
-            session = BrowserSession(settings.browser_profile_dir)
-            await session.start()
-            _session_holder["session"] = session
+            # The BrowserSession is NOT started here — ``_lazy_new_page`` starts it on the
+            # first apply/open so a discovery/scoring-only run never opens a Chrome window.
             return Scheduler(
                 discover_worker=DiscoverWorker(settings=settings, conn=conn),
                 inbox_worker=_build_scheduler_inbox_worker(settings, conn, llm),
@@ -2612,7 +2633,7 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
                 ),
                 apply_worker=ApplyWorker(
                     settings=settings, conn=conn, fact_bank=bank,
-                    resume_path=str(resume_path), new_page=session.new_page,
+                    resume_path=str(resume_path), new_page=_lazy_new_page,
                     embed_client=embed, llm_client=llm, mode=apply_mode,
                     dry_run=dry_run, drivers=default_drivers(),
                 ),
@@ -2667,10 +2688,9 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
     from auto_applier.web.headed import HeadedBrowserLauncher
 
     async def _launcher_new_page():
-        sess = _session_holder.get("session") if service is not None else None
-        if sess is None:
-            raise RuntimeError("BrowserSession not started")
-        return await sess.new_page()
+        # Lazy: the first manual open (or apply) starts the bot's Chrome on demand,
+        # so a discovery/scoring-only session never pops a blank window at startup.
+        return await _lazy_new_page()
 
     launcher = HeadedBrowserLauncher(
         new_page=_launcher_new_page if service is not None else None,
@@ -2702,13 +2722,13 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
     ui_host = "127.0.0.1" if effective_host in ("0.0.0.0", "::") else effective_host
     click.echo(f"  -> Open the DASHBOARD in your browser:  http://{ui_host}:{effective_port}/")
     if service is not None:
-        # The scheduler eagerly starts the bot's headed apply browser, so a blank Chrome
-        # window appears at about:blank before any apply runs — flag it so it isn't mistaken
-        # for the dashboard (or a crash). `av3 launch` opens the dashboard tab for you.
+        # The bot's headed Chrome now starts lazily (only when an apply or a manual "Open in
+        # browser" actually needs it), so no blank window pops at startup. Flag when it WILL
+        # appear so it isn't mistaken for a crash. `av3 launch` opens the dashboard tab for you.
         click.echo(
-            "  -> A separate Chrome window (the bot's apply browser) will also open and sit "
-            "blank at about:blank — that's normal, leave it running. Tip: `av3 launch` opens "
-            "the dashboard automatically."
+            "  -> The bot's Chrome window opens only when it first applies to a job or you "
+            "click 'Open in browser' — not at startup. Tip: `av3 launch` opens the dashboard "
+            "automatically."
         )
 
     try:

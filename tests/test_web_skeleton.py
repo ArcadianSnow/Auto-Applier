@@ -250,8 +250,9 @@ class TestReadOnlyApi:
         assert body["scheduler"] == {"running": False, "paused": False}
         assert "jobs_by_state" in body
         assert all(v == 0 for v in body["jobs_by_state"].values())
-        # Last cycle is None until the scheduler has actually run.
+        # Last cycle / last stage are None until the scheduler has actually run.
         assert body["last_cycle"] is None
+        assert body["last_stage"] is None
         # Pipeline order is the stable column order for the (2/M) dashboard.
         assert "DISCOVERED" in body["pipeline_order"]
         assert body["pipeline_order"][0] == "DISCOVERED"
@@ -263,6 +264,23 @@ class TestReadOnlyApi:
         # seeded_job fixture creates one DISCOVERED + one REVIEW.
         assert body["jobs_by_state"]["DISCOVERED"] == 1
         assert body["jobs_by_state"]["REVIEW"] == 1
+
+    def test_recent_stage_event_surfaces_stage_and_count(self):
+        """The dashboard's 'Running · scoring…' hint reads last_stage; verify the helper
+        extracts the stage + a per-run count from the event row's context."""
+        from auto_applier.web.views import recent_stage_event
+        assert recent_stage_event(None) is None
+        out = recent_stage_event({
+            "stage": "score", "status": "ok", "ts": "2026-06-21T12:00:00Z",
+            "context_json": '{"scored": 12}',
+        })
+        assert out == {"stage": "score", "status": "ok",
+                       "ts": "2026-06-21T12:00:00Z", "count": 12}
+        # No count in context → count is None (still surfaces stage/status).
+        out2 = recent_stage_event({
+            "stage": "apply", "status": "start", "ts": "t", "context_json": None,
+        })
+        assert out2["stage"] == "apply" and out2["count"] is None
 
     def test_queue_endpoint(self, web_state: WebState, seeded_job: Job):
         with self._make_client(web_state) as client:

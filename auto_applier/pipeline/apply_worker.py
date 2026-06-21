@@ -316,7 +316,9 @@ class ApplyWorker:
 
         # Applicant: prefer explicit override; otherwise build from fact-bank contact.
         # The fact bank is the single source of truth (spec §6b) so this is just an
-        # ATS-shape adapter, not a second model.
+        # ATS-shape adapter, not a second model. Keep the override so a mid-run fact-bank
+        # reload (below) rebuilds the applicant from the new contact ONLY when not overridden.
+        self._applicant_override = applicant
         self._applicant = applicant or Applicant.from_contact(fact_bank.contact)
 
         # Resolver constructed once per run — fact bank is per-user, not per-job, so
@@ -330,6 +332,13 @@ class ApplyWorker:
             attest_human=settings.attest_human,
             draft_freeform=settings.draft_freeform_answers,
         )
+
+        # The worker + its resolver hold the fact bank in memory for the whole serve session.
+        # Track master.json's mtime so ``_refresh_fact_bank`` can hot-reload a profile edit
+        # (e.g. the "More details" wizard step adding nationality/notice/gender) WITHOUT a
+        # restart — otherwise the live apply fills from a stale bank and those fields go blank
+        # (live bug 2026-06-21: saved More-details extras never filled).
+        self._fact_bank_mtime: float | None = self._master_mtime()
 
         # Dry-run leaves jobs in QUEUED_APPLY (no APPLYING transition), so without this the
         # scheduler re-picks the same jobs every cycle and re-runs the fill forever. The worker
@@ -371,6 +380,35 @@ class ApplyWorker:
             self._job_repo.set_state(job.id, JobState.QUEUED_APPLY)
         return len(stuck)
 
+    def _master_mtime(self) -> float | None:
+        """Modification time of the fact-bank file, or None if it's missing/unreadable."""
+        try:
+            return (self._settings.data_dir / "profile" / "master.json").stat().st_mtime
+        except OSError:
+            return None
+
+    def _refresh_fact_bank(self) -> None:
+        """Hot-reload master.json into the worker + resolver when it changed since we last
+        read it, so a profile edit (e.g. the 'More details' wizard step adding nationality /
+        notice period / gender) takes effect on the NEXT cycle without restarting the worker.
+
+        Cheap: a stat() each cycle, a load only when the mtime moved. Fail-safe: any read/parse
+        error keeps the current bank (a half-written file must never break the apply loop)."""
+        mtime = self._master_mtime()
+        if mtime is None or mtime == self._fact_bank_mtime:
+            return
+        try:
+            bank = FactBank.load(self._settings.data_dir / "profile" / "master.json")
+        except (OSError, ValueError):
+            return  # keep the in-memory bank; try again next cycle
+        self._fact_bank = bank
+        self._resolver.fact_bank = bank
+        # Rebuild the ATS applicant from the fresh contact UNLESS an explicit override was
+        # injected at construction (tests / callers that pin a specific applicant).
+        if self._applicant_override is None:
+            self._applicant = Applicant.from_contact(bank.contact)
+        self._fact_bank_mtime = mtime
+
     async def run_once(self, limit: int | None = None) -> ApplyRunSummary:
         """Process up to ``limit`` QUEUED_APPLY jobs. Returns a structured summary so
         the CLI / dashboard can show what just happened without re-querying the DB.
@@ -379,6 +417,10 @@ class ApplyWorker:
         rejoin the queue *before* we read it (otherwise they'd sit out yet another
         cycle).
         """
+        # Pick up any profile edit (e.g. "More details") saved since the worker started —
+        # the bank is held in memory for the session, so without this the live apply fills
+        # from a stale copy and newly-saved screener fields go blank.
+        self._refresh_fact_bank()
         run_id = new_run_id()
         summary = ApplyRunSummary(run_id=run_id)
         t0 = time.perf_counter()

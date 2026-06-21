@@ -41,6 +41,7 @@ function dashboard() {
       jobs_by_state: {},
       pipeline_order: [],
       last_cycle: null,
+      last_stage: null,
     },
     sources: [],
     queue: { review: [], queued_apply: [], applying: [] },
@@ -373,6 +374,40 @@ function dashboard() {
     pauseReasonsList() {
       const r = this.status?.scheduler?.pause_reasons || {};
       return Object.values(r).filter(Boolean);
+    },
+
+    /**
+     * Human-readable label for the stage the pipeline most recently touched
+     * (drives the "Running · scoring…" status text so it isn't a bare "Running").
+     */
+    stageLabel(stage) {
+      return ({
+        discover: 'finding jobs', filter: 'pre-filtering', score: 'scoring',
+        optimize: 'tailoring résumés', apply: 'applying', inbox: 'checking email',
+      })[stage] || stage;
+    },
+
+    /**
+     * One-line "what is the bot actually doing" summary for the Pipeline card.
+     * Derived purely from the polled state counts (+ the last stage) so the user
+     * can tell, at a glance, that work is flowing and WHEN apply will fire —
+     * the bare "Running" label was the #1 "is this even working?" confusion.
+     */
+    pipelineActivity() {
+      const c = this.status.jobs_by_state || {};
+      const n = (k) => c[k] || 0;
+      const queued = n('QUEUED_APPLY');
+      const applying = n('APPLYING');
+      if (applying > 0) return `Applying to ${applying} job(s) now.`;
+      if (queued > 0) return `${queued} job(s) ready to apply — the bot applies automatically each minute.`;
+      const upstream = n('DISCOVERED') + n('DESCRIBED') + n('SCORED') + n('DECIDED');
+      const ls = this.status.last_stage;
+      if (upstream > 0) {
+        const doing = ls && ls.status === 'start' ? this.stageLabel(ls.stage) : 'scoring & tailoring';
+        return `Working through ${upstream} job(s) (${doing}) — apply starts automatically once they're scored and tailored.`;
+      }
+      if (n('REVIEW') > 0) return `Nothing queued to auto-apply; ${n('REVIEW')} job(s) need you in the queue below.`;
+      return 'No jobs in the pipeline yet — discovery runs every cycle; new matches will appear here.';
     },
 
     /**

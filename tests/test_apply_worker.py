@@ -970,6 +970,53 @@ def test_salary_ask_empty_when_no_config_and_no_posted(settings, conn):
     assert worker._resolver.salary_expectation == ""
 
 
+# --------------------------------------------------------------- fact-bank hot-reload (live 2026-06-21)
+
+def test_refreshes_fact_bank_when_master_json_changes(settings, conn):
+    """A profile edit saved AFTER the worker started (e.g. the 'More details' wizard adding
+    nationality/notice) is hot-reloaded on the next run — the resolver must not keep serving
+    the stale in-memory bank (live bug: saved extras filled blank until restart)."""
+    from auto_applier.web.onboarding import save_fact_bank
+
+    # Built with no master.json on disk yet → records mtime=None, bank has no extras.
+    worker = _build_worker(settings, conn,
+                           driver=_fake_driver(_make_outcome(status=ApplicationStatus.APPLIED)))
+    assert worker._resolver.fact_bank.primary_nationality == ""
+
+    # The user fills "More details" → master.json now exists with the extras.
+    bank = _bank()
+    bank.primary_nationality = "Brazil"
+    bank.notice_period = "Two weeks"
+    save_fact_bank(settings.data_dir, bank)
+
+    worker._refresh_fact_bank()
+    assert worker._resolver.fact_bank.primary_nationality == "Brazil"
+    assert worker._resolver.fact_bank.notice_period == "Two weeks"
+    assert worker._fact_bank.primary_nationality == "Brazil"
+
+
+def test_refresh_fact_bank_keeps_current_bank_on_unreadable_file(settings, conn):
+    """A half-written / malformed master.json (mid-save) must NEVER break the apply loop —
+    the worker keeps its current bank and retries next cycle."""
+    from auto_applier.web.onboarding import save_fact_bank
+
+    # Build first (no master.json → mtime=None), then save + reload a good bank.
+    worker = _build_worker(settings, conn,
+                           driver=_fake_driver(_make_outcome(status=ApplicationStatus.APPLIED)))
+    bank = _bank()
+    bank.primary_nationality = "Canada"
+    save_fact_bank(settings.data_dir, bank)
+    worker._refresh_fact_bank()
+    assert worker._resolver.fact_bank.primary_nationality == "Canada"
+
+    # Now corrupt the file and force a reload attempt — it must keep the good bank, not crash.
+    master = settings.data_dir / "profile" / "master.json"
+    master.write_text("{ this is not valid json", encoding="utf-8")
+    worker._fact_bank_mtime = None  # force the reload attempt
+    worker._refresh_fact_bank()
+    assert worker._resolver.fact_bank.primary_nationality == "Canada"  # unchanged, no crash
+
+
 # --------------------------------------------------------------- strategy profiles (Phase 6 2/M)
 
 def _mode_recording_driver(seen: dict) -> DriverEntry:

@@ -254,6 +254,57 @@ The per-row `reviewNote[j.id]` (dashboard.html) + the launcher's `LaunchResult.n
 handoff judged the missing note "likely disrupted by the clash (#2)" — so it should reappear now the clash
 is fixed. **This is a live step the owner verifies** (no automated repro for a browser-focus race).
 
+### Launch-friction fixes — SESSION 2b (SHIPPED 2026-06-21, from a live `av3 launch` test)
+Owner launched and reported: (1) the blank `about:blank` Chrome window still pops at startup; (2) "no way
+to start the auto application — I've waited 10 min and can't tell if it's about to"; (3) the status bar just
+says "Running" so "that isn't working either." **Diagnosis (not a bug): the pipeline WAS working** — cycle
+interval is 60s and apply runs every cycle, but `QUEUED_APPLY` was empty because jobs were still grinding
+through score/optimize on the local 8B model. Apply had nothing to do; the bare "Running" + (soon) no window
+hid all of it. Two fixes shipped (1383 green):
+
+1. **Lazy-start the apply browser** (backlog item #1, now done). `serve._factory` no longer eagerly does
+   `BrowserSession.start()`. New function-scope `_ensure_session` (single-flight `asyncio.Lock`) + `_lazy_new_page`;
+   the apply worker's `new_page` AND the headed launcher both call `_lazy_new_page`, so the bot's Chrome opens
+   only on the FIRST apply or manual "Open in browser" — a discovery/scoring-only run never pops a window.
+   Startup messaging updated (no more "a blank window will open"). The apply worker owns nothing of the
+   lifecycle; teardown still stops the session iff one was created.
+2. **Pipeline visibility — make "Running" mean something.** `/api/status` now also returns `last_stage` (the
+   most recent per-stage event via new `views.recent_stage_event` → `{stage,status,ts,count}`). Dashboard:
+   the status bar shows a live "· scoring / tailoring résumés / applying" hint, and the Pipeline card shows a
+   plain-language **`pipelineActivity()`** line derived purely from the polled counts: "Applying to N now" /
+   "N ready to apply — applies automatically each minute" / "Working through N job(s) (scoring) — apply starts
+   once they're scored and tailored" / "No jobs yet — discovery runs each cycle". Answers "is it even working?"
+   without a new endpoint. `stageLabel()` maps stage→friendly verb; `.pipeline-activity` CSS.
+
+**NOT built (deferred, owner decision pending):** a manual "Apply now" trigger. Per the diagnosis it's low
+value (apply auto-runs every 60s; the bottleneck is upstream LLM scoring, which a trigger can't speed up) and
+risky (driving the apply out-of-band needs a shared single-flight lock with the scheduler's apply stage).
+Offered as a follow-up if the owner still wants force-apply-on-demand for the TEST workflow (watch a queued
+job apply immediately instead of waiting ≤60s).
+
+### Stale-fact-bank hot-reload — SESSION 2c (SHIPPED 2026-06-21, from a live apply screenshot)
+Owner saved the optional "More details" (nationality/notice/gender) AFTER launching, then watched an apply:
+those 3 fields filled BLANK while everything else filled (a Greenhouse form — screenshot confirmed
+how-heard="Company Website", résumé+cover attached via the #1 legacy fallback, country=US, salary=$82k,
+years="6 to 9"). **Root cause (code-confirmed, not the writer/classifier): the worker loads the fact bank
+ONCE at launch (`cli/main.py:2574 bank = FactBank.load(...)`, passed to every worker) and never reloads;
+`/api/onboarding/extras` writes master.json via a FRESH load → the running worker keeps a stale in-memory
+copy.** `merge_extras` + `save_fact_bank` persist correctly, and the resolver reads `primary_nationality`/
+`notice_period`/`eeo.gender` correctly — the ONLY gap was the reload.
+
+**Fix (apply_worker.py):** `_refresh_fact_bank()` (mtime-gated `FactBank.load`) called at the top of
+`run_once()`. Updates `self._fact_bank` + `self._resolver.fact_bank` (+ rebuilds `self._applicant` from the
+fresh contact UNLESS an explicit applicant override was injected). Tracks `self._fact_bank_mtime`
+(`_master_mtime()`); reloads only when master.json's mtime moves; any OSError/ValueError keeps the current
+bank (a half-written file mid-save must never break apply). So a profile edit takes effect on the NEXT cycle
+with NO restart. Tests (2): `test_refreshes_fact_bank_when_master_json_changes`,
+`test_refresh_fact_bank_keeps_current_bank_on_unreadable_file`. **1385 green.**
+
+**Scope note:** this covers the APPLY worker (the reported screener-field issue). The optimize/score/filter
+workers also hold the bank from construction — a parallel reload there would let newly-reconciled résumé
+FACTS (skills/bullets) reach résumé generation without restart. NOT needed for the reported bug (More-details
+extras are screener fields, not résumé content) — left as a known parallel gap if it surfaces.
+
 ### E2 — DESIGN DOC produced (owner chose design-first), NOT built
 Full spec: [e2-on-demand-fill-design.md](e2-on-demand-fill-design.md). Recommends borrowing the scheduler's
 ApplyWorker via a new `prepare_single(job_id, page)` (assisted-only, never dry, single job) reached through

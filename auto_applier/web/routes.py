@@ -70,6 +70,7 @@ from auto_applier.web.views import (
     job_brief,
     job_detail,
     recent_scheduler_event,
+    recent_stage_event,
     review_reason,
 )
 
@@ -143,6 +144,7 @@ async def status(request: Request) -> dict:
     counts = {st.value: counts_raw.get(st.value, 0) for st in PIPELINE_STATES}
 
     last_cycle = None
+    last_stage = None
     if web_state.events_db_path.exists():
         with web_state.events_conn() as ev_conn:
             row = ev_conn.execute(
@@ -150,6 +152,15 @@ async def status(request: Request) -> dict:
                 "ORDER BY id DESC LIMIT 1"
             ).fetchone()
             last_cycle = recent_scheduler_event(row)
+            # The most recent PER-STAGE event so the dashboard can show what the pipeline is
+            # actually doing right now ("scoring…", "optimizing…") instead of a bare "Running"
+            # — the #1 "is it even working?" confusion on launch.
+            stage_row = ev_conn.execute(
+                "SELECT * FROM events WHERE stage IN "
+                "('discover','filter','score','optimize','apply','inbox') "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            last_stage = recent_stage_event(stage_row)
 
     return {
         "scheduler": (
@@ -159,6 +170,7 @@ async def status(request: Request) -> dict:
         "jobs_by_state": counts,
         "pipeline_order": [st.value for st in PIPELINE_STATES],
         "last_cycle": last_cycle,
+        "last_stage": last_stage,
     }
 
 

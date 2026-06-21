@@ -104,6 +104,28 @@ def recent_scheduler_event(row: sqlite3.Row | None) -> dict | None:
     }
 
 
+def recent_stage_event(row: sqlite3.Row | None) -> dict | None:
+    """One per-stage events.db row → a compact 'what's the pipeline doing' dict for
+    ``/api/status.last_stage``. ``count`` is pulled from the stage summary context when the
+    worker recorded one (e.g. how many jobs that stage processed). None pass-through."""
+    if row is None:
+        return None
+    ctx = json.loads(row["context_json"]) if row["context_json"] else {}
+    # Workers stash their per-run tallies under varied keys; surface the first that looks
+    # like a count so the UI can say "scored 12" without knowing each worker's schema.
+    count = None
+    for k in ("count", "processed", "scored", "optimized", "filtered", "applied", "discovered"):
+        if isinstance(ctx.get(k), int):
+            count = ctx[k]
+            break
+    return {
+        "stage": row["stage"],
+        "status": row["status"],
+        "ts": row["ts"],
+        "count": count,
+    }
+
+
 def job_detail(
     job: Job,
     score: JobScore | None,
