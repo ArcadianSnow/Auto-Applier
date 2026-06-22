@@ -42,6 +42,7 @@ __all__ = [
     "any_required_unresolved",
     "attach_cover_letter",
     "check_auth_wall",
+    "fill_option_group",
     "fill_resolutions",
     "human_type",
 ]
@@ -452,6 +453,66 @@ async def fill_combobox(page, selector: str, value: str) -> bool:
     return False
 
 
+# Option-group selection (Lever checkbox/radio cards + Ashby Yes/No <button> groups). The
+# ATS field-coverage audit (2026-06-22) found these questions DISCOVER + RESOLVE fine (the
+# fact bank knows "Yes" for work-auth, "No" for sponsorship) but never LANDED — fill_resolutions
+# only typed text / opened react-selects. A radio/checkbox group is selected by CLICKING the
+# option whose visible text matches; this one JS does it for both ATSes by anchoring on the
+# field's container. The match is deliberately conservative: exact text, else a single
+# unambiguous whole-word match — a bare "No" against several "No - I already…" options finds
+# >1 and bails (returns false → the required field routes the job to assisted, never a guess).
+_OPTION_GROUP_CLICK_JS = r"""
+([fid, want]) => {
+  const norm = s => (s || '').replace(/\s+/g,' ').trim().toLowerCase();
+  const w = norm(want);
+  if (!w) return false;
+  // Locate the question container from any element carrying this name/id.
+  let anchor = null;
+  try { anchor = document.querySelector(`[name='${fid.replace(/'/g, "\\'")}']`); } catch(e) {}
+  if (!anchor) { try { anchor = document.getElementById(fid); } catch(e) {} }
+  const container = anchor
+    ? anchor.closest('.application-question, .ashby-application-form-field-entry, fieldset, [role=radiogroup], [role=group]')
+    : null;
+  const scope = container || document;
+  const cands = [];
+  scope.querySelectorAll('button, label, [role=radio], [role=button]').forEach(el => {
+    const t = norm(el.innerText || el.textContent);
+    if (t) cands.push({el, t});
+  });
+  scope.querySelectorAll("input[type=radio], input[type=checkbox]").forEach(inp => {
+    let t = norm(inp.getAttribute('aria-label'));
+    if (!t) { const wl = inp.closest('label'); if (wl) t = norm(wl.innerText); }
+    if (!t && inp.id) { try { const f = document.querySelector(`label[for='${CSS.escape(inp.id)}']`); if (f) t = norm(f.innerText); } catch(e) {} }
+    if (t) cands.push({el: inp, t});
+  });
+  const click = (el) => { try { el.click(); return true; } catch(e) { return false; } };
+  for (const c of cands) if (c.t === w) return click(c.el);   // 1. exact
+  const esc = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp('\\b' + esc + '\\b');
+  const hits = cands.filter(c => re.test(c.t));
+  if (hits.length === 1) return click(hits[0].el);            // 2. one unambiguous whole-word hit
+  return false;                                               // ambiguous / no match -> assisted
+}
+"""
+
+
+async def fill_option_group(page, question, value: str) -> bool:
+    """Select ``value`` in a radio/checkbox/button-group question (Lever cards, Ashby Yes/No).
+
+    Anchors on the question's container via ``field_id`` and clicks the matching option;
+    returns True only when an option is actually clicked. Conservative matching (exact, else a
+    single whole-word hit) means a bare "No" against several "No - …" options bails (False), so
+    a required field with no confident option routes the job to assisted rather than guessing.
+    Defensive: any Playwright error is an observable False, never fatal (mid-form break policy)."""
+    want = (value or "").strip()
+    if not want:
+        return False
+    try:
+        return bool(await page.evaluate(_OPTION_GROUP_CLICK_JS, [question.field_id, want]))
+    except Exception:  # noqa: BLE001 — mid-form break -> observable skip
+        return False
+
+
 async def settle_open_dropdown(page, value: str) -> bool:
     """Commit or dismiss a combo-box menu left open by typing (react-select).
 
@@ -535,7 +596,13 @@ async def fill_resolutions(
         if not sel:
             filled[q.field_id] = False
             continue
-        if q.kind == "combobox":
+        if q.kind == "radio":
+            # Radio/checkbox/button option groups (Lever cards, Ashby Yes/No buttons): click
+            # the option matching the resolved value within the question's container. The
+            # selector_for() name/id won't drive these (a shared-name checkbox pair, or a hidden
+            # carrier behind <button>s), so we anchor on field_id inside the helper instead.
+            filled[q.field_id] = await fill_option_group(page, q, str(r.value))
+        elif q.kind == "combobox":
             # react-select: open + click the matching option (typing prose filters to empty).
             filled[q.field_id] = await fill_combobox(page, sel, str(r.value))
         elif q.kind == "select":

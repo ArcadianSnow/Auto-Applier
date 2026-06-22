@@ -271,6 +271,7 @@ class ProfileField(str, Enum):
     LINKEDIN = "linkedin"
     GITHUB = "github"
     WEBSITE = "website"          # personal site / portfolio (NOT github)
+    PHONE = "phone"              # contact.phone — Ashby renders phone as a UUID custom Q
     PREFERRED_FIRST_NAME = "preferred_first_name"
     PREFERRED_LAST_NAME = "preferred_last_name"
     CITY = "city"
@@ -294,6 +295,11 @@ _OPTIONAL_PROFILE_EXTRAS = frozenset(
 _PROFILE_PATTERNS: list[tuple[ProfileField, list[str]]] = [
     (ProfileField.LINKEDIN, [r"\blinked\s?in\b"]),
     (ProfileField.GITHUB, [r"\bgit\s?hub\b"]),
+    # Phone: Greenhouse/Lever fill it as a STANDARD field (skipped by discovery), but Ashby
+    # renders phone as a UUID-named custom question that reaches the resolver — it was hitting
+    # the bank/LLM tier and bailing (no phone classifier). Deterministic lookup of contact.phone.
+    (ProfileField.PHONE,
+     [r"\bphone\b", r"\btelephone\b", r"\bmobile (number|phone|no\.?)\b", r"\bcell phone\b"]),
     (ProfileField.PREFERRED_LAST_NAME,
      [r"\bpreferred (last|family|sur)\s?name\b",
       r"\b(last|family|sur)\s?name you (go by|prefer)\b"]),
@@ -311,8 +317,13 @@ _PROFILE_PATTERNS: list[tuple[ProfileField, list[str]]] = [
      [r"\bwhat country\b", r"\bcountry of residence\b", r"\bcountry you (are|'re) (in|based)\b",
       r"^\s*country\b"]),
     (ProfileField.LOCATION,
-     [r"\bwhere are you (located|based)\b", r"\bcurrent location\b",
-      r"\byour location\b", r"\bcity[,/ ]+state\b"]),
+     # "currently/presently/now" between "you" and "located/based" was un-matched (live Ashby
+     # "Where are you currently located?"), and a BARE "Location" label (live Ashby Plaid) hit
+     # none of these. Both are deterministic fills from contact.location. CITY (above) keeps
+     # priority for "Location (City)" so that still resolves to the city, not the full string.
+     [r"\bwhere are you (currently |presently |now )?(located|based)\b",
+      r"\bcurrent location\b", r"\byour location\b", r"\bcity[,/ ]+state\b",
+      r"^\s*location\b"]),
     # Optional onboarding extras — specific labels, so order vs. the above doesn't matter.
     (ProfileField.NATIONALITY,
      [r"\bnationalit(y|ies)\b", r"\bprimary nationalit", r"\bcountry of (citizenship|origin)\b"]),
@@ -988,6 +999,8 @@ class AnswerResolver:
             return links.get("linkedin", "")
         if field is ProfileField.GITHUB:
             return links.get("github", "")
+        if field is ProfileField.PHONE:
+            return contact.phone or ""
         if field is ProfileField.WEBSITE:
             # personal site / portfolio; fall back to GitHub — these fields are typically
             # labelled "Portfolio (i.e. website, github, blogs, etc)", so GitHub is a valid

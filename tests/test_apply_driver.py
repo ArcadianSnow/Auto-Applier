@@ -469,6 +469,87 @@ def test_optional_unresolved_does_not_block_auto_submit():
     assert "submit button" in outcome.note
 
 
+# ---- option-group fill (Lever cards / Ashby Yes-No button groups; audit 2026-06-22) -------
+
+class _OptionGroupPage:
+    """Fake page that simulates the in-DOM option-click JS: a question (by field_id) has a set
+    of option labels; ``evaluate([fid, want])`` clicks IFF ``want`` exact-matches one option or
+    is an unambiguous whole-word hit. Mirrors the real ``_OPTION_GROUP_CLICK_JS`` contract."""
+
+    def __init__(self, options_by_fid: dict[str, list[str]]):
+        self._opts = options_by_fid
+        self.clicked: dict[str, str] = {}
+
+    async def evaluate(self, js, arg=None):
+        import re as _re
+        fid, want = arg
+        w = (want or "").strip().lower()
+        opts = [o.strip().lower() for o in self._opts.get(fid, [])]
+        if not w:
+            return False
+        if w in opts:                       # exact
+            self.clicked[fid] = want
+            return True
+        hits = [o for o in opts if _re.search(r"\b" + _re.escape(w) + r"\b", o)]
+        if len(hits) == 1:                  # one unambiguous whole-word hit
+            self.clicked[fid] = hits[0]
+            return True
+        return False                        # ambiguous / none -> assisted
+
+    async def query_selector(self, selector):  # fill_resolutions computes a selector first
+        return FakeElement()
+
+
+def test_fill_option_group_exact_yes_no():
+    """Lever/Ashby work-auth Yes/No: 'Yes' clicks the Yes option."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion, fill_option_group
+    page = _OptionGroupPage({"cards[uuid][field0]": ["Yes", "No"]})
+    q = CustomQuestion("cards[uuid][field0]", "Authorized to work?", True, "radio", options=["Yes", "No"])
+    assert asyncio.run(fill_option_group(page, q, "Yes")) is True
+    assert page.clicked["cards[uuid][field0]"] == "Yes"
+
+
+def test_fill_option_group_ambiguous_bails():
+    """A bare 'No' against several 'No - …' options is ambiguous → no click (→ assisted)."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion, fill_option_group
+    opts = ["Yes - I need a visa", "No - I already have a visa", "No - I do not want to relocate"]
+    page = _OptionGroupPage({"cards[s][field0]": opts})
+    q = CustomQuestion("cards[s][field0]", "Need sponsorship?", True, "radio", options=opts)
+    assert asyncio.run(fill_option_group(page, q, "No")) is False
+    assert "cards[s][field0]" not in page.clicked
+
+
+def test_fill_option_group_empty_value_false():
+    from auto_applier.sources.browser.apply_base import CustomQuestion, fill_option_group
+    page = _OptionGroupPage({"x": ["Yes", "No"]})
+    q = CustomQuestion("x", "?", False, "radio", options=["Yes", "No"])
+    assert asyncio.run(fill_option_group(page, q, "")) is False
+
+
+def test_fill_resolutions_routes_radio_to_option_group():
+    """fill_resolutions dispatches kind='radio' to the option-group clicker and records it."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion, fill_resolutions
+    from auto_applier.resume.answer_resolver import Resolution, ResolutionSource
+    page = _OptionGroupPage({"cards[uuid][field0]": ["Yes", "No"]})
+    q = CustomQuestion("cards[uuid][field0]", "Authorized to work?", True, "radio", options=["Yes", "No"])
+    r = Resolution(question=q, value="Yes", source=ResolutionSource.FACT_BANK)
+    filled = asyncio.run(fill_resolutions(page, [q], [r]))
+    assert filled["cards[uuid][field0]"] is True
+    assert page.clicked["cards[uuid][field0]"] == "Yes"
+
+
+def test_fill_option_group_evaluate_error_is_false():
+    """A Playwright error during the click JS is an observable False, never fatal."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion, fill_option_group
+
+    class _Boom:
+        async def evaluate(self, js, arg=None):
+            raise RuntimeError("page detached")
+
+    q = CustomQuestion("x", "?", True, "radio", options=["Yes", "No"])
+    assert asyncio.run(fill_option_group(_Boom(), q, "Yes")) is False
+
+
 def test_summarize_survey():
     rows = [
         SurveyRow("a", "u1", "t", "recaptcha_invisible", True, False, 3, True, form_present=True),

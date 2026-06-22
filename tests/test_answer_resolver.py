@@ -264,9 +264,46 @@ def _contact_bank():
     ("What country and time zone are you based in?", ProfileField.COUNTRY_TIMEZONE),
     ("Where are you located?", ProfileField.LOCATION),
     ("Why do you want this job?", ProfileField.NONE),
+    # ATS field-coverage audit (2026-06-22): LOCATION variants that previously missed.
+    ("Where are you currently located?", ProfileField.LOCATION),   # adverb between you/located
+    ("Where are you presently based?", ProfileField.LOCATION),
+    ("Location", ProfileField.LOCATION),                            # bare label (Ashby Plaid)
+    # PHONE: Ashby renders phone as a UUID custom question -> must classify, not bail.
+    ("Phone Number", ProfileField.PHONE),
+    ("Phone", ProfileField.PHONE),
+    ("Mobile number", ProfileField.PHONE),
+    # CITY must still win over LOCATION for "Location (City)" (order regression guard).
+    ("Location (City)*", ProfileField.CITY),
 ])
 def test_classify_profile_field(label, expected):
     assert classify_profile_field(label) is expected
+
+
+def test_profile_phone_fills_from_bank():
+    """Ashby UUID-named 'Phone Number' resolves from contact.phone instead of bailing."""
+    bank = _contact_bank()
+    bank.contact.phone = "+16827188130"
+    resolver = AnswerResolver(bank, answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q("Phone Number")))
+    assert res.value == "+16827188130"
+    assert res.source is ResolutionSource.PROFILE
+    assert res.needs_review is False
+
+
+def test_profile_bare_location_fills_from_bank():
+    """A bare 'Location' label (live Ashby Plaid) fills from contact.location."""
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q("Location")))
+    assert res.value == "Dallas, Texas, United States"
+    assert res.source is ResolutionSource.PROFILE
+
+
+def test_profile_missing_phone_bails_not_guessed():
+    """No phone in the bank -> BAIL (core contact field, never guessed)."""
+    resolver = AnswerResolver(_contact_bank(), answer_repo=_make_empty_repo())
+    res = asyncio.run(resolver.resolve(_q("Phone Number")))
+    assert res.value is None
+    assert res.needs_review is True
 
 
 def test_profile_linkedin_fills_from_bank():

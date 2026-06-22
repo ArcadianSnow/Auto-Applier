@@ -96,48 +96,93 @@ async def _wait_for_form_ready(page) -> bool:
 
 
 async def discover_custom_questions(page) -> list[CustomQuestion]:
-    """Walk every form input/textarea/select that ISN'T a system field, pair with label.
+    """Discover Ashby questions CONTAINER-FIRST, then sweep leftovers.
 
-    Ashby's custom questions use raw UUIDs (and sometimes even phone is UUID-named), so
-    we discover by *exclusion* of the stable ``_systemfield_*`` ids — anything left is a
-    custom question. CAPTCHA carriers (``g-recaptcha-response``, ``-response`` inputs) are
-    skipped explicitly so they don't show up as "questions" with empty labels.
-    """
+    Ashby is a React SPA: most questions live in a ``.ashby-application-form-field-entry``
+    whose visible text is a ``.ashby-application-form-question-title``. The audit
+    (2026-06-22) found the old "walk every input by id" approach failed Ashby two ways:
+      * its dropdowns/date-pickers render an ``<input>`` with NO id/name → skipped entirely
+        (Location combobox, "When can you start?" date), and
+      * its Yes/No questions render a hidden empty-label checkbox + ``<button>Yes/No</button>``
+        → discovered with an EMPTY label → the resolver couldn't classify them and bailed,
+        even though work-auth / sponsorship are exactly what it answers from the fact bank.
+
+    So PASS 1 anchors on the field-entry: the TITLE is the label (reliable), and the widget
+    shape decides ``kind`` — ``radio`` for a Yes/No ``<button>`` group (options = the button
+    texts; the filler clicks the matching button), ``combobox`` for a react-select, ``select``
+    for a native dropdown, else ``input``/``textarea``. id-less widgets get a synthetic
+    ``ashby_q<n>`` id so a required-but-unfillable one still routes the job to assisted rather
+    than silently vanishing. PASS 2 sweeps any named input NOT already captured — standalone
+    text fields + the consent/certification checkbox (kept only when its label reads as a
+    consent gate, so a multi-select question's per-option checkboxes don't each become a
+    bogus 'question'). Options carry through for the §8d attestation option-pair check."""
     raw = await page.evaluate(
-        """
+        r"""
         () => {
           const out = [];
-          const els = document.querySelectorAll(
-            "input:not([type=hidden]):not([type=file]), textarea, select"
-          );
-          const seen = new Set();
-          els.forEach(el => {
+          const captured = new Set();
+          const CONSENTISH = /\b(i\s+(confirm|agree|consent|certify|acknowledge|understand|have\s+read)|privacy\s+(policy|notice|statement)|terms\b|i\s+hereby)\b/i;
+          const labelFallback = (el) => {
+            let t = (el.getAttribute('aria-label') || '').trim();
+            if (!t && el.id) { try { const f = document.querySelector(`label[for='${CSS.escape(el.id)}']`); if (f) t = (f.innerText || '').trim(); } catch(e) {} }
+            if (!t) { const w = el.closest('div,fieldset,section'); const l = w && w.querySelector('label, .ashby-application-form-question-title, h4'); if (l) t = (l.innerText || '').trim(); }
+            return (t || '').replace(/\s+/g,' ').trim();
+          };
+          // PASS 1 — one question per .ashby-application-form-field-entry.
+          let idx = 0;
+          document.querySelectorAll('.ashby-application-form-field-entry').forEach(entry => {
+            idx++;
+            const titleEl = entry.querySelector('.ashby-application-form-question-title');
+            const label = titleEl ? (titleEl.innerText || titleEl.textContent || '').replace(/\s+/g,' ').trim() : '';
+            if (!label) return;
+            const inputs = [...entry.querySelectorAll('input,textarea,select')].filter(el => {
+              const t = (el.getAttribute('type') || '').toLowerCase();
+              if (t === 'hidden' || t === 'file') return false;
+              const id = el.id || el.name || '';
+              if (id.startsWith('_systemfield_')) return false;
+              if (id.includes('captcha') || id.endsWith('-response')) return false;
+              return true;
+            });
+            const buttons = [...entry.querySelectorAll('button')]
+              .map(b => (b.innerText || '').replace(/\s+/g,' ').trim())
+              .filter(b => b && b.length < 60 && !/^(upload|add|\+|delete|remove|browse|choose file)/i.test(b));
+            const combo = entry.querySelector('input[role=combobox], [role=combobox]');
+            const nativeSelect = entry.querySelector('select');
+            const textarea = entry.querySelector('textarea');
+            const named = inputs.find(el => el.id || el.name);
+            let id = '', kind = 'input', options = [];
+            if (textarea) { kind = 'textarea'; id = textarea.id || textarea.name || ('ashby_q'+idx); }
+            else if (nativeSelect) { kind = 'select'; id = nativeSelect.id || nativeSelect.name || ('ashby_q'+idx);
+              options = [...nativeSelect.querySelectorAll('option')].map(o => (o.textContent || '').trim()).filter(Boolean); }
+            else if (buttons.length >= 2 || (named && (named.type === 'checkbox' || named.type === 'radio') && buttons.length)) {
+              kind = 'radio'; options = buttons; id = (named && (named.name || named.id)) || ('ashby_q'+idx); }
+            else if (combo) { kind = 'combobox'; id = combo.id || combo.name || ('ashby_q'+idx); }
+            else if (named) { kind = 'input'; id = named.name || named.id; }
+            else if (inputs.length) { kind = 'input'; id = inputs[0].id || inputs[0].name || ('ashby_q'+idx); }
+            else return;
+            inputs.forEach(el => { if (el.id) captured.add(el.id); if (el.name) captured.add(el.name); });
+            const required = inputs.some(el => el.required || el.getAttribute('aria-required') === 'true')
+                          || /[*✱]\s*$/.test(label);
+            out.push({id, label, options, required, kind});
+          });
+          // PASS 2 — leftover named inputs outside any field-entry (consent checkbox, strays).
+          document.querySelectorAll("input:not([type=hidden]):not([type=file]), textarea, select").forEach(el => {
             const id = el.id || el.name || '';
-            if (!id) return;
-            if (id.startsWith('_systemfield_')) return;
-            if (id.includes('captcha') || id.endsWith('-response')) return;
-            if (seen.has(id)) return;
-            seen.add(id);
-            let label = '';
-            if (el.id) {
-              const lab = document.querySelector(`label[for='${el.id}']`);
-              if (lab) label = (lab.innerText || lab.textContent || '').trim();
-            }
-            if (!label) {
-              const wrap = el.closest('div,fieldset,section');
-              if (wrap) {
-                const lab = wrap.querySelector(
-                  "label, h4, .ashby-application-form-question-title"
-                );
-                if (lab) label = (lab.innerText || lab.textContent || '').trim();
-              }
-            }
+            if (!id || captured.has(el.id) || captured.has(el.name)) return;
+            if (id.startsWith('_systemfield_') || id.includes('captcha') || id.endsWith('-response')) return;
+            const t = (el.getAttribute('type') || '').toLowerCase();
             const tag = el.tagName.toLowerCase();
+            const isChoice = t === 'checkbox' || t === 'radio';
+            const label = labelFallback(el);
+            if (!label) return;
+            // A bare option checkbox (multi-select question) is NOT its own question — only keep
+            // a stray checkbox that reads as a consent/agreement gate (→ honesty bail downstream).
+            if (isChoice && !CONSENTISH.test(label)) return;
+            captured.add(id);
             out.push({
-              id, label,
-              required: el.required || el.getAttribute('aria-required') === 'true',
-              kind: tag === 'textarea' ? 'textarea'
-                   : tag === 'select' ? 'select' : 'input',
+              id, label, options: [],
+              required: !!(el.required || el.getAttribute('aria-required') === 'true'),
+              kind: tag === 'textarea' ? 'textarea' : tag === 'select' ? 'select' : isChoice ? 'radio' : 'input',
             });
           });
           return out;
@@ -151,7 +196,10 @@ async def discover_custom_questions(page) -> list[CustomQuestion]:
         if not key or key in seen:
             continue
         seen.add(key)
-        out.append(CustomQuestion(r["id"], r["label"], bool(r["required"]), r["kind"]))
+        out.append(CustomQuestion(
+            r["id"], r["label"], bool(r["required"]), r["kind"],
+            options=list(r.get("options") or []),
+        ))
     return out
 
 

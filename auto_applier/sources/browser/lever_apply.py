@@ -102,39 +102,86 @@ async def _wait_for_resume_parse(page, timeout_s: float = 8.0) -> bool:
 
 
 async def discover_custom_questions(page) -> list[CustomQuestion]:
-    """Walk Lever custom-question inputs (``cards[<uuid>]`` family) and pair each with its
-    visible label. UUIDs are per-posting and unstable, so we discover, never hard-code."""
+    """Walk Lever custom-question inputs and pair each with its REAL question text.
+
+    UUIDs are per-posting and unstable, so we discover by name family, never hard-code:
+      * ``cards[<uuid>][fieldN]`` — employer custom questions (text/essay/Yes-No);
+      * ``urls[<Network>]`` — LinkedIn/GitHub/portfolio links (the ATS field-coverage audit
+        2026-06-22 found these were NEVER discovered, so a REQUIRED ``urls[LinkedIn]`` the
+        fact bank HAS went unfilled and forced every Lever auto-apply to assisted);
+      * ``surveysResponses[<uuid>][responses][fieldN]`` + ``eeo[...]`` — EEO/demographics
+        (Lever's newer forms use ``surveysResponses``, which the old ``eeo[`` selector missed);
+      * ``location`` — the standard location field (resolver fills it from the fact bank);
+      * ``pronouns``.
+
+    The question TEXT lives in the enclosing ``.application-question > .application-label`` —
+    the audit proved the old ``closest('div,…')`` walk stopped at the inner field ``<div>``
+    and grabbed an option label ("Yes"/"No") or nothing, so work-auth / sponsorship / essay
+    cards reached the resolver with empty/wrong labels and bailed. We read the container label
+    directly. For checkbox/radio GROUPS we collect the option labels (``options``) and emit
+    ``kind='radio'`` so the filler clicks the matching option (native typing can't)."""
     raw = await page.evaluate(
         """
         () => {
-          const out = [];
-          const els = document.querySelectorAll(
-            "[name^='cards['], [name^='eeo['], select[name='pronouns'], input[name='pronouns']"
-          );
-          const seen = new Set();
-          els.forEach(el => {
+          const SEL = "[name^='cards['], [name^='eeo['], [name^='surveysResponses['], "
+                    + "[name^='urls['], input[name='location'], "
+                    + "select[name='pronouns'], input[name='pronouns']";
+          // Question text from the .application-question container (NOT the closest div, which
+          // is the inner field wrapper and holds only the option label).
+          const qLabel = (el) => {
+            const q = el.closest('.application-question');
+            if (q) {
+              const lab = q.querySelector('.application-label')
+                       || q.querySelector('legend, h4, label');
+              if (lab) return (lab.innerText || lab.textContent || '').replace(/\\s+/g,' ').trim();
+            }
+            if (el.id) {
+              const f = document.querySelector(`label[for='${el.id}']`);
+              if (f) return (f.innerText || f.textContent || '').replace(/\\s+/g,' ').trim();
+            }
+            return '';
+          };
+          // The visible label of a single checkbox/radio OPTION (Yes / No / Female / …).
+          const optLabel = (el) => {
+            let t = (el.getAttribute('aria-label') || '').trim();
+            if (!t) { const wl = el.closest('label'); if (wl) t = (wl.innerText || '').trim(); }
+            if (!t && el.nextElementSibling && el.nextElementSibling.tagName === 'LABEL')
+              t = (el.nextElementSibling.innerText || '').trim();
+            if (!t && el.id) { const f = document.querySelector(`label[for='${el.id}']`); if (f) t = (f.innerText || '').trim(); }
+            return (t || '').replace(/\\s+/g,' ').trim();
+          };
+          // Group inputs by name (Yes/No share one name → one question with two options).
+          const groups = new Map();
+          document.querySelectorAll(SEL).forEach(el => {
             const id = el.name || el.id || '';
-            // baseTemplate is a hidden carrier, not a candidate question
             if (!id || id.endsWith('[baseTemplate]')) return;
-            if (seen.has(id)) return;
-            seen.add(id);
-            let label = '';
-            const wrap = el.closest('div,fieldset,li,section');
-            if (wrap) {
-              const lab = wrap.querySelector('label, .application-label, h4');
-              if (lab) label = (lab.innerText || lab.textContent || '').trim();
-            }
-            if (!label && el.id) {
-              const lab = document.querySelector(`label[for='${el.id}']`);
-              if (lab) label = (lab.innerText || lab.textContent || '').trim();
-            }
-            const tag = el.tagName.toLowerCase();
-            out.push({
-              id, label,
-              required: el.required || el.getAttribute('aria-required') === 'true',
-              kind: tag === 'textarea' ? 'textarea' : tag === 'select' ? 'select' : 'input',
-            });
+            // Hidden carriers (e.g. surveysResponses[…][id], selectedLocation) aren't
+            // questions — skip them so they don't surface as empty-label review bails.
+            if ((el.getAttribute('type') || '').toLowerCase() === 'hidden') return;
+            if (!groups.has(id)) groups.set(id, []);
+            groups.get(id).push(el);
           });
+          const out = [];
+          for (const [id, inputs] of groups) {
+            const el0 = inputs[0];
+            const tag = el0.tagName.toLowerCase();
+            const type = (el0.getAttribute('type') || '').toLowerCase();
+            const isChoice = type === 'checkbox' || type === 'radio';
+            const kind = tag === 'textarea' ? 'textarea'
+                       : tag === 'select' ? 'select'
+                       : isChoice ? 'radio' : 'input';
+            let options = [];
+            if (kind === 'select') {
+              options = Array.from(el0.querySelectorAll('option'))
+                .map(o => (o.textContent || '').trim()).filter(Boolean);
+            } else if (isChoice) {
+              options = inputs.map(optLabel).filter(Boolean);
+            }
+            const label = qLabel(el0);
+            const required = inputs.some(i => i.required || i.getAttribute('aria-required') === 'true')
+                          || /[*\\u2731]\\s*$/.test(label);
+            out.push({id, label, options, required, kind});
+          }
           return out;
         }
         """
@@ -146,7 +193,10 @@ async def discover_custom_questions(page) -> list[CustomQuestion]:
         if not key or key in seen:
             continue
         seen.add(key)
-        out.append(CustomQuestion(r["id"], r["label"], bool(r["required"]), r["kind"]))
+        out.append(CustomQuestion(
+            r["id"], r["label"], bool(r["required"]), r["kind"],
+            options=list(r.get("options") or []),
+        ))
     return out
 
 
