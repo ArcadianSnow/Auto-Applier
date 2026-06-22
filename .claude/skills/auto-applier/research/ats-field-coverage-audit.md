@@ -353,3 +353,41 @@ changes covered by unit tests to the repo's fake-page standard. Full `pytest tes
 id/name-less comboboxes** (Location) — discovered + surfaced now, but the synthetic-id fill no-ops, so it lands
 in assisted rather than auto-filling (a container-anchored combobox fill is the follow-up); adding a Lever +
 Ashby form to the `smoke` suite. The honesty bails (consent/EEO/essays) are unchanged and still correct.
+
+---
+
+## Testing session (live dry-run validation) — READY TO RUN
+
+The build was verified read-only + unit tests; the one thing those can't prove is that the new **fill**
+mechanics actually LAND on a real Lever/Ashby form (a dry-run fills but never submits). The harness
+`C:\JobSearch\diagnose_apply_multi.py` runs the REAL driver path (`prepare_application(dry_run=True)`) for
+Greenhouse/Lever/Ashby and prints, per discovered field: kind, the resolution (source/value/fills/review),
+and `LAND`/`MISS`/`----` from `outcome.filled["q:<id>"]`. It opens a headed real-Chrome window and **never
+clicks submit**. No login is needed to view these forms.
+
+**Run (PowerShell, from anywhere):**
+```powershell
+$env:AV3_DATA_DIR='C:\Users\jar85\JobSearch\av3data'; $env:PYTHONIOENCODING='utf-8'
+python C:\Users\jar85\JobSearch\diagnose_apply_multi.py            # default: 1 Lever + 1 Ashby + GH baseline
+python C:\Users\jar85\JobSearch\diagnose_apply_multi.py <url> ...  # or specific apply URLs
+```
+Ollama must be up (the resolver embeds for semantic match). `resume_path=""` is fine — the audit confirmed
+every field renders without an upload; pass a résumé only if a form gates questions behind résumé-parse.
+
+**Pass criteria (what "the build works" looks like):**
+
+| ATS (sample) | Must LAND (fills + on-page) | Must BAIL (review = correct) | Known-acceptable MISS |
+|---|---|---|---|
+| **Lever** mistral | `urls[LinkedIn]` (profile/linkedin), `urls[GitHub]`, `location` (profile/location), work-auth radio → "Yes" (fact_bank) | the 4 essay textareas (open-ended), gender survey only if no self-ID banked | Twitter/Scholar/Portfolio URLs (absent in bank → bail) |
+| **Ashby** openai | `Phone Number` (profile/phone), work-auth + sponsorship radios (fact_bank Yes/No, clicked via button group) | "When can you start?" (no availability field → assisted), consent checkbox, Additional Information | **Location combobox** — resolves to the bank location but the synthetic-id fill no-ops → `MISS` (deferred; lands in assisted) |
+| **Greenhouse** imagineworldwide | all profile/EEO/salary/how-heard (regression baseline) | — | Primary Nationality + Notice period (bank empty, 2b) |
+
+**The headline checks:** (1) Lever `urls[LinkedIn]` shows `LAND` with `src=profile` — proves the #1
+discovery fix + that the required LinkedIn the bank holds now fills. (2) Ashby work-auth + sponsorship show
+`LAND` via the radio/button option-group — proves #12 fill mechanics on a real React form (the part unit
+tests couldn't reach). (3) The Greenhouse baseline is unchanged.
+
+**Capture for the next session:** paste the per-field tables + the RESULTS summary. Anything that resolves
+`fills=True` but shows `MISS` (other than the known Ashby Location combobox) is a fresh fill-mechanics gap to
+chase. After a run, `av3 errors --since 30m` and the `resolution` events in `events.db` (now populated for
+Lever/Ashby too) corroborate the on-page table.
