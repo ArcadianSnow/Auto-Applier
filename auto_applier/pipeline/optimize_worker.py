@@ -46,15 +46,16 @@ worker's below-bar walk — the optimize worker never routes to SKIPPED (a job t
 reached DECIDED was above the bar; if optimize fails, it's a human-triage problem,
 not a "skip forever" decision).
 
-**Canonical artifact paths.** The worker writes:
+**Canonical artifact paths.** The worker writes, into a per-job folder with a clean
+recruiter-facing name (no guid in the filename — the per-job FOLDER is the unique key):
 
-  * résumé PDF      → ``settings.artifacts_dir / "generated" / "{job_id}.pdf"``
-  * cover letter txt → ``settings.artifacts_dir / "generated" / "{job_id}_cover.txt"``
+  * résumé PDF      → ``generated/<job_id>/<Name> Resume.pdf``
+  * cover letter txt → ``generated/<job_id>/<Name> Cover Letter.txt``
 
 Both are derived from ``job.id`` via :func:`auto_applier.resume.generate.generated_resume_path`
 and :func:`auto_applier.resume.generate.generated_cover_letter_path`, so the apply worker
-reads them by the same derivation — no DB column added to ``jobs`` for the paths
-(file existence is the durable contract). The apply worker writes those paths into
+reads them by the same derivation (via the drift-tolerant ``resolve_generated_*`` helpers) —
+no DB column added to ``jobs`` for the paths (file existence is the durable contract). The apply worker writes those paths into
 its ``Application`` row at submit time, where the schema (spec §4) already has
 ``cover_letter_path`` + ``generated_resume_path``.
 

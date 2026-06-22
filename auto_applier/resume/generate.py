@@ -36,7 +36,6 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import sqlite3
 from pathlib import Path
 
 from auto_applier.config.settings import Settings
@@ -111,12 +110,6 @@ def _trim_jd_for_cover(job_description: str) -> str:
 
 # --------------------------------------------------------------- canonical paths
 
-def _slug(text: str, maxlen: int = 28) -> str:
-    """ASCII-safe filename fragment: non-alphanumerics → ``_``, trimmed + length-capped."""
-    s = re.sub(r"[^A-Za-z0-9]+", "_", (text or "").strip()).strip("_")
-    return s[:maxlen].strip("_")
-
-
 def _applicant_name(settings: Settings) -> str:
     """Read the candidate name from the fact bank (master.json). ``""`` on any failure —
     read directly (not via web.onboarding) to keep the resume layer free of a web import."""
@@ -129,75 +122,60 @@ def _applicant_name(settings: Settings) -> str:
         return ""
 
 
-def _job_company_title(settings: Settings, job_id: str) -> tuple[str, str]:
-    """(company, title) for a job, read straight from app.db. ``("", "")`` on any failure
-    (missing DB / row / uncommitted job) so the stem degrades to the bare id."""
-    try:
-        conn = sqlite3.connect(str(settings.app_db_path))
-        try:
-            row = conn.execute(
-                "SELECT company, title FROM jobs WHERE id = ?", (job_id,)
-            ).fetchone()
-        finally:
-            conn.close()
-        if row:
-            return str(row[0] or ""), str(row[1] or "")
-    except sqlite3.Error:
-        pass
-    return "", ""
+def _clean_artifact_name(settings: Settings, kind: str, ext: str) -> str:
+    """Professional, recruiter-facing artifact filename: ``"<Applicant Name> <label><ext>"``
+    (e.g. ``"Joseph Lira Resume.pdf"``), or the bare ``"<label><ext>"`` when no name is set.
+
+    Uniqueness comes from the per-job FOLDER (below), so the NAME carries no id/guid — the old
+    ``{Name}_{Company}..._{id8}`` stem is exactly what a recruiter saw on the uploaded file, and
+    the ``_{id8}`` guid suffix read as unprofessional (owner-flagged 2026-06-21)."""
+    label = "Cover Letter" if kind == "Cover" else "Resume"
+    return f"{_basename(label, _applicant_name(settings))}{ext}"
 
 
-def _artifact_stem(settings: Settings, job_id: str, kind: str) -> str:
-    """Human-readable, still-deterministic-from-job_id artifact stem
-    (``"{Name}_{kind}_{Company}_{Title}_{id8}"``). Derives the readable bits from the job
-    (DB) + applicant (master.json); on ANY missing data falls back to the bare ``job_id`` so
-    behaviour degrades safely and callers/tests with no seeded job/bank are unaffected.
-    Both the optimize worker (write) and the apply worker (read) call the path helpers with the
-    same ``job_id``, so they always derive the identical path — no DB hand-off needed."""
-    company, title = _job_company_title(settings, job_id)
-    bits = [b for b in (_slug(_applicant_name(settings), 24), kind, _slug(company), _slug(title)) if b]
-    if len(bits) <= 1:  # nothing readable beyond the kind label → keep the legacy name exactly
-        return f"{job_id}_cover" if kind == "Cover" else job_id
-    bits.append(job_id[:8])
-    return "_".join(bits)
+def _job_generated_dir(settings: Settings, job_id: str) -> Path:
+    """Per-job folder for optimize-generated artifacts: ``artifacts/generated/<job_id>/``. The
+    FOLDER carries the per-job identity, so the file inside keeps a clean recruiter-facing name."""
+    return settings.artifacts_dir / "generated" / job_id
 
 
 def generated_resume_path(settings: Settings, job_id: str) -> Path:
-    """Where the per-job tailored résumé PDF lives.
+    """Where the per-job tailored résumé PDF lives: ``generated/<job_id>/<Name> Resume.pdf``.
 
-    Deterministic from ``job.id`` so the optimize worker writes and the apply worker reads
-    without any DB hand-off. The on-disk name is human-readable (``Jane_Doe_Resume_Acme_Data
-    _Engineer_48b5b857.pdf``) when the job + fact bank are available, else the bare id.
-    ``settings.artifacts_dir / "generated"`` is the parent — created by the renderer on first write.
-    """
-    return settings.artifacts_dir / "generated" / f"{_artifact_stem(settings, job_id, 'Resume')}.pdf"
+    The per-job FOLDER makes the path unique + derivable from ``job.id`` (optimize writes, apply
+    reads — no DB hand-off); the FILE keeps a clean recruiter-facing name with no guid. The
+    parent is created by the renderer on first write. Apply reads via
+    :func:`resolve_generated_resume`, which globs the folder so a later applicant-name change
+    still resolves."""
+    return _job_generated_dir(settings, job_id) / _clean_artifact_name(settings, "Resume", ".pdf")
 
 
 def generated_cover_letter_path(settings: Settings, job_id: str) -> Path:
-    """Where the per-job tailored cover letter text lives.
-
-    Plain ``.txt`` — apply drivers paste into a textarea, so PDF rendering would be wasted
-    work. Same parent dir + readable-name scheme as the résumé (``..._Cover_..._48b5b857.txt``).
-    """
-    return settings.artifacts_dir / "generated" / f"{_artifact_stem(settings, job_id, 'Cover')}.txt"
+    """Where the per-job tailored cover letter lives:
+    ``generated/<job_id>/<Name> Cover Letter.txt``. Plain ``.txt`` — drivers paste it into a
+    textarea, or upload it as a file under this clean name."""
+    return _job_generated_dir(settings, job_id) / _clean_artifact_name(settings, "Cover", ".txt")
 
 
 def _resolve_generated(settings: Settings, job_id: str, kind: str, ext: str) -> Path | None:
-    """Find an optimize-generated artifact for a job, tolerant of name-scheme drift.
+    """Find an optimize-generated artifact for a job, tolerant of every on-disk name scheme.
 
-    The on-disk name changed 2026-06-21 from the bare ``{job_id}`` to a human-readable stem
-    (``{Name}_{kind}_{Company}_{Title}_{id8}``). Optimize-write and apply-read derive the same
-    name *only* while the inputs (master.json ``contact.name`` + the job row) are stable, so a
-    plain ``generated_*_path(...).exists()`` check silently misses two real cases:
+    Generated artifacts moved through three layouts; resolution checks them newest-first so a
+    job optimized under an older build still resolves:
 
-      1. Files written **before** the change (bare ``{job_id}.pdf`` / ``{job_id}_cover.txt``).
-      2. Files whose readable stem no longer matches because the applicant **name changed**
-         between optimize (write) and apply (read).
+      1. **per-job folder, clean name** (current): ``generated/<job_id>/<Name> {Resume|Cover
+         Letter}<ext>`` — the exact path, then a folder glob so a later applicant-name change
+         still resolves the same job's file.
+      2. **legacy flat bare**: ``generated/<job_id><ext>`` / ``generated/<job_id>_cover<ext>``.
+      3. **legacy flat readable**: ``generated/..._<job_id[:8]><ext>`` (adopted only when the
+         id-suffix glob is unambiguous — a single match).
 
-    Resolution order — readable (preferred, exact) → legacy bare → a glob on the deterministic
-    ``_{job_id[:8]}`` id-suffix (catches the name-drift case; only adopted when it's unambiguous,
-    i.e. a single match). Returns ``None`` when nothing matches. ``ext`` includes the dot.
+    Returns ``None`` when nothing matches. ``ext`` includes the dot.
     """
+    keyword = "Cover" if kind == "Cover" else "Resume"
+    job_dir = _job_generated_dir(settings, job_id)
+    flat = settings.artifacts_dir / "generated"
+
     readable = (
         generated_cover_letter_path(settings, job_id)
         if kind == "Cover"
@@ -205,12 +183,15 @@ def _resolve_generated(settings: Settings, job_id: str, kind: str, ext: str) -> 
     )
     if readable.exists():
         return readable
-    folder = settings.artifacts_dir / "generated"
-    legacy = folder / (f"{job_id}_cover{ext}" if kind == "Cover" else f"{job_id}{ext}")
+    if job_dir.exists():
+        matches = sorted(job_dir.glob(f"*{keyword}*{ext}"))
+        if matches:
+            return matches[0]
+    legacy = flat / (f"{job_id}_cover{ext}" if kind == "Cover" else f"{job_id}{ext}")
     if legacy.exists():
         return legacy
-    if folder.exists():
-        matches = sorted(folder.glob(f"*_{job_id[:8]}{ext}"))
+    if flat.exists():
+        matches = sorted(flat.glob(f"*_{job_id[:8]}{ext}"))
         if len(matches) == 1:
             return matches[0]
     return None

@@ -581,21 +581,22 @@ def test_telemetry_records_ok_for_queued(settings, conn, sink):
 # --------------------------------------------------------------- path derivation
 
 def test_canonical_paths_derive_from_job_id(settings):
-    """Path helpers - both workers (optimize writes, apply reads) derive the same
-    canonical paths from job.id. No DB column added: the file's existence is the
-    durable 'this job has been optimized' contract."""
+    """Path helpers - both workers (optimize writes, apply reads) derive the same canonical
+    per-job-FOLDER path from job.id. The folder is the unique key; no DB column added (the
+    file's existence is the durable 'this job has been optimized' contract)."""
     jid = "abc123"
     pdf = generated_resume_path(settings, jid)
     cover = generated_cover_letter_path(settings, jid)
-    assert pdf.name == "abc123.pdf"
-    assert cover.name == "abc123_cover.txt"
-    assert pdf.parent == cover.parent  # both in the same per-job subdir-less folder
-    assert pdf.parent == settings.artifacts_dir / "generated"
+    assert pdf.name == "Resume.pdf"          # no name seeded → bare clean label, no guid
+    assert cover.name == "Cover Letter.txt"
+    assert pdf.parent == cover.parent        # both in the same per-job folder
+    assert pdf.parent == settings.artifacts_dir / "generated" / jid
 
 
-def test_artifact_names_are_human_readable_with_job_and_bank(settings, conn):
-    """With a seeded job + a fact-bank name, the on-disk filename is readable, not a bare UUID,
-    while staying deterministic from job.id (both workers derive the same path)."""
+def test_artifact_names_are_clean_recruiter_facing(settings, conn):
+    """With a fact-bank name the filename is a clean ``<Name> Resume.pdf`` (no guid, no
+    company/title) inside the per-job folder — what a recruiter sees on the upload. Still
+    deterministic from job.id (both workers derive the same path)."""
     from auto_applier.web.onboarding import save_fact_bank
 
     job = _seed_decided(conn, source_job_id="rd-1", company="Acme", title="Data Engineer")
@@ -604,7 +605,8 @@ def test_artifact_names_are_human_readable_with_job_and_bank(settings, conn):
 
     pdf = generated_resume_path(settings, job.id)
     cover = generated_cover_letter_path(settings, job.id)
-    assert pdf.name == f"Jane_Doe_Resume_Acme_Data_Engineer_{job.id[:8]}.pdf"
-    assert cover.name == f"Jane_Doe_Cover_Acme_Data_Engineer_{job.id[:8]}.txt"
+    assert pdf.name == "Jane Doe Resume.pdf"
+    assert cover.name == "Jane Doe Cover Letter.txt"
+    assert pdf.parent == settings.artifacts_dir / "generated" / job.id
     # Deterministic: a second derivation (what the apply worker does) matches.
     assert generated_resume_path(settings, job.id) == pdf

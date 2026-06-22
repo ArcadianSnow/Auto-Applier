@@ -734,32 +734,33 @@ def test_picks_up_legacy_bare_named_artifacts(settings, conn):
 
 
 def test_resolve_generated_prefers_readable_then_legacy_then_id8(settings, conn):
-    """Unit-level resolution order for the name-drift-tolerant resolvers. The job has a
-    company so its readable name is distinct from the bare ``{job_id}`` (the bug's setup)."""
+    """Resolution order across the three on-disk layouts: current per-job-folder clean name →
+    legacy flat bare ``{job_id}.pdf`` → legacy flat readable ``..._{id8}.pdf``."""
     job = _seed_queued_lever(conn, company="acmeco", source_job_id="resolve-1")
     jid = job.id
     generated_dir = settings.artifacts_dir / "generated"
     generated_dir.mkdir(parents=True, exist_ok=True)
-    readable = generated_resume_path(settings, jid)
-    legacy = generated_dir / f"{jid}.pdf"
-    assert readable != legacy  # company present → readable name ≠ bare job_id
+    current = generated_resume_path(settings, jid)        # generated/<jid>/Resume.pdf
+    legacy = generated_dir / f"{jid}.pdf"                  # legacy flat bare
+    assert current.parent == generated_dir / jid          # the per-job folder is the unique key
 
     # 1. Nothing on disk → None.
     assert resolve_generated_resume(settings, jid) is None
     assert resolve_generated_cover_letter(settings, jid) is None
 
-    # 2. A name-drifted readable file (different prefix, same id8 suffix) is found via glob.
+    # 2. A legacy flat readable file (same id8 suffix) is found via the flat id-glob.
     drifted = generated_dir / f"Old_Name_Resume_Acme_Eng_{jid[:8]}.pdf"
     drifted.write_bytes(b"%PDF drift\n")
     assert resolve_generated_resume(settings, jid) == drifted
 
-    # 3. The legacy bare name is an exact match → wins over the ambiguous glob.
+    # 3. The legacy flat bare name is an exact match → wins over the ambiguous flat glob.
     legacy.write_bytes(b"%PDF legacy\n")
     assert resolve_generated_resume(settings, jid) == legacy
 
-    # 4. The exact readable path wins over everything when present.
-    readable.write_bytes(b"%PDF readable\n")
-    assert resolve_generated_resume(settings, jid) == readable
+    # 4. The current per-job-folder path wins over everything when present.
+    current.parent.mkdir(parents=True, exist_ok=True)
+    current.write_bytes(b"%PDF current\n")
+    assert resolve_generated_resume(settings, jid) == current
 
 
 def _recording_cover_driver(seen: dict, *, status=ApplicationStatus.APPLIED) -> DriverEntry:

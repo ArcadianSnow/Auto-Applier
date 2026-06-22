@@ -305,6 +305,29 @@ workers also hold the bank from construction — a parallel reload there would l
 FACTS (skills/bullets) reach résumé generation without restart. NOT needed for the reported bug (More-details
 extras are screener fields, not résumé content) — left as a known parallel gap if it surfaces.
 
+### Résumé/cover filename cleanup — SESSION 2d (SHIPPED 2026-06-21)
+Owner (from the live apply screenshot): the generated résumé still uploaded with an unprofessional name —
+`{Name}_{Company}..._{id8}.pdf` (the `_{id8}` guid suffix from fix-C is what the RECRUITER sees on the file).
+**Fix:** generated artifacts now live in a **per-job FOLDER with a clean name** —
+`generated/<job_id>/<Name> Resume.pdf` / `<Name> Cover Letter.txt` (e.g. "Joseph Lira Resume.pdf"). The
+FOLDER (`<job_id>`) carries the per-job identity, so the filename needs no guid. `generate.py`:
+`generated_resume_path`/`generated_cover_letter_path` → per-job dir + `_clean_artifact_name` (reuses
+`_basename` + `_applicant_name`); removed the dead `_artifact_stem`/`_job_company_title`/`_slug` (+ the
+`sqlite3` import). `_resolve_generated` now checks **three layouts** newest-first: (1) per-job-folder clean
+name (exact, then a folder glob for applicant-name drift), (2) legacy flat bare `{job_id}.pdf`, (3) legacy
+flat readable `..._{id8}.pdf` — so jobs optimized under ANY prior build still resolve (the #1 fix's job).
+Renderer + cover-write already `mkdir(parents=True)`, so the per-job dir is auto-created. Tests updated
+(`test_artifact_names_are_clean_recruiter_facing`, `test_canonical_paths_derive_from_job_id`,
+`test_resolve_generated_prefers_readable_then_legacy_then_id8`). **No DB hand-off, still deterministic.**
+
+### ATS field-coverage audit — HANDOFF written (owner asked, 2026-06-21)
+Owner: "it's missing quite a few fields, maybe write a handoff document for a playwright session where you
+determine all the possible clickables and fields that get missed." → [ats-field-coverage-audit.md](ats-field-coverage-audit.md):
+a planned Playwright-MCP session that snapshots real Greenhouse/Lever/Ashby forms (public form view, never
+submits), builds a field inventory, and attributes each miss to **two layers** — driver DISCOVERY (selector
+never found it) vs resolver RESOLUTION (classifier/data/honesty bail) — since the fix differs per layer.
+Grounded with the 2026-06-21 screenshot baseline. NOT executed yet (it's the next Playwright session).
+
 ### E2 — DESIGN DOC produced (owner chose design-first), NOT built
 Full spec: [e2-on-demand-fill-design.md](e2-on-demand-fill-design.md). Recommends borrowing the scheduler's
 ApplyWorker via a new `prepare_single(job_id, page)` (assisted-only, never dry, single job) reached through

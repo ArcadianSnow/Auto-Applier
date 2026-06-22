@@ -34,6 +34,7 @@ instead of re-deriving from scratch. **Read this first when starting an Auto App
 | **Phase -1 verdict / go-no-go / what Phase 1 must measure** | `research/_phase-minus-1-conclusions.md` |
 | How to seed ATS company lists (board tokens) + **the wired discovery producer** (`av3 discover`, `DiscoverWorker`, `canonical_hash`, scheduler head) | `research/ats-discovery-seeding.md` |
 | How ATS apply forms behave / CAPTCHA / submit confirmation (+ live survey results) | `research/ats-form-automation.md` |
+| **ATS field-coverage audit (PLANNED Playwright session)** — enumerate every field/clickable on real Greenhouse/Lever/Ashby forms, attribute each miss to driver DISCOVERY vs resolver RESOLUTION (2 layers), produce a prioritized classifier/fact-bank gap list. Grounded baseline from the 2026-06-21 screenshot | `research/ats-field-coverage-audit.md` |
 | Phase 3 pipeline staging (embedding pre-filter, score/optimize workers, scheduler) | `research/pipeline-staging.md` |
 | Phase 4 web UI + worker service (FastAPI, SchedulerService, dashboard, onboarding) | `research/web-ui-and-service.md` |
 | Phase 5 observability CLI (errors/stats) + telemetry mirror + relay + installer | `research/observability-and-distribution.md` |
