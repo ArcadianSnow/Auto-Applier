@@ -288,6 +288,29 @@ def test_resolver_fills_lever_card_questions():
     assert outcome.filled["q:cards[uuid-1][field0]"] is True
 
 
+def test_lever_location_fills_via_name_selector_not_id():
+    """Regression (live MISS 2026-06-22): Lever 'location' is id='location-input' name='location',
+    so the bracket-less default selector '#location' matched nothing and the value never landed.
+    The Lever driver must select it by [name='location'] so it fills."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion
+    from auto_applier.sources.browser.lever_apply import _lever_selector_for
+    q = CustomQuestion("location", "Current location", False, "input")
+    assert _lever_selector_for(q) == "[name='location']"     # not '#location'
+
+    html = '<input name="h-captcha-response"><form>...</form>'
+    questions = [{"id": "location", "label": "Current location", "required": False, "kind": "input"}]
+    page = FakePage(html, scripts=["https://hcaptcha.com/1/api.js"], questions=questions)
+    resolver = _FakeResolver({"location": _resolved(q, "Dallas, Texas, United States")})
+    outcome = asyncio.run(
+        prepare_application(
+            page, _listing(), Applicant("Pat", "Doe", "pat@example.com"), "/tmp/r.pdf",
+            dry_run=True, resolver=resolver,
+        )
+    )
+    assert page.elements["[name='location']"].typed == "Dallas, Texas, United States"
+    assert outcome.filled["q:location"] is True
+
+
 def test_lever_required_unresolved_downgrades_auto_to_assisted():
     html = '<input name="h-captcha-response"><form><button id="btn-submit"></button></form>'
     page = FakePage(

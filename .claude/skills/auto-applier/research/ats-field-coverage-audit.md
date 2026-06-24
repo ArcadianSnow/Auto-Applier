@@ -391,3 +391,27 @@ tests couldn't reach). (3) The Greenhouse baseline is unchanged.
 `fills=True` but shows `MISS` (other than the known Ashby Location combobox) is a fresh fill-mechanics gap to
 chase. After a run, `av3 errors --since 30m` and the `resolution` events in `events.db` (now populated for
 Lever/Ashby too) corroborate the on-page table.
+
+### Live run result (2026-06-24) — build CONFIRMED on real forms
+
+First live dry-run (fills, never submitted). All headline wins **LAND**ed:
+- **Lever** mistral (12 discovered, 5→6 land): `urls[LinkedIn]` **LAND** (required, src=profile), `urls[GitHub]`
+  LAND, work-auth radio → "Yes" **LAND** (option-group click), gender survey radio → LAND; the 4 essays + the
+  Twitter/Scholar URLs correctly bail.
+- **Ashby** openai (8 discovered, 4 land): Phone → **LAND** (new PHONE classifier), Preferred Name LAND,
+  work-auth → "Yes" + sponsorship → "No" **LAND** (button-group click — the Phase D mechanics unit tests
+  couldn't reach), start-date + Additional Info + consent correctly bail.
+- **Greenhouse** imagineworldwide (9 discovered, 6 land): no regression; nationality/notice/salary bail.
+
+**Two MISSes, both understood:**
+1. **Ashby "Where are you currently located?"** — the *documented deferred* id-less combobox (synthetic id →
+   fill no-ops → assisted). Still open (follow-up: container-anchored Ashby combobox fill).
+2. **Lever "Current location" → MISS, now FIXED.** Root cause: the field is `id="location-input"
+   name="location"`, and the shared `_selector_for` builds `#location` for a bracket-less id → matched
+   nothing. Fix: `lever_apply._lever_selector_for` selects every Lever field by `[name='<field_id>']`
+   (all Lever fields are name-keyed; bracketed ids resolve identically). Verified `[name='location']` matches
+   the input live; regression test `test_lever_location_fills_via_name_selector_not_id`. **Re-run the harness
+   to confirm it flips to LAND.**
+
+GH salary bailing is a harness artifact, not a regression: `salary_floor` is unset and the synthetic diag
+listing has no per-job salary-intelligence score (production fills it via `format_ask(rec)`).

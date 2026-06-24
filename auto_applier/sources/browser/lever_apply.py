@@ -71,6 +71,16 @@ _RESUME_STORAGE_ID_SELECTOR = "input[name='resumeStorageId']"
 _SUBMIT_SELECTOR = "#btn-submit"
 
 
+def _lever_selector_for(question) -> str:
+    """Every Lever field is NAME-keyed (cards[…], urls[…], location, surveysResponses[…]),
+    so always select by ``[name='<field_id>']``. The shared default `_selector_for` builds
+    ``#<field_id>`` for a bracket-less id like ``location`` — which misses, because Lever's
+    location input is ``id='location-input' name='location'`` (live MISS 2026-06-22). A
+    name-based selector lands it; bracketed ids resolve identically to the default."""
+    fid = (getattr(question, "field_id", "") or "").strip()
+    return f"[name='{fid}']" if fid else ""
+
+
 async def _collect_script_srcs(page) -> list[str]:
     return await page.eval_on_selector_all(
         "script[src]", "els => els.map(e => e.src)"
@@ -271,7 +281,9 @@ async def prepare_application(
     # and the survey path are unaffected.
     if resolver is not None and outcome.custom_questions:
         outcome.resolutions = await resolver.resolve_all(outcome.custom_questions)
-        custom_filled = await fill_resolutions(page, outcome.custom_questions, outcome.resolutions)
+        custom_filled = await fill_resolutions(
+            page, outcome.custom_questions, outcome.resolutions,
+            selector_for=_lever_selector_for)
         for fid, ok in custom_filled.items():
             outcome.filled[f"q:{fid}"] = ok
 
