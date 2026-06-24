@@ -671,6 +671,40 @@ function dashboard() {
       }
     },
 
+    /**
+     * E2 "Fill what it can": open the job's apply form in the bot's Chrome and run the assisted
+     * fill on it, leaving a pre-filled ASSISTED_PENDING attempt for the user to review + submit.
+     * The fill is PARTIAL (these jobs are in review because the bot couldn't finish them) — the
+     * note reports "filled N, M left for you". On success the job moves to the "Ready to finish"
+     * lane, so refresh. The fill drives a real browser + may draft essays, so it can take a while;
+     * the per-row busy gate keeps the buttons disabled until it returns.
+     */
+    async fillOnDemand(jobId) {
+      if (this.reviewBusy[jobId]) return;
+      this._setReviewBusy(jobId, true);
+      this._setReviewNote(jobId, 'Opening the form and filling what it can…');
+      try {
+        const r = await fetch(`/api/jobs/${jobId}/assisted/prepare`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this._setReviewNote(jobId, `Couldn't fill: ${body.detail || r.statusText}`);
+          if (r.status === 409) await this.refreshAll();
+          return;
+        }
+        const o = body.outcome || {};
+        const left = o.left ? `, ${o.left} left for you` : '';
+        this._setReviewNote(jobId,
+          `Filled ${o.filled || 0} field(s)${left} — review + submit in the bot browser, then Mark applied.`);
+        await this.refreshAll();
+      } catch (e) {
+        this._setReviewNote(jobId, `Error: ${e}`);
+      } finally {
+        this._setReviewBusy(jobId, false);
+      }
+    },
+
     async markApplied(jobId) {
       if (this.reviewBusy[jobId]) return;
       if (!confirm('Mark this job as APPLIED? Do this if you applied to it '

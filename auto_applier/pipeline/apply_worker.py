@@ -787,6 +787,12 @@ class ApplyWorker:
 
     # -- E2 on-demand single-job fill --------------------------------------
 
+    @property
+    def prepare_in_progress(self) -> bool:
+        """True while an on-demand :meth:`prepare_single` fill holds the single-flight lock — lets
+        the E2 route reject a second click with a fast 409 *before* it pops another Chrome tab."""
+        return self._prepare_lock.locked()
+
     async def prepare_single(self, job_id: str, *, page: Any) -> ApplyOutcome:
         """E2 "fill what it can on demand": run the production assisted fill on ONE review job, on a
         page the caller already opened (the launcher's tab the owner is looking at), and leave a real

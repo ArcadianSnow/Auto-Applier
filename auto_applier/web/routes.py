@@ -43,6 +43,7 @@ from auto_applier import __version__
 from auto_applier.db.repositories import ApplicationRepo, JobRepo, OutcomeRepo, ScoreRepo
 from auto_applier.domain.models import utcnow_iso
 from auto_applier.domain.state import ApplicationStatus, JobState
+from auto_applier.pipeline.apply_worker import PrepareSingleError
 from auto_applier.resume.proposed import load_proposed
 from auto_applier.sources.health import (
     is_paused as source_is_paused,
@@ -100,6 +101,17 @@ def _get_launcher(request: Request):
     BrowserSession-bound launcher in production — so this never returns
     ``None``."""
     return request.app.state.headed_launcher
+
+
+def _get_worker(request: Request):
+    """The scheduler's :class:`ApplyWorker`, exposed for the E2 on-demand fill (``prepare_single``).
+
+    ``None`` in ``--no-scheduler`` / pre-onboarding diagnostics, or before the scheduler factory has
+    built it — the prepare route 409s with a "start the worker" message in that case. Reusing the
+    scheduler's own worker (not a fresh one) is deliberate: the on-demand fill then matches the
+    production fill path exactly (the e2-on-demand-fill-design "no second code path" requirement)."""
+    holder = getattr(request.app.state, "apply_worker_holder", None)
+    return holder.get("worker") if holder else None
 
 
 def _dispose_batch(request: Request, job_id: str, disposition: str) -> None:
@@ -781,6 +793,71 @@ async def open_job_in_browser(request: Request, job_id: str) -> dict:
         raise HTTPException(status_code=422, detail=f"job {job_id} has no URL to open")
     result = await _get_launcher(request).open(job.url)
     return {"job_id": job_id, "launch": result.to_dict()}
+
+
+@api_router.post("/jobs/{job_id}/assisted/prepare")
+async def assisted_prepare(request: Request, job_id: str) -> dict:
+    """E2 "fill what it can on demand": open a REVIEW job's apply form in the bot's headed Chrome
+    and run the production assisted fill on it, leaving a real ``ASSISTED_PENDING`` attempt for the
+    owner to review + submit. This **promotes** a "Needs your decision" job into the "Ready to
+    finish" lane (it produces the pending attempt the existing assisted endpoints key off).
+
+    The fill is inherently **PARTIAL** — these jobs are in REVIEW *because the bot couldn't complete
+    them* — so it fills what it's confident about and leaves essays / sensitive EEO / unresolved
+    screeners for the human. It NEVER auto-submits (assisted-only); the human always clicks submit.
+
+    Errors: 404 (no job) · 422 (no URL) · 409 (worker unavailable / no bot browser / non-preparable
+    state / unknown source / a fill already in progress).
+    """
+    worker = _get_worker(request)
+    if worker is None:
+        raise HTTPException(status_code=409, detail=(
+            "the apply worker isn't running — start the scheduler (finish onboarding, "
+            "don't use --no-scheduler) to fill applications on demand"
+        ))
+    launcher = _get_launcher(request)
+    if not launcher.has_bot_browser:
+        raise HTTPException(status_code=409, detail=(
+            "the bot's Chrome isn't available — an on-demand fill needs the bot browser "
+            "(it can't drive your default browser)"
+        ))
+
+    # Pre-read for a clean 404 / 422 BEFORE we pop a Chrome tab (don't open the browser for a bad
+    # id or a URL-less row). prepare_single re-validates state/source authoritatively.
+    web_state = _get_state(request)
+    with web_state.app_conn() as conn:
+        job = JobRepo(conn).get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+    if not job.url:
+        raise HTTPException(status_code=422, detail=f"job {job_id} has no URL to open")
+
+    # Reject a second concurrent fill BEFORE opening a tab (prepare_single also guards, but this
+    # avoids popping a Chrome tab we'd immediately 409 on for the common double-click).
+    if worker.prepare_in_progress:
+        raise HTTPException(status_code=409, detail="a fill is already in progress")
+
+    # Open the apply form in the bot's profile + engage the manual takeover (masks the scheduler's
+    # apply stage so it doesn't drive the shared session underneath us), then DRIVE the fill on it.
+    page, launch = await launcher.open_page(job.url)
+    if page is None:
+        raise HTTPException(status_code=409, detail=launch.note or "could not open a bot-browser page")
+    try:
+        outcome = await worker.prepare_single(job_id, page=page)
+    except PrepareSingleError as exc:
+        raise HTTPException(status_code=exc.code, detail=str(exc))
+
+    filled = sum(1 for v in outcome.filled.values() if v)
+    left = sum(1 for v in outcome.filled.values() if not v)
+    return {
+        "job_id": job_id,
+        "launch": launch.to_dict(),
+        "outcome": {
+            "status": outcome.status.value if outcome.status else None,
+            "filled": filled,
+            "left": left,
+        },
+    }
 
 
 @api_router.post("/jobs/{job_id}/assisted/confirm")

@@ -126,6 +126,46 @@ class HeadedBrowserLauncher:
             logger.debug("headed launcher: could not bind page close → relying on "
                          "takeover timeout: %s", exc)
 
+    async def open_page(self, url: str = "") -> tuple[Any | None, LaunchResult]:
+        """Open a page in the bot's persistent profile, engage the manual takeover, optionally
+        navigate to ``url``, and return ``(page, result)`` so a caller can DRIVE that page — the
+        E2 on-demand fill (``ApplyWorker.prepare_single``) needs the live page object, not just a
+        result.
+
+        Returns ``(None, result)`` when there is **no bot browser** (the ``--no-scheduler`` posture)
+        or ``new_page()`` fails: a default-browser tab can't be driven, so the caller refuses
+        cleanly rather than filling the wrong window. Unlike :meth:`open`, a *navigation* failure
+        does NOT fall back to the OS browser — the caller needs the bot-profile page; a goto error
+        leaves the page open (the driver re-navigates to the apply form anyway) and is noted in the
+        result. Never raises.
+        """
+        if self._new_page is None:
+            return None, LaunchResult(
+                ok=False, mode="unavailable", url=url,
+                note="no bot browser available to fill in",
+            )
+        try:
+            page = await self._new_page()
+        except Exception as exc:  # noqa: BLE001 — report, don't raise
+            logger.warning("headed launcher: open_page new_page() failed: %s", exc)
+            return None, LaunchResult(
+                ok=False, mode="unavailable", url=url,
+                note="could not open a bot-browser page",
+            )
+        # The user will be hands-on in this tab — engage the takeover so the scheduler masks the
+        # apply stage while the on-demand fill runs and the human reviews + submits.
+        self._register_takeover(page)
+        note = "opened in bot's persistent Chrome profile"
+        if url:
+            try:
+                await page.goto(url)
+            except Exception as exc:  # noqa: BLE001 — the driver re-navigates; keep the page
+                logger.warning(
+                    "headed launcher: open_page goto(%s) failed: %s", url, exc
+                )
+                note = "opened (initial navigation failed; the fill will navigate to the form)"
+        return page, LaunchResult(ok=True, mode="bot_browser", url=url, note=note)
+
     async def open(self, url: str) -> LaunchResult:
         """Open ``url`` and return a structured result for the API response.
 

@@ -1,12 +1,49 @@
 # E2 — "Fill what it can on demand"
 
-**Status:** **Phase A SHIPPED 2026-06-24** (`prepare_single` on `ApplyWorker` + 9 unit tests, 1506
-green). Phase B (worker holder + route + dashboard button) next; Phase C is the owner-watched live
-validation. The 3 open owner questions were resolved with the doc's own recommendations when the
-owner said "start work": eligible = REVIEW + QUEUED_APPLY only; résumé-less = fill the rest, human
-attaches; outcome surfacing = one-line "filled N / M left" (per-field already in events.db). E2 is
-the owner's headline want from the live test pass: a dashboard button that opens a review job's
-listing **and pre-fills what the bot can**, leaving the rest for the human.
+**Status:** **Phases A + B SHIPPED 2026-06-24** (`prepare_single` + the `/assisted/prepare` route +
+the "Fill what it can" dashboard button). Phase C is the owner-watched live validation (the only
+remaining piece — not autonomously runnable). The 3 open owner questions were resolved with the doc's
+own recommendations when the owner said "start work": eligible = REVIEW + QUEUED_APPLY only;
+résumé-less = fill the rest, human attaches; outcome surfacing = one-line "filled N / M left"
+(per-field already in events.db). E2 is the owner's headline want from the live test pass: a dashboard
+button that opens a review job's listing **and pre-fills what the bot can**, leaving the rest for the
+human.
+
+## Phase B — SHIPPED (2026-06-24)
+
+The web surface for the on-demand fill: a route that opens the form in the bot's Chrome and drives
+`prepare_single` on it, plus the dashboard button.
+
+- **Worker holder:** `cli serve` now stashes the scheduler's `ApplyWorker` in a `_worker_holder` dict
+  (the factory fills it lazily) and exposes it via `app.state.apply_worker_holder`. The route reaches
+  it through `_get_worker(request)` → reusing the SAME worker the scheduler drives (the "no second
+  fill path" requirement). `None` in `--no-scheduler` / pre-onboarding → the route 409s.
+- **`HeadedBrowserLauncher.open_page(url) -> (page|None, LaunchResult)`** (new): opens a page in the
+  bot's profile, engages the manual takeover (masks the scheduler's apply stage), optionally
+  navigates, and **returns the live page** so the route can drive the fill on it. Returns
+  `(None, result)` when there's no bot browser or `new_page()` fails (a default-browser tab can't be
+  driven). Unlike `open()`, a *navigation* failure keeps the page (the driver re-navigates) rather
+  than falling back to the OS browser.
+- **`POST /api/jobs/{job_id}/assisted/prepare`:** worker-available + bot-browser gates → pre-read for
+  a clean 404/422 (no tab popped for a bad id) → fast 409 on `worker.prepare_in_progress` → `open_page`
+  → `prepare_single(page=...)` → maps `PrepareSingleError.code` to the HTTP status. Response:
+  `{job_id, launch, outcome:{status, filled, left}}` (filled/left counted from `outcome.filled`).
+  `ApplyWorker.prepare_in_progress` property exposes the single-flight lock state for the fast 409.
+- **Dashboard:** a primary **"Fill what it can"** button heads the "Needs your decision" group's
+  action row (next to Open-in-browser / Mark-applied / Skip), with an honest tooltip + group blurb
+  ("pre-fills the form … you finish the rest + submit"). The `fillOnDemand(jobId)` Alpine method POSTs
+  the route, surfaces "Filled N field(s), M left for you" in the per-row note, and refreshes (the job
+  moves to the "Ready to finish" lane).
+- Tests: `test_web_e2_prepare.py` (11 — success + shape + page-passthrough; 409 worker-unavailable /
+  no-worker / no-bot-browser / in-progress / open_page-None; 404; 422; PrepareSingleError code
+  mapping 404/409/422) + `test_web_login_assist.py` (+4 `open_page`: page+takeover, no-bot-browser,
+  new_page-raises, goto-fail-keeps-page). `node --check` on app.js.
+
+## Phase C — live validation (owner-watched, NOT yet run)
+
+The remaining piece: on a real REVIEW job in a real `av3 serve` session, click "Fill what it can",
+watch the bot fill the form in its Chrome, confirm the partial fill + the ASSISTED_PENDING handoff,
+then submit by hand. Not autonomously runnable (needs a live ATS + the owner at the keyboard).
 
 ## Phase A — SHIPPED (2026-06-24, 1506 green)
 

@@ -2543,6 +2543,12 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
     # prerequisites) — the launcher then falls back to the OS default browser.
     _session_holder: dict[str, BrowserSession | None] = {"session": None}
 
+    # Holder for the scheduler's ApplyWorker so the E2 on-demand-fill route can reach the SAME
+    # worker the scheduler drives (so prepare_single matches the production fill path exactly).
+    # The factory stashes the worker here when it builds the scheduler; stays None in
+    # --no-scheduler / pre-onboarding, which makes the prepare route 409 cleanly.
+    _worker_holder: dict[str, ApplyWorker | None] = {"worker": None}
+
     # Shared manual-takeover tracker: the headed launcher engages it when the user opens a
     # job in the bot's Chrome window, the scheduler reads it as an apply-only gate so it
     # stops driving the browser (gather stages keep running) until that tab closes.
@@ -2656,6 +2662,15 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
         async def _factory(pause_predicate):
             # The BrowserSession is NOT started here — ``_lazy_new_page`` starts it on the
             # first apply/open so a discovery/scoring-only run never opens a Chrome window.
+            apply_worker = ApplyWorker(
+                settings=settings, conn=conn, fact_bank=bank,
+                resume_path=str(resume_path), new_page=_lazy_new_page,
+                embed_client=embed, llm_client=llm, mode=apply_mode,
+                dry_run=dry_run, drivers=default_drivers(),
+                review_batch=_review_batch,
+            )
+            # Expose the worker to the web layer for the E2 on-demand fill route (prepare_single).
+            _worker_holder["worker"] = apply_worker
             return Scheduler(
                 discover_worker=DiscoverWorker(settings=settings, conn=conn),
                 inbox_worker=_build_scheduler_inbox_worker(settings, conn, llm),
@@ -2671,13 +2686,7 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
                     settings=settings, conn=conn, fact_bank=bank,
                     llm_client=llm,
                 ),
-                apply_worker=ApplyWorker(
-                    settings=settings, conn=conn, fact_bank=bank,
-                    resume_path=str(resume_path), new_page=_lazy_new_page,
-                    embed_client=embed, llm_client=llm, mode=apply_mode,
-                    dry_run=dry_run, drivers=default_drivers(),
-                    review_batch=_review_batch,
-                ),
+                apply_worker=apply_worker,
                 cycle_interval_s=effective_cycle_interval,
                 quiet_hours=quiet_hours_window,
                 pause_predicate=pause_predicate,
@@ -2744,6 +2753,9 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
         watchers=watchers or None,
         launcher=launcher,
     )
+    # Expose the scheduler's ApplyWorker (filled in lazily by the factory) to the E2 on-demand
+    # fill route. Stays {"worker": None} in --no-scheduler / pre-onboarding → that route 409s.
+    app.state.apply_worker_holder = _worker_holder
 
     hotkey_label = (
         settings.web.hotkey if service is not None and any(

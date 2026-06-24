@@ -227,9 +227,10 @@
               <h3 class="assisted-group-head">Needs your decision
                 <span class="count" x-text="reviewGroups().decide.length"></span>
               </h3>
-              <p class="muted small">The bot couldn't complete these. <strong>Open in browser</strong>
-                to take over in the bot's Chrome, or <strong>Mark applied</strong> if you already
-                applied yourself.</p>
+              <p class="muted small">The bot couldn't complete these. <strong>Fill what it can</strong>
+                pre-fills the form in the bot's Chrome (you finish the rest + submit),
+                <strong>Open in browser</strong> takes over manually, or <strong>Mark applied</strong>
+                if you already applied yourself.</p>
               <ul class="job-list">
                 <template x-for="j in reviewGroups().decide" :key="j.id">
                   <li>
@@ -242,10 +243,14 @@
                       <span class="status-pill pill-reason" x-text="j.reason"></span>
                     </div>
                     <div class="action-row">
+                      <button class="primary-btn"
+                              :disabled="!!reviewBusy[j.id]"
+                              title="Open the form in the bot's Chrome and pre-fill what it can — you finish the rest and submit"
+                              @click="fillOnDemand(j.id)">Fill what it can</button>
                       <button class="secondary-btn"
                               :disabled="!!reviewBusy[j.id]"
                               @click="openInBrowser(j.id)">Open in browser</button>
-                      <button class="primary-btn"
+                      <button class="secondary-btn"
                               :disabled="!!reviewBusy[j.id]"
                               @click="markApplied(j.id)">Mark applied</button>
                       <button class="secondary-btn"

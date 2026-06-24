@@ -248,6 +248,67 @@ class TestHeadedBrowserLauncher:
             assert result.mode == "unavailable"
         asyncio.run(_go())
 
+    # ---- open_page (E2 on-demand fill needs the live page object) -------------
+
+    def test_open_page_returns_page_and_engages_takeover(self):
+        from auto_applier.web.control import ManualTakeover
+
+        async def _go():
+            page = _RecordingPageWithClose()
+
+            async def _new_page():
+                return page
+
+            takeover = ManualTakeover()
+            launcher = HeadedBrowserLauncher(new_page=_new_page, takeover=takeover)
+            got_page, result = await launcher.open_page("https://job.example/apply")
+            assert got_page is page                       # the SAME page, for the caller to drive
+            assert result.ok is True and result.mode == "bot_browser"
+            assert page.url_visited == "https://job.example/apply"
+            assert takeover.is_active() is True            # masks the scheduler's apply stage
+            page.fire_close()
+            assert takeover.is_active() is False
+        asyncio.run(_go())
+
+    def test_open_page_returns_none_when_no_bot_browser(self):
+        async def _go():
+            launcher = HeadedBrowserLauncher(new_page=None)   # default-browser-only posture
+            got_page, result = await launcher.open_page("https://x.example/apply")
+            assert got_page is None                      # nothing to drive → caller refuses
+            assert result.ok is False and result.mode == "unavailable"
+        asyncio.run(_go())
+
+    def test_open_page_returns_none_when_new_page_raises(self):
+        async def _go():
+            async def _new_page():
+                raise RuntimeError("session torn down")
+
+            launcher = HeadedBrowserLauncher(new_page=_new_page)
+            got_page, result = await launcher.open_page("https://x.example/apply")
+            assert got_page is None
+            assert result.ok is False
+        asyncio.run(_go())
+
+    def test_open_page_keeps_page_when_goto_fails(self):
+        """A navigation failure does NOT fall back to the OS browser (the caller needs the
+        bot-profile page); the page is returned and the driver re-navigates to the form."""
+        async def _go():
+            class _BrokenGotoPage:
+                async def goto(self, url: str):
+                    raise RuntimeError("net::ERR_NAME_NOT_RESOLVED")
+
+            page = _BrokenGotoPage()
+
+            async def _new_page():
+                return page
+
+            launcher = HeadedBrowserLauncher(new_page=_new_page)
+            got_page, result = await launcher.open_page("https://x.example/apply")
+            assert got_page is page                  # still handed back despite the nav error
+            assert result.ok is True
+            assert "navigation failed" in result.note
+        asyncio.run(_go())
+
 
 # --------------------------------------------------------------- /api/sources login
 
