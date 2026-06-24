@@ -30,8 +30,10 @@ from auto_applier.pipeline.retention import (
     backup_events_db,
     prune_ephemeral,
     prune_events,
+    prune_proposed_artifacts,
     run_backup_cycle,
 )
+from auto_applier.resume.proposed import ProposedApplication, save_proposed
 
 
 # --------------------------------------------------------------- helpers
@@ -66,6 +68,11 @@ def _seed_job(
         repo.set_state(job.id, JobState.APPLIED)
     elif state is JobState.DESCRIBED:
         repo.set_state(job.id, JobState.DESCRIBED)
+    elif state is JobState.REVIEW:
+        repo.set_state(job.id, JobState.DESCRIBED)
+        repo.set_state(job.id, JobState.SCORED)
+        repo.set_state(job.id, JobState.DECIDED)
+        repo.set_state(job.id, JobState.REVIEW)
     # Backdate updated_at so prune sees this row as "old."
     backdate = (datetime.now(timezone.utc) - timedelta(days=age_days)).isoformat(timespec="seconds")
     conn.execute("UPDATE jobs SET updated_at = ? WHERE id = ?", (backdate, job.id))
@@ -428,3 +435,81 @@ def test_scheduler_maintenance_exception_isolated():
     assert "maintenance" in summary.cycles[0].stage_errors
     assert summary.total_errors >= 1
     assert len(summary.cycles) == 2  # second cycle still ran
+
+
+# --------------------------------------------------------------- prune_proposed_artifacts
+
+def _save_proposed(settings, job_id: str) -> Path:
+    """Persist a minimal proposed-application artifact for ``job_id`` (no fields needed —
+    retention keys off the job state + the file's existence, not its contents)."""
+    return save_proposed(settings, ProposedApplication(job_id=job_id, fields=[]))
+
+
+def test_prune_proposed_removes_orphan(settings, conn):
+    """A proposed/<job_id>.json whose job row no longer exists is removed regardless of
+    age — nothing left to render on the In-Progress page (the job was pruned or never
+    existed)."""
+    path = _save_proposed(settings, "ghost-job")
+    assert path.exists()
+
+    result = prune_proposed_artifacts(conn, settings, retention_days=30)
+
+    assert result.table == "proposed_artifacts"
+    assert result.deleted == 1
+    assert not path.exists()
+
+
+def test_prune_proposed_removes_old_terminal(settings, conn):
+    """A terminal (APPLIED) job older than the window loses its artifact — the owner dealt
+    with it and the grace window has passed."""
+    job = _seed_job(conn, source_job_id="done-old", state=JobState.APPLIED, age_days=45)
+    path = _save_proposed(settings, job.id)
+
+    result = prune_proposed_artifacts(conn, settings, retention_days=30)
+
+    assert result.deleted == 1
+    assert not path.exists()
+
+
+def test_prune_proposed_keeps_recent_terminal(settings, conn):
+    """A terminal job within the window keeps its artifact (the disposition grace window)."""
+    job = _seed_job(conn, source_job_id="done-new", state=JobState.APPLIED, age_days=5)
+    path = _save_proposed(settings, job.id)
+
+    result = prune_proposed_artifacts(conn, settings, retention_days=30)
+
+    assert result.deleted == 0
+    assert path.exists()
+
+
+def test_prune_proposed_keeps_in_flight_review(settings, conn):
+    """A non-terminal job (REVIEW) keeps its artifact regardless of age — the owner may
+    still act on it on the In-Progress page. Disposition, not file age, is the key."""
+    job = _seed_job(conn, source_job_id="in-review", state=JobState.REVIEW, age_days=365)
+    path = _save_proposed(settings, job.id)
+
+    result = prune_proposed_artifacts(conn, settings, retention_days=30)
+
+    assert result.deleted == 0
+    assert path.exists()
+
+
+def test_prune_proposed_no_dir_is_noop(settings, conn):
+    """No proposed dir (nothing ever prepared) → deleted=0, no exception."""
+    result = prune_proposed_artifacts(conn, settings, retention_days=30)
+    assert result.deleted == 0
+
+
+def test_prune_proposed_emits_event(settings, conn, sink):
+    _save_proposed(settings, "ghost-evt")
+    prune_proposed_artifacts(conn, settings, retention_days=30)
+
+    import json as _json
+    rows = [
+        r for r in sink.recent(limit=20)
+        if r["stage"] == "prune"
+        and _json.loads(r["context_json"] or "{}").get("table") == "proposed_artifacts"
+    ]
+    assert rows, "expected a proposed_artifacts prune event"
+    ctx = _json.loads(rows[0]["context_json"] or "{}")
+    assert ctx.get("deleted") == 1

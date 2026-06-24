@@ -34,7 +34,31 @@ def test_prune_cli_succeeds_on_empty_db(tmp_path, monkeypatch):
     result = CliRunner().invoke(cli, ["prune"])
     assert result.exit_code == 0
     assert "pruned jobs=0" in result.output
+    assert "pruned proposed-artifacts=0" in result.output
     assert "pruned events=0" in result.output
+
+
+def test_prune_cli_removes_orphan_proposed_artifact(tmp_path, monkeypatch):
+    """``av3 prune`` deletes a proposed/<job_id>.json whose job row doesn't exist
+    (batched assisted review retention) and reports the count."""
+    monkeypatch.setenv("AV3_DATA_DIR", str(tmp_path))
+    _seed_settings_dir(tmp_path)
+    from auto_applier.config import load_settings
+    from auto_applier.resume.proposed import (
+        ProposedApplication,
+        proposed_path,
+        save_proposed,
+    )
+
+    settings = load_settings()
+    save_proposed(settings, ProposedApplication(job_id="orphan-cli", fields=[]))
+    path = proposed_path(settings, "orphan-cli")
+    assert path.exists()
+
+    result = CliRunner().invoke(cli, ["prune"])
+    assert result.exit_code == 0
+    assert "pruned proposed-artifacts=1" in result.output
+    assert not path.exists()
 
 
 def test_prune_cli_ephemeral_days_override(tmp_path, monkeypatch):

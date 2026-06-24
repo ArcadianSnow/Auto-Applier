@@ -38,7 +38,7 @@ from pathlib import Path
 
 from auto_applier.config.settings import Settings
 from auto_applier.db.engine import backup_db, rotate_backups, tx
-from auto_applier.domain.state import EPHEMERAL_STATES
+from auto_applier.domain.state import EPHEMERAL_STATES, TERMINAL_STATES
 from auto_applier.telemetry import EventSink, get_sink
 
 __all__ = [
@@ -49,6 +49,7 @@ __all__ = [
     "backup_events_db",
     "prune_ephemeral",
     "prune_events",
+    "prune_proposed_artifacts",
     "run_backup_cycle",
 ]
 
@@ -159,6 +160,67 @@ def prune_events(events_db_path: Path | str, retention_days: int) -> PruneResult
         "table": "events", "deleted": deleted, "cutoff": cutoff_iso,
     })
     return PruneResult(table="events", deleted=deleted, cutoff_iso=cutoff_iso)
+
+
+def prune_proposed_artifacts(
+    conn: sqlite3.Connection, settings: Settings, retention_days: int
+) -> PruneResult:
+    """Delete stale ``artifacts/proposed/<job_id>.json`` files (batched assisted review).
+
+    Each prepared job persists a per-job "complete proposed application" JSON for the
+    "In Progress" page (``auto_applier.resume.proposed``). The page only renders the
+    artifact while the job is a live batch member awaiting the owner, so once the job is
+    **dispositioned** the file is dead weight. The retention rule (keyed to disposition,
+    not file age) prunes a proposed file when EITHER:
+
+      * its ``<job_id>`` is no longer a row in ``jobs`` (**orphan** — the job was pruned
+        by :func:`prune_ephemeral` or never existed), regardless of age; OR
+      * its job is in a **terminal** state (``APPLIED`` / ``SKIPPED`` / ``FILTERED``)
+        **and** the job's ``updated_at`` is older than ``retention_days`` — i.e. the
+        owner dealt with it and the grace window has passed.
+
+    A file whose job is still in flight (REVIEW, QUEUED_APPLY, …) is **kept** regardless
+    of age — the owner may still act on it on the page. This mirrors :func:`prune_ephemeral`
+    (terminal + same window) while never touching an in-flight review.
+
+    File deletes aren't transactional; a per-file ``OSError`` is logged-and-skipped so one
+    locked/vanished file never aborts the sweep. No DB writes — read-only on ``jobs``.
+    """
+    cutoff_iso, _ = _utc_cutoff(retention_days)
+    proposed_dir = settings.artifacts_dir / "proposed"
+    if not proposed_dir.exists():
+        return PruneResult(table="proposed_artifacts", deleted=0, cutoff_iso=cutoff_iso)
+
+    # job_id -> (state, updated_at) for every job still present. Absent ⇒ orphan.
+    job_info: dict[str, tuple[str, str]] = {
+        str(row[0]): (str(row[1]), str(row[2] or ""))
+        for row in conn.execute("SELECT id, state, updated_at FROM jobs")
+    }
+    terminal = {s.value for s in TERMINAL_STATES}
+
+    deleted = 0
+    for path in proposed_dir.glob("*.json"):
+        job_id = path.stem
+        info = job_info.get(job_id)
+        if info is None:
+            remove = True  # orphan — nothing left to render
+        else:
+            state, updated_at = info
+            remove = state in terminal and updated_at < cutoff_iso
+        if not remove:
+            continue
+        try:
+            path.unlink()
+            deleted += 1
+        except OSError as exc:  # noqa: PERF203 — log-and-skip one bad file, keep sweeping
+            _emit("prune", status="error", context={
+                "table": "proposed_artifacts", "path": str(path), "error": str(exc),
+            })
+
+    _emit("prune", status="ok", context={
+        "table": "proposed_artifacts", "deleted": deleted, "cutoff": cutoff_iso,
+    })
+    return PruneResult(table="proposed_artifacts", deleted=deleted, cutoff_iso=cutoff_iso)
 
 
 # --------------------------------------------------------------- backups

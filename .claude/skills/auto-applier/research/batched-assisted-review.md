@@ -295,5 +295,26 @@ REVIEW (visible in the normal review queue) for the owner to revisit. Re-prepare
 enhancement (would tie into the E2 on-demand `prepare_single`).
 
 **Remaining (non-blocking) follow-ups:** durable/DB batch state (in-memory today — a restart starts the
-barrier empty; prepared jobs sit in REVIEW, no loss); retention for `artifacts/proposed/*.json`
-(`pipeline/retention.py`); parallelizing per-gap drafting if latency bites; Lever/Ashby live smoke.
+barrier empty; prepared jobs sit in REVIEW, no loss); parallelizing per-gap drafting if latency bites;
+Lever/Ashby live smoke.
+
+## Follow-up — proposed-artifact retention SHIPPED (2026-06-24, 1490 green)
+
+`artifacts/proposed/<job_id>.json` files accumulated per prepared job with no cleanup. Added
+**`prune_proposed_artifacts(conn, settings, retention_days)`** to `pipeline/retention.py` — retention keyed
+to **disposition, not file age** (the doc's "window keyed to REVIEW/disposition"):
+
+- prune when the `<job_id>` is **no longer a row in `jobs`** (orphan — pruned by `prune_ephemeral` or never
+  existed), regardless of age; OR
+- prune when the job is in a **terminal** state (`APPLIED`/`SKIPPED`/`FILTERED`) **and** `jobs.updated_at`
+  is older than the window;
+- **keep** a file whose job is still in flight (REVIEW, QUEUED_APPLY, …) regardless of age — the owner may
+  still act on it on the In-Progress page.
+
+Window = `retention.ephemeral_days` (no new config knob; same window the ephemeral job rows get). Read-only on
+`jobs`; per-file `OSError` is logged-and-skipped so one bad file never aborts the sweep; emits the standard
+`prune` event (`table=proposed_artifacts`). Wired into **both `_maintenance` hooks** (serve + run) — runs
+right after `prune_ephemeral` so orphans created by that prune are swept the same cycle — and into **`av3
+prune`** (new `pruned proposed-artifacts=N` output line). Tests: `test_retention.py` (+6: orphan, old-terminal,
+recent-terminal-kept, in-flight-review-kept, no-dir no-op, event) + `test_cli_retention.py` (+1 orphan via CLI,
++ empty-db line assert). 1490 green.

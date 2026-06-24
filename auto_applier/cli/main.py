@@ -2278,12 +2278,14 @@ def run_cmd(max_cycles: int | None, quiet_hours: str | None,
     from auto_applier.pipeline.retention import (
         prune_ephemeral as _prune_ephemeral,
         prune_events as _prune_events,
+        prune_proposed_artifacts as _prune_proposed,
         run_backup_cycle as _run_backup_cycle,
     )
 
     async def _maintenance():
         _prune_ephemeral(conn, settings.retention.ephemeral_days)
         _prune_events(settings.events_db_path, settings.retention.events_days)
+        _prune_proposed(conn, settings, settings.retention.ephemeral_days)
         _run_backup_cycle(settings)
 
     # Discovery is the head of the loop unless --no-discover. Boards + title filter
@@ -2377,7 +2379,11 @@ def prune_cmd(ephemeral_days: int | None, events_days: int | None) -> None:
 
     Both run inside their own transactions; a crash mid-delete rolls back.
     """
-    from auto_applier.pipeline.retention import prune_ephemeral, prune_events
+    from auto_applier.pipeline.retention import (
+        prune_ephemeral,
+        prune_events,
+        prune_proposed_artifacts,
+    )
 
     settings = load_settings()
     conn = init_app_db(settings.app_db_path)
@@ -2388,6 +2394,10 @@ def prune_cmd(ephemeral_days: int | None, events_days: int | None) -> None:
 
     try:
         job_result = prune_ephemeral(conn, eff_eph)
+        # Proposed-application artifacts (batched assisted review) follow the ephemeral
+        # window: keyed to job disposition, so prune AFTER prune_ephemeral has removed the
+        # ephemeral job rows whose artifacts are now orphaned. Same conn, still open.
+        proposed_result = prune_proposed_artifacts(conn, settings, eff_eph)
     finally:
         conn.close()
     evt_result = prune_events(settings.events_db_path, eff_evt)
@@ -2395,6 +2405,10 @@ def prune_cmd(ephemeral_days: int | None, events_days: int | None) -> None:
     click.echo(
         f"pruned jobs={job_result.deleted} cutoff={job_result.cutoff_iso} "
         f"(ephemeral_days={eff_eph})"
+    )
+    click.echo(
+        f"pruned proposed-artifacts={proposed_result.deleted} "
+        f"cutoff={proposed_result.cutoff_iso} (ephemeral_days={eff_eph})"
     )
     click.echo(
         f"pruned events={evt_result.deleted} cutoff={evt_result.cutoff_iso} "
@@ -2617,12 +2631,14 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
         from auto_applier.pipeline.retention import (
             prune_ephemeral as _prune_ephemeral,
             prune_events as _prune_events,
+            prune_proposed_artifacts as _prune_proposed,
             run_backup_cycle as _run_backup_cycle,
         )
 
         async def _maintenance():
             _prune_ephemeral(conn, settings.retention.ephemeral_days)
             _prune_events(settings.events_db_path, settings.retention.events_days)
+            _prune_proposed(conn, settings, settings.retention.ephemeral_days)
             _run_backup_cycle(settings)
 
         # The BrowserSession is started lazily inside the factory so the
