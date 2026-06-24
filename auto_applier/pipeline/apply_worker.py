@@ -130,9 +130,27 @@ from auto_applier.sources.health import is_paused
 from auto_applier.sources.lever import LeverListing
 from auto_applier.telemetry import get_sink
 
-__all__ = ["ApplyRunSummary", "ApplyWorker", "DriverEntry", "default_drivers"]
+__all__ = [
+    "ApplyRunSummary",
+    "ApplyWorker",
+    "DriverEntry",
+    "PrepareSingleError",
+    "default_drivers",
+]
 
 logger = logging.getLogger(__name__)
+
+
+class PrepareSingleError(RuntimeError):
+    """``prepare_single`` (E2 on-demand fill) refused to run, or a fill is already in flight.
+
+    Carries an HTTP-ish ``code`` so the E2 route can map a refusal to the right status without the
+    web layer re-deriving the reason: ``404`` (no such job), ``422`` (job has no URL to open),
+    ``409`` (job not in a preparable state / unknown source / a fill already in progress)."""
+
+    def __init__(self, message: str, *, code: int = 409):
+        super().__init__(message)
+        self.code = code
 
 
 # --------------------------------------------------------------- driver registry
@@ -359,6 +377,12 @@ class ApplyWorker:
         # is built once per serve session and reused across cycles, so an in-memory "already
         # dry-run-tested" set stops the loop (resets on restart — fine for testing).
         self._dry_run_tested_job_ids: set[str] = set()
+
+        # Single-flight guard for the on-demand E2 ``prepare_single`` path. The scheduler drains
+        # sequentially, but the dashboard can fire prepare_single from a web request while the
+        # scheduler's apply stage is masked by the manual-takeover gate; this lock makes two rapid
+        # clicks on different jobs serialize on the one shared BrowserSession instead of racing it.
+        self._prepare_lock = asyncio.Lock()
 
     # -- public ------------------------------------------------------------
 
@@ -602,22 +626,63 @@ class ApplyWorker:
         summary.elapsed_s = time.perf_counter() - t0
         return summary
 
-    # -- per-job (the @stage spine emits start/ok/error around this) -------
+    # -- per-job -----------------------------------------------------------
+
+    async def _process_one(self, *, job: Job, run_id: str) -> ApplicationStatus | None:
+        """Run the apply path for one QUEUED_APPLY job using the worker's configured posture.
+
+        A thin shim over :meth:`_drive_and_record` (the one instrumented, shared fill path): it
+        supplies the worker's mode (after the strategy risk-bias) + dry-run flag + a fresh page,
+        and maps the result back to ``_process_one``'s historical contract — ``None`` in dry-run
+        (the job stays in QUEUED_APPLY), else the driver's :class:`ApplicationStatus`. Raises on
+        unexpected failures — the caller (:meth:`run_once`) catches and routes to FAILED→REVIEW.
+        """
+        page = await self._new_page()
+        outcome = await self._drive_and_record(
+            job=job,
+            run_id=run_id,
+            page=page,
+            mode=self._effective_mode(),
+            dry_run=self._dry_run,
+        )
+        if self._dry_run:
+            return None
+        return outcome.status
+
+    # -- the ONE instrumented fill+record path (the @stage spine wraps it) --
 
     @stage("apply")
-    async def _process_one(self, *, job: Job, run_id: str) -> ApplicationStatus | None:
-        """Run the apply path for one job.
+    async def _drive_and_record(
+        self,
+        *,
+        job: Job,
+        run_id: str,
+        page: Any,
+        mode: ApplyMode,
+        dry_run: bool,
+        remember_dry_run: bool = True,
+    ) -> ApplyOutcome:
+        """The single fill+record path — shared by the scheduler drain (:meth:`_process_one`) and
+        the on-demand E2 fill (:meth:`prepare_single`), so both go through identical resolve / fill
+        / record logic with no second code path to drift (the v2 mistake this rewrite avoids).
 
-        Returns the driver's :class:`ApplicationStatus` (or ``None`` in dry-run). Raises
-        on unexpected failures — the caller (:meth:`run_once`) catches and routes to
-        FAILED→REVIEW so the loop is resilient.
+        Drives ``job``'s ATS driver on the given ``page`` with the given ``mode`` + ``dry_run``,
+        mirrors/logs the resolutions, persists the COMPLETE proposed application (the In-Progress
+        page artifact), and — in a real (non-dry) run — writes the :class:`Application` row and
+        walks the job's state per the strict machine (APPLIED / ASSISTED_PENDING→REVIEW /
+        FAILED→REVIEW). Returns the driver's :class:`ApplyOutcome` either way (the caller maps it).
+
+        Precondition for a real run: ``job`` is in ``QUEUED_APPLY`` — the QUEUED_APPLY→APPLYING edge
+        is taken here. Dry-run takes no state transition at all. ``remember_dry_run`` records the job
+        in the dry-run-tested set (so the scheduler doesn't re-test it every cycle); the on-demand
+        path passes it False since it's never dry-run anyway.
         """
         driver = self._drivers[job.source]
 
         # In dry-run we skip the APPLYING transition entirely. Otherwise we'd have to
         # undo it on every call (APPLYING → QUEUED_APPLY) just to test fills, which
         # creates a stream of state-machine ping-pong in the event log.
-        if not self._dry_run:
+        if not dry_run:
             self._job_repo.set_state(job.id, JobState.APPLYING)
 
         # Per-job salary ask (spec §8d). Compute from config floor/ceiling + the job's
@@ -634,7 +699,6 @@ class ApplyWorker:
         self._resolver.current_job = job
 
         listing = driver.listing_from_job(job)
-        page = await self._new_page()
 
         # Per-job optimize-generated artifacts (spec §6b / §7 #6). The optimize
         # worker wrote a tailored résumé PDF + cover letter keyed by job.id; read
@@ -648,8 +712,8 @@ class ApplyWorker:
             self._applicant,
             resume_used,
             cover_letter_path=cover_used,
-            dry_run=self._dry_run,
-            mode=self._effective_mode(),
+            dry_run=dry_run,
+            mode=mode,
             resolver=self._resolver,
         )
 
@@ -669,11 +733,12 @@ class ApplyWorker:
         # (dry-run + real), best-effort.
         await self._persist_proposed(job, outcome, resume_used, cover_used)
 
-        if self._dry_run:
+        if dry_run:
             # No state transition (we never went to APPLYING) — job stays in QUEUED_APPLY.
             # Remember it so the next cycle doesn't re-run the fill on the same job.
-            self._dry_run_tested_job_ids.add(job.id)
-            return None
+            if remember_dry_run:
+                self._dry_run_tested_job_ids.add(job.id)
+            return outcome
 
         # On a confirmed APPLIED, archive the (generic-named) manually-assigned files — move
         # them to uploads/_archive with the job id appended, and record the ARCHIVE path on the
@@ -718,7 +783,79 @@ class ApplyWorker:
             self._job_repo.set_state(job.id, JobState.FAILED)
             self._job_repo.set_state(job.id, JobState.REVIEW)
 
-        return outcome.status
+        return outcome
+
+    # -- E2 on-demand single-job fill --------------------------------------
+
+    async def prepare_single(self, job_id: str, *, page: Any) -> ApplyOutcome:
+        """E2 "fill what it can on demand": run the production assisted fill on ONE review job, on a
+        page the caller already opened (the launcher's tab the owner is looking at), and leave a real
+        ``ASSISTED_PENDING`` attempt for the owner to submit. Forces assisted mode + a real (never
+        dry) run regardless of the worker's configured posture, so the result is a genuine pending
+        attempt the existing "Ready to finish" lane keys off (design: e2-on-demand-fill-design.md).
+
+        Eligible: a job in REVIEW (the dashboard's "Needs your decision" group) or QUEUED_APPLY. A
+        REVIEW job is first walked REVIEW→QUEUED_APPLY so the shared fill path's QUEUED_APPLY→APPLYING
+        edge is valid. **On any failure the job ends in REVIEW** (never stuck in APPLYING, never left
+        silently promoted to QUEUED_APPLY) so a failed on-demand fill is always visible to the owner.
+
+        **Single-flight:** a second concurrent call raises (409) so two clicks can't drive the one
+        shared BrowserSession at once. Honesty + reliability invariants are inherited verbatim from
+        the shared path: assisted-only (never auto-submits), how-heard derived from ``job.source``,
+        the fabrication guard still governs the résumé.
+
+        Raises :class:`PrepareSingleError` (carrying an HTTP-ish ``code``): 404 (no such job), 422
+        (job has no URL), 409 (non-preparable state / unknown source / a fill already in progress).
+        """
+        # Reject (don't queue) a second concurrent fill. In the single-threaded event loop the
+        # lock is acquired synchronously below before the first await, so by the time another
+        # request's coroutine runs, ``locked()`` already reflects an in-flight fill.
+        if self._prepare_lock.locked():
+            raise PrepareSingleError("a fill is already in progress", code=409)
+
+        async with self._prepare_lock:
+            # Pick up any profile edit saved since the worker started (same as run_once), so an
+            # on-demand fill uses the freshest fact bank.
+            self._refresh_fact_bank()
+
+            job = self._job_repo.get(job_id)
+            if job is None:
+                raise PrepareSingleError(f"no job {job_id!r}", code=404)
+            if job.state not in (JobState.REVIEW, JobState.QUEUED_APPLY):
+                raise PrepareSingleError(
+                    f"job is {job.state.value}, not preparable (REVIEW / QUEUED_APPLY only)",
+                    code=409,
+                )
+            if not job.url:
+                raise PrepareSingleError("job has no URL to open", code=422)
+            if job.source not in self._drivers:
+                raise PrepareSingleError(f"unknown source {job.source!r}", code=409)
+
+            run_id = new_run_id()
+            # REVIEW → QUEUED_APPLY so the shared path's QUEUED_APPLY → APPLYING edge is valid.
+            if job.state is JobState.REVIEW:
+                self._job_repo.set_state(job.id, JobState.QUEUED_APPLY)
+                job = self._job_repo.get(job.id) or job
+
+            try:
+                return await self._drive_and_record(
+                    job=job,
+                    run_id=run_id,
+                    page=page,
+                    mode=ApplyMode.BROWSER_ASSISTED,
+                    dry_run=False,
+                    remember_dry_run=False,
+                )
+            except Exception as exc:  # noqa: BLE001 — never leave the job stuck / silently promoted
+                # Mid-fill crash: APPLYING → FAILED → REVIEW (records a FAILED attempt row).
+                self._recover_job_to_review(job, exc)
+                # Crash BEFORE the APPLYING transition leaves the job in QUEUED_APPLY (we promoted
+                # it from REVIEW). Put it back in REVIEW so an on-demand fill never silently queues
+                # a job for an auto-apply the owner didn't ask for.
+                current = self._job_repo.get(job.id)
+                if current is not None and current.state is JobState.QUEUED_APPLY:
+                    self._job_repo.set_state(job.id, JobState.REVIEW)
+                raise
 
     # -- salary ------------------------------------------------------------
 

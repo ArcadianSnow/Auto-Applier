@@ -37,6 +37,7 @@ from auto_applier.pipeline.apply_worker import (
     ApplyRunSummary,
     ApplyWorker,
     DriverEntry,
+    PrepareSingleError,
     _gh_token_from_url,
     _job_to_greenhouse_listing,
     _job_to_lever_listing,
@@ -1494,3 +1495,194 @@ def test_recovery_can_be_called_without_browser_session(settings, conn):
     )
 
     assert worker.recover_crashed() == 1
+
+
+# --------------------------------------------------------------- E2 prepare_single (Phase A)
+
+def _seed_review_lever(
+    conn: sqlite3.Connection, *, company: str, source_job_id: str, url: str | None = None
+) -> Job:
+    """Insert a job sitting in REVIEW (the dashboard's 'Needs your decision' group) — the primary
+    E2 ``prepare_single`` entry. Walk DECIDED->REVIEW (an allowed edge)."""
+    repo = JobRepo(conn)
+    job = Job(
+        source="lever",
+        source_job_id=source_job_id,
+        title="Senior Data Analyst",
+        company=company,
+        url=(f"https://jobs.lever.co/{company}/{source_job_id}" if url is None else url),
+    )
+    repo.add(job)
+    for nxt in (JobState.DESCRIBED, JobState.SCORED, JobState.DECIDED, JobState.REVIEW):
+        repo.set_state(job.id, nxt)
+    return repo.get(job.id)  # type: ignore[return-value]
+
+
+def _recording_driver(outcome: ApplyOutcome):
+    """A driver that records the (dry_run, mode, page) it was called with, then returns ``outcome``."""
+    calls: list[dict] = []
+
+    async def prepare(*a, **kw):
+        calls.append({"dry_run": kw["dry_run"], "mode": kw["mode"], "page": a[0]})
+        return outcome
+
+    return DriverEntry(listing_from_job=lambda j: j, prepare=prepare), calls
+
+
+def test_prepare_single_promotes_review_job_to_assisted_pending(settings, conn):
+    """The happy path: a REVIEW job is filled assisted and left as an ASSISTED_PENDING attempt back
+    in REVIEW (the 'Ready to finish' shape), and the proposed-application artifact is persisted."""
+    job = _seed_review_lever(conn, company="acmeco", source_job_id="e2-1")
+    worker = _build_worker(
+        settings, conn,
+        driver=_fake_driver(_make_outcome(
+            status=ApplicationStatus.ASSISTED_PENDING,
+            mode=ApplyMode.BROWSER_ASSISTED,
+            submitted=False,
+        )),
+    )
+
+    outcome = asyncio.run(worker.prepare_single(job.id, page=_FakePage()))
+
+    assert outcome.status is ApplicationStatus.ASSISTED_PENDING
+    assert JobRepo(conn).get(job.id).state is JobState.REVIEW
+    apps = ApplicationRepo(conn).list_by_job(job.id)
+    assert len(apps) == 1
+    assert apps[0].status is ApplicationStatus.ASSISTED_PENDING
+    assert apps[0].mode is ApplyMode.BROWSER_ASSISTED
+    assert apps[0].submitted_at == ""           # never auto-submits
+    # The In-Progress page artifact is refreshed by the shared fill path.
+    assert load_proposed(settings, job.id) is not None
+
+
+def test_prepare_single_forces_assisted_and_real_even_when_worker_is_dry_auto(settings, conn):
+    """Regardless of the worker's configured posture (here dry-run + AUTO), prepare_single forces a
+    real (non-dry) ASSISTED fill on the INJECTED page — the whole point of the on-demand path."""
+    job = _seed_review_lever(conn, company="acmeco", source_job_id="e2-2")
+    driver, calls = _recording_driver(_make_outcome(
+        status=ApplicationStatus.ASSISTED_PENDING,
+        mode=ApplyMode.BROWSER_ASSISTED, submitted=False,
+    ))
+    worker = _build_worker(settings, conn, driver=driver, dry_run=True)  # worker default mode = AUTO
+
+    injected = _FakePage()
+    asyncio.run(worker.prepare_single(job.id, page=injected))
+
+    assert calls[0]["dry_run"] is False                     # never dry-run
+    assert calls[0]["mode"] is ApplyMode.BROWSER_ASSISTED   # forced assisted
+    assert calls[0]["page"] is injected                     # the owner's tab, no second page
+    # A real attempt row was written (a dry-run worker would have left QUEUED_APPLY + no row).
+    assert ApplicationRepo(conn).list_by_job(job.id)[0].status is ApplicationStatus.ASSISTED_PENDING
+
+
+def test_prepare_single_accepts_a_queued_apply_job(settings, conn):
+    """QUEUED_APPLY is also an eligible origin state (not only REVIEW)."""
+    job = _seed_queued_lever(conn, company="acmeco", source_job_id="e2-3")
+    worker = _build_worker(
+        settings, conn,
+        driver=_fake_driver(_make_outcome(
+            status=ApplicationStatus.ASSISTED_PENDING,
+            mode=ApplyMode.BROWSER_ASSISTED, submitted=False,
+        )),
+    )
+
+    outcome = asyncio.run(worker.prepare_single(job.id, page=_FakePage()))
+    assert outcome.status is ApplicationStatus.ASSISTED_PENDING
+    assert JobRepo(conn).get(job.id).state is JobState.REVIEW
+
+
+def test_prepare_single_driver_error_recovers_to_review_no_stuck_state(settings, conn):
+    """A driver crash mid-fill must route APPLYING->FAILED->REVIEW (a FAILED row), never leave the
+    job stuck in APPLYING, and re-raise so the route surfaces the error."""
+    job = _seed_review_lever(conn, company="acmeco", source_job_id="e2-4")
+    worker = _build_worker(settings, conn, driver=_fake_driver(RuntimeError))
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(worker.prepare_single(job.id, page=_FakePage()))
+
+    assert JobRepo(conn).get(job.id).state is JobState.REVIEW
+    apps = ApplicationRepo(conn).list_by_job(job.id)
+    assert apps and apps[-1].status is ApplicationStatus.FAILED
+
+
+def test_prepare_single_404_for_missing_job(settings, conn):
+    worker = _build_worker(
+        settings, conn, driver=_fake_driver(_make_outcome(status=ApplicationStatus.ASSISTED_PENDING)),
+    )
+    with pytest.raises(PrepareSingleError) as ei:
+        asyncio.run(worker.prepare_single("nope", page=_FakePage()))
+    assert ei.value.code == 404
+
+
+def test_prepare_single_409_for_non_preparable_state(settings, conn):
+    """A terminal (APPLIED) job is not preparable -> 409, and is left untouched."""
+    job = _seed_applied_lever(conn, company="acmeco", source_job_id="e2-5")
+    worker = _build_worker(
+        settings, conn, driver=_fake_driver(_make_outcome(status=ApplicationStatus.ASSISTED_PENDING)),
+    )
+    with pytest.raises(PrepareSingleError) as ei:
+        asyncio.run(worker.prepare_single(job.id, page=_FakePage()))
+    assert ei.value.code == 409
+    assert JobRepo(conn).get(job.id).state is JobState.APPLIED
+
+
+def test_prepare_single_422_when_job_has_no_url(settings, conn):
+    job = _seed_review_lever(conn, company="acmeco", source_job_id="e2-6", url="")
+    worker = _build_worker(
+        settings, conn, driver=_fake_driver(_make_outcome(status=ApplicationStatus.ASSISTED_PENDING)),
+    )
+    with pytest.raises(PrepareSingleError) as ei:
+        asyncio.run(worker.prepare_single(job.id, page=_FakePage()))
+    assert ei.value.code == 422
+
+
+def test_prepare_single_409_for_unknown_source(settings, conn):
+    """A job whose source has no driver registered -> 409 (no driver to fill with)."""
+    repo = JobRepo(conn)
+    job = Job(source="greenhouse", source_job_id="e2-7", title="T", company="c",
+              url="https://job-boards.greenhouse.io/c/jobs/7")
+    repo.add(job)
+    for nxt in (JobState.DESCRIBED, JobState.SCORED, JobState.DECIDED, JobState.REVIEW):
+        repo.set_state(job.id, nxt)
+    worker = _build_worker(  # drivers = {"lever": ...} only
+        settings, conn, driver=_fake_driver(_make_outcome(status=ApplicationStatus.ASSISTED_PENDING)),
+    )
+    with pytest.raises(PrepareSingleError) as ei:
+        asyncio.run(worker.prepare_single(job.id, page=_FakePage()))
+    assert ei.value.code == 409
+
+
+def test_prepare_single_is_single_flight(settings, conn):
+    """A second concurrent prepare_single is rejected (409) so two clicks can't drive the one
+    shared BrowserSession at once."""
+    job1 = _seed_review_lever(conn, company="acmeco", source_job_id="e2-8a")
+    job2 = _seed_review_lever(conn, company="acmeco", source_job_id="e2-8b")
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def prepare(*a, **kw):
+        started.set()
+        await release.wait()
+        return _make_outcome(
+            status=ApplicationStatus.ASSISTED_PENDING,
+            mode=ApplyMode.BROWSER_ASSISTED, submitted=False,
+        )
+
+    driver = DriverEntry(listing_from_job=lambda j: j, prepare=prepare)
+    worker = _build_worker(settings, conn, driver=driver)
+
+    async def scenario():
+        t1 = asyncio.create_task(worker.prepare_single(job1.id, page=_FakePage()))
+        await started.wait()                       # first fill now holds the lock
+        with pytest.raises(PrepareSingleError) as ei:
+            await worker.prepare_single(job2.id, page=_FakePage())
+        assert ei.value.code == 409
+        release.set()
+        await t1                                    # first fill completes cleanly
+
+    asyncio.run(scenario())
+    assert JobRepo(conn).get(job1.id).state is JobState.REVIEW
+    # The rejected second job was never touched — still REVIEW, no attempt row.
+    assert JobRepo(conn).get(job2.id).state is JobState.REVIEW
+    assert ApplicationRepo(conn).list_by_job(job2.id) == []

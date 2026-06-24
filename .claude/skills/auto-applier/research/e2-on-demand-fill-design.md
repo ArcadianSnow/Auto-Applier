@@ -1,9 +1,44 @@
-# E2 — "Fill what it can on demand" (DESIGN, pre-build)
+# E2 — "Fill what it can on demand"
 
-**Status:** DESIGN ONLY (owner chose design-first, 2026-06-21). Nothing implemented yet — this
-doc is the spec to approve before building. E2 is the owner's headline want from the live test
-pass: a dashboard button that opens a review job's listing **and pre-fills what the bot can**,
-leaving the rest for the human. The apply pipeline is the riskiest area, so we design first.
+**Status:** **Phase A SHIPPED 2026-06-24** (`prepare_single` on `ApplyWorker` + 9 unit tests, 1506
+green). Phase B (worker holder + route + dashboard button) next; Phase C is the owner-watched live
+validation. The 3 open owner questions were resolved with the doc's own recommendations when the
+owner said "start work": eligible = REVIEW + QUEUED_APPLY only; résumé-less = fill the rest, human
+attaches; outcome surfacing = one-line "filled N / M left" (per-field already in events.db). E2 is
+the owner's headline want from the live test pass: a dashboard button that opens a review job's
+listing **and pre-fills what the bot can**, leaving the rest for the human.
+
+## Phase A — SHIPPED (2026-06-24, 1506 green)
+
+`prepare_single` is built on `ApplyWorker`, with the fill path refactored so there is exactly ONE
+instrumented fill+record code path (no drift — the doc's core concern):
+
+- **Refactor:** the body of `_process_one` (driver dispatch → resolve/fill → mirror/log →
+  persist-proposed → Application row → state walk) moved into a new `@stage("apply")`-decorated
+  **`_drive_and_record(*, job, run_id, page, mode, dry_run, remember_dry_run=True) -> ApplyOutcome`**.
+  `_process_one` is now a thin shim that supplies the worker's page/mode/dry-run and maps the result
+  back to its old contract (None in dry-run, else status). Behaviour unchanged — all prior apply-worker
+  tests green.
+- **`prepare_single(job_id, *, page) -> ApplyOutcome`:** validates eligibility, walks REVIEW→QUEUED_APPLY
+  when needed, then calls `_drive_and_record` with `page=<injected launcher tab>`,
+  `mode=BROWSER_ASSISTED`, `dry_run=False`. Forces assisted + real regardless of the worker's posture,
+  so it leaves a genuine `ASSISTED_PENDING` attempt the "Ready to finish" lane keys off.
+- **Failure contract:** any failure ends the job in REVIEW — a mid-fill crash routes
+  APPLYING→FAILED→REVIEW (FAILED row) via `_recover_job_to_review`; a crash before the APPLYING
+  transition (we'd promoted REVIEW→QUEUED_APPLY) is put back to REVIEW, so an on-demand fill never
+  silently queues a job for an auto-apply.
+- **Single-flight:** `self._prepare_lock` (asyncio.Lock) + a `locked()` pre-check → a second concurrent
+  call raises `PrepareSingleError(code=409)` rather than racing the one shared BrowserSession.
+- **`PrepareSingleError(message, *, code)`** carries an HTTP-ish code (404 no job / 422 no url / 409
+  bad-state·unknown-source·in-flight) so Phase B's route maps refusals without re-deriving the reason.
+- Tests: `test_apply_worker.py` +9 (happy REVIEW→ASSISTED_PENDING + proposed artifact persisted; forces
+  assisted+real+injected-page even when worker is dry/AUTO; QUEUED_APPLY eligible; driver-error→REVIEW
+  no stuck state; 404/409-state/422/409-source matrix; single-flight 409). Honesty invariants inherited
+  verbatim from the shared path (how-heard from source, fabrication guard, never auto-submits).
+
+---
+
+## Original design (below) — for reference
 
 ## What exists today (and why E2 is still wanted)
 
