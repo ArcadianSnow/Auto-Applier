@@ -281,14 +281,14 @@ def _contact_bank():
     # ...but a PROGRAMMING-language question is a skills field, not spoken languages.
     ("Which programming languages are you fluent in?", ProfileField.NONE),
     ("What coding languages do you know?", ProfileField.NONE),
-    ("When can you start a new role?", ProfileField.AVAILABILITY),
-    ("What is your earliest start date?", ProfileField.AVAILABILITY),
-    ("How soon can you start?", ProfileField.AVAILABILITY),
     ("Current company", ProfileField.CURRENT_COMPANY),
     ("Current/Last Company", ProfileField.CURRENT_COMPANY),
     ("Who do you currently work for?", ProfileField.CURRENT_COMPANY),
-    # NOTICE_PERIOD still distinct from AVAILABILITY (a form may ask both).
+    # notice period AND "when can you start / earliest start" fold to ONE field (NOTICE_PERIOD).
     ("What is your notice period?", ProfileField.NOTICE_PERIOD),
+    ("When can you start a new role?", ProfileField.NOTICE_PERIOD),
+    ("What is your earliest start date?", ProfileField.NOTICE_PERIOD),
+    ("How soon can you start?", ProfileField.NOTICE_PERIOD),
 ])
 def test_classify_profile_field(label, expected):
     assert classify_profile_field(label) is expected
@@ -1072,14 +1072,16 @@ class TestOnboardingExtras:
         assert res.value != "English"
         assert res.needs_review is True
 
-    def test_availability_default_two_weeks(self, answer_repo):
+    def test_start_date_defaults_two_weeks(self, answer_repo):
+        # "When can you start?" folds into notice_period (same field) → default "2 weeks".
         res = asyncio.run(AnswerResolver(_bank(), answer_repo).resolve(
             _q("When can you start a new role?")))
         assert res.value == "2 weeks"
         assert res.needs_review is False
 
-    def test_availability_from_bank_wins(self, answer_repo):
-        resolver = AnswerResolver(_bank(availability="Immediately"), answer_repo)
+    def test_start_date_uses_notice_period_value(self, answer_repo):
+        # A "earliest start date" question is answered from the one notice_period field.
+        resolver = AnswerResolver(_bank(notice_period="Immediately"), answer_repo)
         res = asyncio.run(resolver.resolve(_q("What is your earliest start date?")))
         assert res.value == "Immediately"
 

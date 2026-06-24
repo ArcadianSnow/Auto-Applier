@@ -66,11 +66,10 @@ class FactBank:
     #: Defaults to English — everyone the bot answers for speaks at least English, and a blank
     #: would needlessly bail an otherwise-trivial factual field. The resolver re-applies the
     #: English default at fill time so an old bank without the field still fills (Round 2).
+    #: NOTE: ``notice_period`` doubles as "earliest start / availability" — the Ashby "when can
+    #: you start?" question and the Greenhouse "notice period" question are answered from this one
+    #: field (they're the same answer for an employed candidate; Round 2 folded them together).
     languages: list[str] = field(default_factory=lambda: ["English"])
-    #: Earliest a new role can start (Ashby "When can you start a new role?"). Distinct from
-    #: notice_period (how much notice to give a current employer) though the default coincides.
-    #: Blank ⇒ the resolver applies the owner default ("2 weeks") rather than bailing (Round 2).
-    availability: str = ""            # e.g. "2 weeks" | "Immediately" | "2026-08-01" | ""
     #: Voluntary EEO self-ID; blank ⇒ "prefer not to answer". Never mirrored to telemetry.
     eeo: dict[str, str] = field(default_factory=dict)
     #: Relocation preferences for "willing to relocate to <country>?" screeners. Keys
@@ -114,7 +113,6 @@ class FactBank:
             # Absent/empty ⇒ default to English (the owner-approved default, Round 2): an old
             # master.json predating the field still answers "languages?" instead of bailing.
             languages=list(data.get("languages") or ["English"]),
-            availability=data.get("availability", ""),
             eeo=dict(data.get("eeo", {})),
             relocation=dict(data.get("relocation", {})),
         )

@@ -161,3 +161,21 @@ Ashby Yes/No button-group fill.)
   but its default URLs are stale and it opens the persistent-profile Chrome (run it with a CURRENT Ashby
   apply URL that has a "Where are you currently located?" combobox to see the LAND on a real form).
 - Still outstanding from Round 1: add a Lever + Ashby form to the `smoke` suite.
+
+### Correction (same day, owner feedback) — two redundancies removed
+
+The owner flagged two duplications in the first cut; both fixed (1429 green):
+1. **`availability` was a redundant field.** "Notice period" and "when can you start? / earliest start
+   date" are the same answer for an employed candidate. Removed the separate `availability` fact-bank
+   field and `ProfileField.AVAILABILITY`; **folded the start-date patterns into `NOTICE_PERIOD`** (one
+   field, default "2 weeks", answers both ATS phrasings). The wizard asks once ("Notice period / earliest
+   start").
+2. **Salary was already captured.** `targeting.salary_floor` is written by BOTH the Targeting wizard step
+   AND the conversational helper (`onboarding_chat.py` parses it from chat, lines ~387/428). The first cut
+   added a third (redundant) salary input to the "More details" step — removed it (UI + the
+   `/onboarding/extras` salary routing). Targeting remains the single salary writer. (The owner's prod
+   value was `None` only because the helper didn't parse a number from that conversation, not a missing
+   capture path.)
+
+Net: the "More details" step now collects only **primary_nationality, notice_period (=earliest start),
+languages, gender** — nationality is the one genuinely-uncaptured-elsewhere field the owner needs to enter.

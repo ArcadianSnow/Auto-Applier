@@ -65,11 +65,10 @@ function onboarding() {
       idle_detect_enabled: false, idle_threshold_s: 60,
     },
     // Optional screener extras so the bot can fill those fields instead of leaving them blank.
-    // languages is a free-text string (comma-separated) the server splits; salary_floor lives in
-    // targeting (user_config), the rest in the fact bank. Blank language/notice/availability →
-    // the resolver applies the owner defaults (English / 2 weeks).
-    extras: { primary_nationality: '', notice_period: '', availability: '', languages: '',
-              salary_floor: null, gender: '' },
+    // languages is a free-text string (comma-separated) the server splits; the rest go to the fact
+    // bank. notice_period doubles as "earliest start". Blank language/notice → the resolver applies
+    // the owner defaults (English / 2 weeks). (Salary lives in the Targeting step, not here.)
+    extras: { primary_nationality: '', notice_period: '', languages: '', gender: '' },
 
     async load() {
       try {
@@ -159,9 +158,7 @@ function onboarding() {
       this.extras = {
         primary_nationality: state.primary_nationality || '',
         notice_period: state.notice_period || '',
-        availability: state.availability || '',
         languages: (state.languages || []).join(', '),
-        salary_floor: (state.targeting || {}).salary_floor ?? null,
         gender: (state.eeo || {}).gender || '',
       };
     },
@@ -646,14 +643,10 @@ function onboarding() {
     async saveExtras() {
       const payload = {
         primary_nationality: this.extras.primary_nationality || '',
+        // notice_period also answers "when can you start? / earliest start date".
         notice_period: this.extras.notice_period || '',
-        availability: this.extras.availability || '',
         // Free-text string; the server splits on commas/newlines, trims, dedupes.
         languages: this.extras.languages || '',
-        // salary_floor lives in targeting (user_config); the endpoint routes it there.
-        salary_floor:
-          this.extras.salary_floor === null || this.extras.salary_floor === ''
-            ? null : Number(this.extras.salary_floor),
         gender: this.extras.gender || '',
       };
       if (await this._post('/api/onboarding/extras', payload)) {

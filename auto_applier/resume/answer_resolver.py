@@ -279,8 +279,9 @@ class ProfileField(str, Enum):
     COUNTRY_TIMEZONE = "country_timezone"
     LOCATION = "location"        # full "City, State, Country"
     NATIONALITY = "nationality"          # bank.primary_nationality (optional onboarding extra)
-    NOTICE_PERIOD = "notice_period"      # bank.notice_period; owner default "2 weeks" (Round 2)
-    AVAILABILITY = "availability"        # bank.availability ("when can you start?"); default "2 weeks"
+    NOTICE_PERIOD = "notice_period"      # bank.notice_period; owner default "2 weeks" (Round 2).
+    #: Also answers "when can you start? / earliest start date" — same answer as notice period for
+    #: an employed candidate, so Round 2 routes both phrasings to this one field (no separate field).
     LANGUAGES = "languages"              # bank.languages (spoken); default ["English"] (Round 2)
     CURRENT_COMPANY = "current_company"  # work_history[0].company — no new data, derived from the bank
     YEARS_EXPERIENCE = "years_experience"  # computed from work_history start dates
@@ -290,14 +291,13 @@ class ProfileField(str, Enum):
 # so these common screeners FILL instead of bailing. An explicit onboarding value always wins (it's
 # read first, the default only fires when it's empty). NATIONALITY has NO safe default → still bails.
 _DEFAULT_LANGUAGES = ["English"]
-_DEFAULT_AVAILABILITY = "2 weeks"
-_DEFAULT_NOTICE_PERIOD = "2 weeks"
+_DEFAULT_NOTICE_PERIOD = "2 weeks"     # also the "earliest start / availability" default
 
 # Optional onboarding extras: when the fact bank can't answer them the resolver falls through to
 # the bank/LLM tiers rather than bailing (unlike core contact fields, which must never be guessed).
-# NOTICE_PERIOD/AVAILABILITY/LANGUAGES are NOT here — they always resolve (to the owner default when
-# blank), so they never fall through. CURRENT_COMPANY bails to assisted with no work history (never
-# guessed via the LLM), so it's not optional either.
+# NOTICE_PERIOD (which also answers "when can you start?") and LANGUAGES are NOT here — they always
+# resolve (to the owner default when blank), so they never fall through. CURRENT_COMPANY bails to
+# assisted with no work history (never guessed via the LLM), so it's not optional either.
 _OPTIONAL_PROFILE_EXTRAS = frozenset(
     {ProfileField.NATIONALITY, ProfileField.YEARS_EXPERIENCE}
 )
@@ -348,18 +348,16 @@ _PROFILE_PATTERNS: list[tuple[ProfileField, list[str]]] = [
     # Optional onboarding extras — specific labels, so order vs. the above doesn't matter.
     (ProfileField.NATIONALITY,
      [r"\bnationalit(y|ies)\b", r"\bprimary nationalit", r"\bcountry of (citizenship|origin)\b"]),
+    # NOTICE_PERIOD also answers "when can you start / earliest start date" — same answer as the
+    # notice period for an employed candidate, so both phrasings route here (one fact-bank field).
     (ProfileField.NOTICE_PERIOD,
      [r"\bnotice period\b", r"\bperiod of notice\b", r"\bhow much notice\b",
-      r"\bnotice (required|needed)\b"]),
-    # AVAILABILITY — "When can you start a new role?" / earliest start date. Distinct from
-    # NOTICE_PERIOD (above) so a form that asks BOTH fills each from its own field. Kept BEFORE
-    # the broad start-date phrasings can't collide with notice ("notice period" has no "start").
-    (ProfileField.AVAILABILITY,
-     [r"\bwhen can you start\b", r"\bhow soon can you (start|begin|join)\b",
+      r"\bnotice (required|needed)\b", r"\bnotice to start\b",
+      r"\bwhen can you start\b", r"\bhow soon can you (start|begin|join)\b",
       r"\b(earliest|available|desired|preferred|expected|anticipated) start date\b",
       r"\bstart date\b", r"\bavailab\w*\b.{0,20}\b(start|begin|date)\b",
       r"\bwhen (are|would) you (be )?available\b",
-      r"\bstart a new (role|job|position)\b", r"\bnotice to start\b"]),
+      r"\bstart a new (role|job|position)\b"]),
     # LANGUAGES — spoken languages ("What languages are you fluent in?"). Runs here in the
     # profile classifier (BEFORE is_open_ended), so a textarea phrasing fills from the bank
     # instead of bailing as an essay. The programming-language guard in classify_profile_field
@@ -942,10 +940,9 @@ class AnswerResolver:
         if field is ProfileField.NATIONALITY:
             value = (self.fact_bank.primary_nationality or "").strip()
         elif field is ProfileField.NOTICE_PERIOD:
-            # Owner default "2 weeks" when blank (Round 2); an explicit onboarding value wins.
+            # Owner default "2 weeks" when blank (Round 2); an explicit onboarding value wins. Also
+            # serves "when can you start? / earliest start date" (same field, folded in Round 2).
             value = (self.fact_bank.notice_period or "").strip() or _DEFAULT_NOTICE_PERIOD
-        elif field is ProfileField.AVAILABILITY:
-            value = (getattr(self.fact_bank, "availability", "") or "").strip() or _DEFAULT_AVAILABILITY
         elif field is ProfileField.LANGUAGES:
             langs = [str(x).strip() for x in (getattr(self.fact_bank, "languages", None) or [])
                      if str(x).strip()]

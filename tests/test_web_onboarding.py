@@ -455,7 +455,7 @@ class TestEndpointExtras:
         bank = FactBank(
             contact=Contact(name="A", email="a@x"),
             primary_nationality="Canada", notice_period="One month",
-            languages=["English", "French"], availability="1 month",
+            languages=["English", "French"],
             eeo={"gender": "Female"}, relocation={"willing": ["Netherlands"]},
         )
         save_fact_bank(settings.data_dir, bank)
@@ -463,32 +463,19 @@ class TestEndpointExtras:
         assert loaded.primary_nationality == "Canada"
         assert loaded.notice_period == "One month"
         assert loaded.languages == ["English", "French"]
-        assert loaded.availability == "1 month"
         assert loaded.eeo == {"gender": "Female"}
         assert loaded.relocation == {"willing": ["Netherlands"]}
 
-    def test_languages_and_availability_persist(self, settings: Settings, web_state: WebState):
-        # Round 2: languages accepts a comma string (dedup/trim); availability is free text.
+    def test_languages_persist_dedupe_and_echo(self, settings: Settings, web_state: WebState):
+        # Round 2: languages accepts a comma string (case-insensitive dedupe, order kept).
         with _make_client(web_state) as client:
             r = client.post("/api/onboarding/extras", json={
                 "languages": "English, Spanish , english",   # dupe + whitespace
-                "availability": "2 weeks",
             })
         assert r.status_code == 200
         bank = load_fact_bank(settings.data_dir)
-        assert bank.languages == ["English", "Spanish"]      # case-insensitive dedupe, order kept
-        assert bank.availability == "2 weeks"
-        body = r.json()
-        assert body["languages"] == ["English", "Spanish"]
-        assert body["availability"] == "2 weeks"
-
-    def test_salary_floor_routes_to_targeting_not_bank(self, settings: Settings, web_state: WebState):
-        # salary_floor must land in user_config.targeting (the resolver's SALARY source), NOT the bank.
-        with _make_client(web_state) as client:
-            r = client.post("/api/onboarding/extras", json={"salary_floor": 95000})
-        assert r.status_code == 200
-        assert load_user_config(settings.data_dir)["targeting"]["salary_floor"] == 95000
-        assert r.json()["targeting"]["salary_floor"] == 95000
+        assert bank.languages == ["English", "Spanish"]
+        assert r.json()["languages"] == ["English", "Spanish"]
 
 
 class TestEndpointTargeting:

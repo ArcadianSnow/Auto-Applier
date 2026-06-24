@@ -1125,32 +1125,18 @@ async def onboarding_work_auth(request: Request) -> dict:
 async def onboarding_extras(request: Request) -> dict:
     """Save the OPTIONAL extra screener fields so the answer resolver can fill them instead of
     bailing to REVIEW. Payload: ``{"primary_nationality": "United States", "notice_period":
-    "Two weeks", "availability": "2 weeks", "languages": ["English"], "gender": "Male",
-    "salary_floor": 90000}`` — every field optional; blank clears it (resolver then bails that
-    field to assisted, never guessing). Gender is a voluntary EEO self-ID (honesty invariant:
-    blank stays "prefer not to answer").
+    "Two weeks", "languages": ["English"], "gender": "Male"}`` — every field optional; blank clears
+    it (resolver then bails that field to assisted, never guessing). Gender is a voluntary EEO
+    self-ID (honesty invariant: blank stays "prefer not to answer").
 
-    ``salary_floor`` is the one field that lives in ``user_config`` (targeting), NOT the fact bank —
-    the resolver's SALARY branch fills from it (the per-job salary-intelligence layer overrides it in
-    production). It's written through the SAME field-merge as ``/onboarding/targeting`` so the two
-    writers don't clobber each other."""
+    ``notice_period`` doubles as "earliest start / availability" (one fact-bank field answers both
+    phrasings). **Salary is NOT here** — it lives in ``targeting.salary_floor``, written by the
+    Targeting step + the conversational onboarding helper (the single targeting writer)."""
     payload = await _read_json_dict(request)
     web_state = _get_state(request)
     bank = load_fact_bank(web_state.settings.data_dir)
     merge_extras(bank, payload)
     save_fact_bank(web_state.settings.data_dir, bank)
-    # salary_floor → user_config.targeting (not the fact bank). Field-merge so we don't blank the
-    # rest of targeting. An empty/None clears the floor (resolver then has no config salary).
-    if "salary_floor" in payload:
-        cfg = load_user_config(web_state.settings.data_dir)
-        targeting = cfg.get("targeting", {}) or {}
-        raw = payload.get("salary_floor")
-        try:
-            targeting["salary_floor"] = None if raw in (None, "") else int(raw)
-        except (TypeError, ValueError):
-            targeting["salary_floor"] = None
-        cfg["targeting"] = targeting
-        save_user_config(web_state.settings.data_dir, cfg)
     return onboarding_status(web_state.settings.data_dir).to_dict()
 
 

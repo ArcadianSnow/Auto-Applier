@@ -400,7 +400,7 @@
         <label>Primary nationality
           <input type="text" x-model="extras.primary_nationality" placeholder="United States">
         </label>
-        <label>Notice period
+        <label>Notice period / earliest start
           <select x-model="extras.notice_period">
             <option value="">&mdash; default: 2 weeks &mdash;</option>
             <option value="Immediate">Immediate</option>
@@ -409,16 +409,11 @@
             <option value="One month">One month</option>
             <option value="Two months">Two months</option>
           </select>
-        </label>
-        <label>Earliest start / availability
-          <input type="text" x-model="extras.availability" placeholder="2 weeks">
+          <span class="muted small">Answers both &ldquo;notice period&rdquo; and &ldquo;when can you start?&rdquo;</span>
         </label>
         <label>Languages you speak
           <input type="text" x-model="extras.languages" placeholder="English">
           <span class="muted small">Comma-separated. Blank defaults to English.</span>
-        </label>
-        <label>Salary expectation (yearly, your floor)
-          <input type="number" x-model.number="extras.salary_floor" placeholder="90000" min="0" step="1000">
         </label>
         <label>Gender (optional self-ID)
           <select x-model="extras.gender">
