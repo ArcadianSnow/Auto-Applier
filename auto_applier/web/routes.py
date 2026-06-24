@@ -43,6 +43,7 @@ from auto_applier import __version__
 from auto_applier.db.repositories import ApplicationRepo, JobRepo, OutcomeRepo, ScoreRepo
 from auto_applier.domain.models import utcnow_iso
 from auto_applier.domain.state import ApplicationStatus, JobState
+from auto_applier.resume.proposed import load_proposed
 from auto_applier.sources.health import (
     is_paused as source_is_paused,
     mark_healthy,
@@ -99,6 +100,15 @@ def _get_launcher(request: Request):
     BrowserSession-bound launcher in production — so this never returns
     ``None``."""
     return request.app.state.headed_launcher
+
+
+def _dispose_batch(request: Request, job_id: str, disposition: str) -> None:
+    """Record an owner disposition on the review batch when this job is a current batch member
+    (batched assisted review, Phase 4). No-op when batching is off or the job was never batched, so
+    the generic disposition endpoints stay safe for ordinary review-queue jobs."""
+    batch = getattr(_get_state(request), "review_batch", None)
+    if batch is not None:
+        batch.dispose(job_id, disposition)
 
 
 # ---------------------------------------------------------------- /api/health
@@ -162,6 +172,10 @@ async def status(request: Request) -> dict:
             ).fetchone()
             last_stage = recent_stage_event(stage_row)
 
+    # Batched assisted review (Phase 3) — a small snapshot so the dashboard can show an
+    # "N awaiting review" badge linking to /in-progress. ``None`` when the feature is off.
+    batch = getattr(web_state, "review_batch", None)
+
     return {
         "scheduler": (
             service.snapshot() if service is not None
@@ -171,6 +185,7 @@ async def status(request: Request) -> dict:
         "pipeline_order": [st.value for st in PIPELINE_STATES],
         "last_cycle": last_cycle,
         "last_stage": last_stage,
+        "review_batch": batch.snapshot() if batch is not None else None,
     }
 
 
@@ -909,6 +924,9 @@ async def job_mark_applied(request: Request, job_id: str) -> dict:
         result = mark_manually_applied(conn, job_id)
     if result.status == "error":
         raise HTTPException(status_code=409, detail=result.detail)
+    # Record the disposition on the review batch (no-op for non-batch jobs) so a batch advances
+    # once all its members are dealt with (batched assisted review, Phase 4).
+    _dispose_batch(request, job_id, "applied")
     return {
         "job_id": job_id,
         "job_state": JobState.APPLIED.value,
@@ -945,7 +963,97 @@ async def job_skip(request: Request, job_id: str) -> dict:
                 repo.set_state(job_id, JobState.SKIPPED)
         except (InvalidTransition, KeyError) as exc:
             raise HTTPException(status_code=409, detail=str(exc))
+    _dispose_batch(request, job_id, "skipped")  # batch tracking (Phase 4); no-op for non-batch jobs
     return {"job_id": job_id, "job_state": JobState.SKIPPED.value}
+
+
+@api_router.post("/jobs/{job_id}/needs-work")
+async def job_needs_work(request: Request, job_id: str) -> dict:
+    """Mark a batch job as "needs more work" (batched assisted review, Phase 4).
+
+    A SIDE-LANE disposition: it unblocks the batch from advancing but does NOT change the job's
+    state — the job stays in REVIEW so it remains in the normal review queue for the owner to
+    revisit (edit the fact bank, re-prepare, or handle manually). It does not requeue or
+    re-prepare; that's a future enhancement.
+
+    Errors: 404 (no job) / 409 (batched review is off — there is no batch to mark)."""
+    web_state = _get_state(request)
+    with web_state.app_conn() as conn:
+        if JobRepo(conn).get(job_id) is None:
+            raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+    batch = getattr(web_state, "review_batch", None)
+    if batch is None:
+        raise HTTPException(status_code=409, detail="batched review is not enabled")
+    batch.dispose(job_id, "needs_work")
+    return {"job_id": job_id, "disposition": "needs_work", "batch": batch.snapshot()}
+
+
+# ---------------------------------------------------------------- /api/batch (batched assisted review, Phase 3)
+
+# The "In Progress" page feed. The apply worker prepares a batch of N jobs then HOLDS (Phase 2);
+# this surfaces that batch so the owner can verify / correct / submit each, then release. Each job
+# carries its COMPLETE proposed application (Phase 1's per-job artifact) — the confident fills PLUS
+# an aggressive draft for every open-ended gap — so the page is the full proposed application, not
+# just what the bot typed into the live form.
+
+
+def _proposed_payload(proposed) -> dict | None:
+    """Serialize a :class:`ProposedApplication` for the page, or ``None`` when the job has no
+    persisted proposed set yet (e.g. it errored before the artifact was written)."""
+    if proposed is None:
+        return None
+    return {**proposed.to_dict(), "summary": proposed.summary()}
+
+
+@api_router.get("/batch")
+async def review_batch_endpoint(request: Request) -> dict:
+    """The batched-assisted-review "In Progress" feed (Phase 3).
+
+    Returns the current batch snapshot plus, for each prepared job in it, the COMPLETE proposed
+    application + a job brief + the latest ASSISTED_PENDING attempt id (so the page can re-open the
+    bot's pre-fill). ``enabled=false`` when batched review is off (``settings.scheduler.
+    batched_review``) — the page then renders an "off" explainer instead of an empty batch.
+
+    Read-only; one short-lived connection. Members whose job row is gone are skipped defensively.
+    """
+    web_state = _get_state(request)
+    batch = getattr(web_state, "review_batch", None)
+    if batch is None:
+        return {"enabled": False, "batch": None, "jobs": []}
+    snap = batch.snapshot()
+    jobs_out = []
+    with web_state.app_conn() as conn:
+        job_repo = JobRepo(conn)
+        app_repo = ApplicationRepo(conn)
+        for job_id in snap["members"]:
+            job = job_repo.get(job_id)
+            if job is None:
+                continue
+            pending = _latest_assisted_pending(app_repo.list_by_job(job_id))
+            jobs_out.append({
+                **job_brief(job),
+                "assisted_application_id": pending.id if pending is not None else None,
+                "disposition": snap["dispositions"].get(job_id, "pending"),
+                "proposed": _proposed_payload(load_proposed(web_state.settings, job_id)),
+            })
+    return {"enabled": True, "batch": snap, "jobs": jobs_out}
+
+
+@api_router.post("/batch/release")
+async def review_batch_release(request: Request) -> dict:
+    """Release the current review batch → the apply worker prepares the next N on its next cycle
+    (Phase 3's "release batch" button).
+
+    Clears the barrier's members and opens a fresh batch (new id), which lifts the hold so the
+    scheduler's apply_gate stops masking the apply stage. Returns the fresh (empty) snapshot.
+
+    Errors: 409 when batched review is off (there is nothing to release)."""
+    web_state = _get_state(request)
+    batch = getattr(web_state, "review_batch", None)
+    if batch is None:
+        raise HTTPException(status_code=409, detail="batched review is not enabled")
+    batch.release()
+    return {"released": True, "batch": batch.snapshot()}
 
 
 def _latest_assisted_pending(apps):
@@ -1755,6 +1863,20 @@ async def reconcile_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "reconcile.html",
+        {"version": __version__},
+    )
+
+
+@pages_router.get("/in-progress", response_class=HTMLResponse)
+async def in_progress_page(request: Request) -> HTMLResponse:
+    """The batched assisted-review "In Progress" page (Phase 3). One tab per prepared job, each
+    showing the COMPLETE proposed application (confident fills + must-verify drafts), per-field
+    plain-text copy buttons, an open-the-application action, per-job disposition (mark applied /
+    skip), and a release-batch button. Single-page Alpine.js app polling ``/api/batch``."""
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request,
+        "in_progress.html",
         {"version": __version__},
     )
 

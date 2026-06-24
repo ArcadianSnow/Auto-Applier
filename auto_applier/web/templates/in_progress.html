@@ -1,0 +1,339 @@
+{% extends "base.html" %}
+{% block title %}In Progress &mdash; av3{% endblock %}
+{% block content %}
+  <div x-data="inProgress()" x-init="start()" class="in-progress">
+
+    <p><a href="/">&larr; Dashboard</a></p>
+
+    <section class="card">
+      <h1>In Progress</h1>
+      <p>
+        The bot prepares a batch of applications, then pauses here so you can check what it filled,
+        edit the drafts, and submit each one yourself. Nothing is ever submitted automatically
+        &mdash; <strong>you</strong> are the one who clicks submit on every application.
+      </p>
+
+      <template x-if="!loading && !enabled">
+        <p class="muted">
+          Batched review is off. Turn on <code>scheduler.batched_review</code> in your config to have
+          the bot prepare a batch and hold it here for you.
+        </p>
+      </template>
+
+      <template x-if="enabled && batch">
+        <p class="action-row">
+          <span class="ip-status" :class="batch.holding ? 'ip-status-hold' : 'ip-status-open'">
+            <span x-text="batch.count"></span> / <span x-text="batch.size"></span> prepared
+            <span x-show="batch.count - batch.pending > 0"
+                  x-text="`- ${batch.count - batch.pending} dealt with`"></span>
+            <span x-show="batch.holding"> &middot; holding for your review</span>
+            <span x-show="batch.all_dispositioned"> &middot; ready for the next batch</span>
+            <span x-show="!batch.holding && !batch.all_dispositioned"> &middot; still preparing</span>
+          </span>
+          <button class="secondary-btn" :disabled="busy" @click="load()"
+                  title="Re-check the batch (new prepared jobs show up here)">Refresh</button>
+          <button class="primary-btn" :disabled="busy || batch.count === 0"
+                  @click="release()"
+                  title="Done with this batch — let the bot prepare the next one">
+            Release batch
+          </button>
+          <span class="muted small" x-show="note" x-text="note"></span>
+        </p>
+      </template>
+    </section>
+
+    <template x-if="loading">
+      <p class="muted">Loading the current batch&hellip;</p>
+    </template>
+
+    <template x-if="error">
+      <section class="card"><p class="muted" x-text="error"></p></section>
+    </template>
+
+    <template x-if="enabled && !loading && jobs.length === 0">
+      <section class="card">
+        <p class="muted">No jobs prepared yet. They'll appear here as the bot fills them in.</p>
+      </section>
+    </template>
+
+    <template x-if="enabled && jobs.length > 0">
+      <div class="ip-layout">
+
+        <!-- Tab strip: one chip per prepared job -->
+        <nav class="ip-tabs" aria-label="Prepared jobs">
+          <template x-for="j in jobs" :key="j.id">
+            <button class="ip-tab" :class="{ 'ip-tab-active': j.id === selectedId }"
+                    @click="selectedId = j.id">
+              <span class="ip-tab-co" x-text="j.company"></span>
+              <span class="ip-tab-title" x-text="j.title"></span>
+              <span class="ip-tab-meta">
+                <span class="ip-pill ip-pill-done" x-show="j.disposition !== 'pending'"
+                      x-text="dispLabel(j.disposition)"></span>
+                <span class="ip-pill" :class="stateClass(j.state)"
+                      x-show="j.disposition === 'pending'" x-text="j.state"></span>
+                <span class="ip-pill ip-pill-verify"
+                      x-show="j.disposition === 'pending' && j.proposed && j.proposed.summary.needs_verify > 0"
+                      x-text="`${j.proposed.summary.needs_verify} to check`"></span>
+              </span>
+            </button>
+          </template>
+        </nav>
+
+        <!-- Detail panel for the selected job -->
+        <template x-if="selected">
+          <section class="card ip-detail">
+            <h2 class="ip-detail-head">
+              <span x-text="selected?.title"></span>
+              <span class="muted"> &middot; </span>
+              <span x-text="selected?.company"></span>
+            </h2>
+
+            <p class="action-row">
+              <a class="ip-link" :href="selected?.url" x-show="selected?.url" target="_blank"
+                 rel="noopener">View listing &nearr;</a>
+              <span class="ip-pill" :class="stateClass(selected?.state)" x-text="selected?.state"></span>
+            </p>
+
+            <template x-if="!selected?.proposed">
+              <p class="muted">
+                No proposed application was saved for this job (it may have errored before the bot
+                finished). Open the listing and fill it in yourself.
+              </p>
+            </template>
+
+            <template x-if="selected?.proposed">
+              <div>
+                <p class="muted small ip-summary">
+                  <span x-text="selected?.proposed.summary.confident"></span> filled confidently
+                  &middot; <span x-text="selected?.proposed.summary.drafted"></span> drafts to review
+                  &middot; <span x-text="selected?.proposed.summary.needs_verify"></span> need your input
+                </p>
+
+                <!-- Documents -->
+                <div class="ip-docs">
+                  <span class="muted small">R&eacute;sum&eacute;:</span>
+                  <code class="small" x-text="docName(selected?.proposed.resume_path) || '— none —'"></code>
+                  <span class="muted small">Cover letter:</span>
+                  <code class="small"
+                        x-text="docName(selected?.proposed.cover_letter_path) || '— none —'"></code>
+                </div>
+
+                <!-- Fields -->
+                <ul class="ip-fields">
+                  <template x-for="f in selected?.proposed.fields" :key="f.key">
+                    <li class="ip-field"
+                        :class="{ 'ip-field-draft': f.is_draft, 'ip-field-gap': f.needs_verify && !f.is_draft }">
+                      <div class="ip-field-head">
+                        <span class="ip-field-label" x-text="f.label"></span>
+                        <span class="ip-badge ip-badge-draft" x-show="f.is_draft">draft &mdash; review before sending</span>
+                        <span class="ip-badge ip-badge-gap" x-show="f.needs_verify && !f.is_draft">needs your input</span>
+                        <span class="ip-badge ip-badge-req" x-show="f.required && !f.value">required</span>
+                      </div>
+
+                      <template x-if="f.value">
+                        <div class="ip-field-body">
+                          <pre class="ip-value" x-text="f.value"></pre>
+                          <button class="copy-btn" @click="copy(f.value, f.key)"
+                                  :title="`Copy «${f.label}» as plain text`">
+                            <span x-text="copiedKey === f.key ? 'Copied' : 'Copy'"></span>
+                          </button>
+                        </div>
+                      </template>
+                      <template x-if="!f.value">
+                        <p class="muted small ip-field-empty"
+                           x-text="f.note || 'You fill this one in.'"></p>
+                      </template>
+
+                      <p class="ip-field-meta muted small">
+                        <span x-text="f.source"></span>
+                        <span x-show="f.confidence > 0 && f.confidence < 1"
+                              x-text="`- confidence ${Math.round(f.confidence * 100)}%`"></span>
+                      </p>
+                    </li>
+                  </template>
+                </ul>
+
+                <!-- Per-job actions -->
+                <p class="action-row ip-actions">
+                  <button class="primary-btn" :disabled="busy || !selected?.url" @click="openApp(selected)"
+                          title="Open the application in the bot's browser so you can paste + submit">
+                    Open the application
+                  </button>
+                  <button class="secondary-btn" :disabled="busy || isDone(selected)"
+                          @click="markApplied(selected)"
+                          title="I submitted this one — record it as applied">
+                    I applied
+                  </button>
+                  <button class="secondary-btn" :disabled="busy || isDone(selected)"
+                          @click="skip(selected)" title="Skip this one — I'm not applying">
+                    Skip
+                  </button>
+                  <button class="secondary-btn" :disabled="busy || isDone(selected)"
+                          @click="needsWork(selected)"
+                          title="Needs more work — leave it for later and let the batch move on">
+                    Needs work
+                  </button>
+                  <span class="ip-pill ip-pill-done" x-show="isDone(selected)"
+                        x-text="dispLabel(selected?.disposition)"></span>
+                  <span class="muted small" x-show="jobNote" x-text="jobNote"></span>
+                </p>
+              </div>
+            </template>
+          </section>
+        </template>
+      </div>
+    </template>
+
+  </div>
+{% endblock %}
+{% block scripts %}
+  <script>
+    function inProgress() {
+      return {
+        loading: true,
+        enabled: false,
+        error: "",
+        busy: false,
+        note: "",
+        jobNote: "",
+        copiedKey: "",
+        batch: null,
+        jobs: [],
+        selectedId: null,
+        _timer: null,
+
+        start() {
+          this.load();
+          // Gentle auto-refresh so newly-prepared jobs appear without an F5; the selected tab and
+          // any transient notes are preserved across reloads.
+          this._timer = setInterval(() => { if (!this.busy) this.load(); }, 8000);
+        },
+
+        get selected() {
+          return this.jobs.find((j) => j.id === this.selectedId) || null;
+        },
+
+        async load() {
+          this.error = "";
+          try {
+            const r = await fetch("/api/batch");
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const data = await r.json();
+            this.enabled = data.enabled;
+            this.batch = data.batch;
+            this.jobs = data.jobs || [];
+            // Keep the current selection if it's still in the batch; else pick the first job.
+            if (!this.jobs.some((j) => j.id === this.selectedId)) {
+              this.selectedId = this.jobs.length ? this.jobs[0].id : null;
+            }
+          } catch (e) {
+            this.error = `Couldn't load the batch: ${e}`;
+          } finally {
+            this.loading = false;
+          }
+        },
+
+        stateClass(state) {
+          if (state === "APPLIED") return "ip-pill-applied";
+          if (state === "SKIPPED") return "ip-pill-skipped";
+          return "ip-pill-review";
+        },
+
+        isDone(job) {
+          if (!job) return false;
+          // A job is "dealt with" once it carries a batch disposition (applied / skipped /
+          // needs_work) or its state went terminal — its action buttons are then disabled.
+          if (job.disposition && job.disposition !== "pending") return true;
+          return job.state === "APPLIED" || job.state === "SKIPPED";
+        },
+
+        dispLabel(d) {
+          return { applied: "applied", skipped: "skipped", needs_work: "needs work" }[d] || d || "";
+        },
+
+        docName(path) {
+          if (!path) return "";
+          return path.split(/[\\/]/).pop();
+        },
+
+        async copy(value, key) {
+          try {
+            await navigator.clipboard.writeText(value);
+            this.copiedKey = key;
+            setTimeout(() => { if (this.copiedKey === key) this.copiedKey = ""; }, 1500);
+          } catch (e) {
+            this.jobNote = `Copy failed (${e}); select the text and copy manually.`;
+          }
+        },
+
+        async openApp(job) {
+          this.busy = true;
+          this.jobNote = "";
+          // Re-open the bot's pre-filled attempt when there is one; otherwise just open the listing.
+          const url = job.assisted_application_id
+            ? `/api/jobs/${job.id}/assisted/open`
+            : `/api/jobs/${job.id}/open`;
+          try {
+            const r = await fetch(url, { method: "POST" });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            this.jobNote = "Opened in the browser — review, then submit it yourself.";
+          } catch (e) {
+            this.jobNote = `Couldn't open it: ${e}`;
+          } finally {
+            this.busy = false;
+          }
+        },
+
+        async _disposition(job, path, okMsg) {
+          this.busy = true;
+          this.jobNote = "";
+          try {
+            const r = await fetch(path, { method: "POST" });
+            if (!r.ok) {
+              const body = await r.json().catch(() => ({}));
+              throw new Error(body.detail || `HTTP ${r.status}`);
+            }
+            this.jobNote = okMsg;
+            await this.load();
+          } catch (e) {
+            this.jobNote = `${e}`;
+          } finally {
+            this.busy = false;
+          }
+        },
+
+        markApplied(job) {
+          return this._disposition(job, `/api/jobs/${job.id}/mark-applied`, "Recorded as applied.");
+        },
+
+        skip(job) {
+          return this._disposition(job, `/api/jobs/${job.id}/skip`, "Skipped.");
+        },
+
+        needsWork(job) {
+          return this._disposition(
+            job, `/api/jobs/${job.id}/needs-work`,
+            "Marked needs-work — left in your review queue; the batch can move on.");
+        },
+
+        async release() {
+          this.busy = true;
+          this.note = "";
+          try {
+            const r = await fetch("/api/batch/release", { method: "POST" });
+            if (!r.ok) {
+              const body = await r.json().catch(() => ({}));
+              throw new Error(body.detail || `HTTP ${r.status}`);
+            }
+            this.note = "Batch released — the bot will prepare the next one.";
+            await this.load();
+          } catch (e) {
+            this.note = `Release failed: ${e}`;
+          } finally {
+            this.busy = false;
+          }
+        },
+      };
+    }
+  </script>
+{% endblock %}

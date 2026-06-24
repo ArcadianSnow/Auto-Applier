@@ -899,3 +899,116 @@ pre.copilot-answer {
 }
 .chip:hover { background: var(--accent); color: #fff; }
 .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------------------------------------------------------------- In Progress (batched assisted review) */
+.in-progress .ip-status {
+  font-weight: 600;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+}
+.ip-status-hold { color: var(--warn); background: rgba(168, 84, 0, 0.12); }
+.ip-status-open { color: var(--fg-muted); background: var(--bg-soft); }
+
+.ip-layout { display: grid; grid-template-columns: minmax(200px, 280px) 1fr; gap: 1rem; }
+@media (max-width: 720px) { .ip-layout { grid-template-columns: 1fr; } }
+
+.ip-tabs { display: flex; flex-direction: column; gap: 0.4rem; }
+@media (max-width: 720px) { .ip-tabs { flex-direction: row; flex-wrap: wrap; } }
+.ip-tab {
+  text-align: left;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.7rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  color: var(--fg);
+}
+.ip-tab:hover { border-color: var(--accent); }
+.ip-tab-active { border-color: var(--accent); background: var(--accent-soft); }
+.ip-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ip-tab-co { font-weight: 600; font-size: 0.95rem; }
+.ip-tab-title { color: var(--fg-muted); font-size: 0.85rem; }
+.ip-tab-meta { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.2rem; }
+
+.ip-pill {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  background: var(--bg-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.ip-pill-review { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.ip-pill-applied { color: var(--ok); border-color: var(--ok); background: rgba(30, 125, 58, 0.12); }
+.ip-pill-skipped { color: var(--muted); }
+.ip-pill-verify { color: var(--warn); border-color: var(--warn); background: rgba(168, 84, 0, 0.10); }
+.ip-pill-done { color: var(--ok); border-color: var(--ok); background: rgba(30, 125, 58, 0.12); }
+
+.ip-detail-head { font-size: 1.2rem; }
+.ip-link { font-size: 0.9rem; }
+.ip-summary { margin: 0.2rem 0 0.6rem; }
+.ip-docs {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.6rem;
+  align-items: baseline;
+  margin: 0.4rem 0 0.8rem;
+}
+
+.ip-fields { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.ip-field {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.7rem;
+  background: var(--bg);
+}
+.ip-field-draft { border-left: 3px solid var(--warn); background: rgba(168, 84, 0, 0.06); }
+.ip-field-gap { border-left: 3px solid var(--muted); }
+.ip-field-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.ip-field-label { font-weight: 600; }
+.ip-badge {
+  font-size: 0.7rem;
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.ip-badge-draft { color: var(--warn); background: rgba(168, 84, 0, 0.14); }
+.ip-badge-gap { color: var(--muted); background: var(--bg-soft); }
+.ip-badge-req { color: var(--err); background: rgba(178, 30, 30, 0.12); }
+
+.ip-field-body { display: flex; align-items: flex-start; gap: 0.5rem; margin-top: 0.35rem; }
+.ip-value {
+  flex: 1;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 0.92rem;
+  color: var(--fg);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.55rem;
+}
+.ip-field-empty { margin: 0.3rem 0 0; }
+.ip-field-meta { margin: 0.3rem 0 0; }
+.copy-btn {
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+.copy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ip-actions { margin-top: 0.9rem; }

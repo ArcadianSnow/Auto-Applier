@@ -56,6 +56,8 @@ from auto_applier.resume.generate import (
     resolve_generated_cover_letter,
     resolve_generated_resume,
 )
+from auto_applier.resume.proposed import load_proposed, proposed_path
+from auto_applier.pipeline.review_batch import ReviewBatch
 from auto_applier.sources.browser.apply_base import (
     Applicant,
     ApplyOutcome,
@@ -180,6 +182,7 @@ def _build_worker(
     driver: DriverEntry,
     dry_run: bool = False,
     sleep=_noop_sleep,
+    review_batch=None,
 ) -> ApplyWorker:
     return ApplyWorker(
         settings=settings,
@@ -191,6 +194,7 @@ def _build_worker(
         dry_run=dry_run,
         sleep=sleep,
         drivers={"lever": driver},
+        review_batch=review_batch,
     )
 
 
@@ -390,6 +394,34 @@ def test_dry_run_leaves_job_in_queued_apply(settings, conn):
     assert ApplicationRepo(conn).list_by_job(job.id) == []
 
 
+def test_proposed_application_artifact_is_persisted(settings, conn):
+    """Batched assisted review, Phase 1 (prep-complete): every prepared job persists its COMPLETE
+    proposed application as a per-job JSON artifact (the 'In Progress' page reads it). Submit
+    behavior is unchanged — this is an additive, local-only artifact written for dry-run + real."""
+    job = _seed_queued_lever(conn, company="acmeco", source_job_id="prop-1")
+    q = CustomQuestion(
+        field_id="cq1", label="Why do you want to work here?", required=True, kind="textarea",
+    )
+    outcome = _make_outcome(status=None, resolutions=[
+        Resolution(question=q, value=None, source=ResolutionSource.REVIEW, needs_review=True),
+    ])
+    outcome.custom_questions = [q]
+    worker = _build_worker(settings, conn, driver=_fake_driver(outcome), dry_run=True)
+
+    asyncio.run(worker.run_once())
+
+    assert proposed_path(settings, job.id).exists()
+    proposed = load_proposed(settings, job.id)
+    assert proposed is not None
+    keys = {f.key for f in proposed.fields}
+    assert {"applicant:email", "doc:resume"} <= keys
+    field = next(f for f in proposed.fields if f.key == "q:cq1")
+    assert field.label == "Why do you want to work here?"
+    # No LLM client on this worker → the essay gap is NOT drafted; it stays a needs-input row.
+    assert field.needs_verify is True
+    assert field.is_draft is False
+
+
 def test_dry_run_second_cycle_skips_already_tested_job(settings, conn):
     """Dry-run jobs stay in QUEUED_APPLY; the worker must not re-test them every cycle
     (the infinite dry-run re-apply loop)."""
@@ -407,6 +439,122 @@ def test_dry_run_second_cycle_skips_already_tested_job(settings, conn):
     assert second.attempted == 0          # NOT re-tested
     assert second.skipped >= 1
     assert JobRepo(conn).get(job.id).state is JobState.QUEUED_APPLY
+
+
+# --------------------------------------------------------------- batch barrier (Phase 2)
+
+def test_batch_barrier_holds_after_n_prepared(settings, conn):
+    """With a review batch of size N, the worker prepares N jobs then defers the rest, and the
+    barrier holds (so the scheduler's apply_gate pauses the apply stage until the owner releases)."""
+    for i in range(3):
+        _seed_queued_lever(conn, company="acmeco", source_job_id=f"batch-{i}")
+    batch = ReviewBatch(size=2)
+    worker = _build_worker(
+        settings, conn,
+        driver=_fake_driver(_make_outcome(status=None)),
+        dry_run=True,
+        review_batch=batch,
+    )
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.attempted == 2         # exactly N prepared
+    assert summary.dry_run_count == 2
+    assert summary.deferred_batch == 1    # the 3rd deferred
+    assert batch.count == 2
+    assert batch.is_holding() is True
+
+
+def test_batch_barrier_resumes_after_release(settings, conn):
+    """Releasing the batch lifts the hold; the next run prepares the previously-deferred job."""
+    for i in range(3):
+        _seed_queued_lever(conn, company="acmeco", source_job_id=f"rel-{i}")
+    batch = ReviewBatch(size=2)
+    worker = _build_worker(
+        settings, conn,
+        driver=_fake_driver(_make_outcome(status=None)),
+        dry_run=True,
+        review_batch=batch,
+    )
+
+    first = asyncio.run(worker.run_once())
+    assert first.attempted == 2 and batch.is_holding() is True
+
+    batch.release()
+    assert batch.is_holding() is False
+
+    second = asyncio.run(worker.run_once())
+    assert second.attempted == 1          # the one deferred job — the first two are already tested
+    assert second.skipped == 2            # the two already-prepared dry-run jobs
+    assert batch.count == 1
+    assert batch.is_holding() is False
+
+
+def test_no_review_batch_drains_all(settings, conn):
+    """Default (no batch) keeps today's behavior — apply drains every queued job, no deferral."""
+    for i in range(3):
+        _seed_queued_lever(conn, company="acmeco", source_job_id=f"nob-{i}")
+    worker = _build_worker(
+        settings, conn,
+        driver=_fake_driver(_make_outcome(status=None)),
+        dry_run=True,
+    )
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.attempted == 3
+    assert summary.deferred_batch == 0
+
+
+def test_batch_auto_advances_when_all_dispositioned(settings, conn):
+    """Once the owner has dispositioned every job in a held batch, the next run releases the spent
+    batch and prepares the next N (batched assisted review, Phase 4 auto-advance)."""
+    for i in range(4):
+        _seed_queued_lever(conn, company="acmeco", source_job_id=f"adv-{i}")
+    batch = ReviewBatch(size=2)
+    worker = _build_worker(
+        settings, conn,
+        driver=_fake_driver(_make_outcome(status=None)),
+        dry_run=True,
+        review_batch=batch,
+    )
+
+    first = asyncio.run(worker.run_once())
+    assert first.attempted == 2 and batch.is_holding() is True
+    members = list(batch.snapshot()["members"])
+
+    # Owner dispositions both prepared jobs → the hold lifts.
+    batch.dispose(members[0], "applied")
+    batch.dispose(members[1], "skipped")
+    assert batch.is_holding() is False
+    assert batch.all_dispositioned() is True
+
+    # Next run auto-advances: releases the spent batch, prepares the remaining 2 into a fresh one.
+    second = asyncio.run(worker.run_once())
+    assert second.attempted == 2
+    assert batch.count == 2
+    assert set(batch.snapshot()["members"]).isdisjoint(members)  # a genuinely fresh batch
+
+
+def test_batch_barrier_self_defers_when_already_holding(settings, conn):
+    """A worker that finds the batch already full (e.g. ``av3 apply --once`` bypassing the scheduler
+    gate) defers immediately without preparing anything."""
+    for i in range(2):
+        _seed_queued_lever(conn, company="acmeco", source_job_id=f"held-{i}")
+    batch = ReviewBatch(size=1)
+    batch.add("some-other-job")           # batch already full from a prior cycle
+    assert batch.is_holding() is True
+    worker = _build_worker(
+        settings, conn,
+        driver=_fake_driver(_make_outcome(status=None)),
+        dry_run=True,
+        review_batch=batch,
+    )
+
+    summary = asyncio.run(worker.run_once())
+
+    assert summary.attempted == 0
+    assert summary.deferred_batch == 2
 
 
 def test_salary_ask_falls_back_to_targeting_floor(settings, conn):

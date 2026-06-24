@@ -80,6 +80,7 @@ Pacing & strategy (spec §8a — Pareto profiles, Phase 6 / v3.1):
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import sqlite3
 import time
@@ -98,6 +99,7 @@ from auto_applier.domain.models import Application, Job, utcnow_iso
 from auto_applier.domain.state import ApplicationStatus, ApplyMode, JobState
 from auto_applier.llm.complete import CompletionClient
 from auto_applier.llm.embed import EmbeddingClient
+from auto_applier.pipeline.review_batch import ReviewBatch
 from auto_applier.pipeline.stage import new_run_id, stage
 from auto_applier.resume.answer_resolver import (
     AnswerResolver,
@@ -113,6 +115,7 @@ from auto_applier.resume.generate import (
     resolve_generated_cover_letter,
     resolve_generated_resume,
 )
+from auto_applier.resume.proposed import build_proposed_application, save_proposed
 from auto_applier.resume.salary import (
     build_market_source,
     format_ask,
@@ -128,6 +131,8 @@ from auto_applier.sources.lever import LeverListing
 from auto_applier.telemetry import get_sink
 
 __all__ = ["ApplyRunSummary", "ApplyWorker", "DriverEntry", "default_drivers"]
+
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------- driver registry
@@ -245,6 +250,7 @@ class ApplyRunSummary:
     recovered: int = 0    # crash-sweep: APPLYING leftovers re-queued (spec §5)
     deferred_daily_target: int = 0  # jobs left in QUEUED_APPLY because the soft daily target was hit (§8a)
     rotated: int = 0      # jobs left in QUEUED_APPLY because the session-rotation budget elapsed (§8a 8/M)
+    deferred_batch: int = 0  # jobs left in QUEUED_APPLY because the review-batch barrier is holding
     dry_run_count: int = 0
     elapsed_s: float = 0.0
     notes: list[str] = field(default_factory=list)
@@ -279,6 +285,7 @@ class ApplyWorker:
         rng: random.Random | None = None,
         drivers: dict[str, DriverEntry] | None = None,
         rotation_clock: Callable[[], float] | None = None,
+        review_batch: ReviewBatch | None = None,
     ):
         self._settings = settings
         self._conn = conn
@@ -293,6 +300,13 @@ class ApplyWorker:
         # Session-rotation clock (spec §8a 8/M) — injectable so tests advance it
         # deterministically; None → SessionRotationPolicy falls back to time.monotonic.
         self._rotation_clock = rotation_clock
+
+        # Review-batch barrier (batched assisted review, Phase 2). When set, the worker registers
+        # each prepared job and stops once the batch is full so the owner can review on the "In
+        # Progress" page before the next N prepare. None (default) = no barrier = today's behavior;
+        # the serve factory wires a shared instance whose ``is_holding`` is OR'd into the scheduler's
+        # apply_gate, so a held batch pauses ONLY the apply stage (gather stages keep running).
+        self._review_batch = review_batch
 
         # Strategy profile (spec §8a, Phase 6) — resolve the active pacing knobs ONCE.
         # The profile→knobs mapping lives in auto_applier.config.strategy; the worker reads the
@@ -434,6 +448,15 @@ class ApplyWorker:
                 f"crash-sweep: re-queued {summary.recovered} APPLYING leftover(s)"
             )
 
+        # Batch auto-advance (batched assisted review, Phase 4): if every job in the held batch has
+        # been dispositioned by the owner (applied / skipped / needs-work), open a fresh batch so
+        # this run prepares the next N. The hold already lifted (is_holding → False once nothing is
+        # pending), which is why the scheduler let the apply stage run; releasing here clears the
+        # spent members before we start adding the next batch. The manual "Release batch" button
+        # does the same thing eagerly.
+        if self._review_batch is not None and self._review_batch.all_dispositioned():
+            self._review_batch.release()
+
         queued = self._job_repo.list_by_state(JobState.QUEUED_APPLY, limit=limit)
         prior_was_apply = False
 
@@ -445,6 +468,20 @@ class ApplyWorker:
         )
 
         for job in queued:
+            # Batch barrier (batched assisted review, Phase 2) — if the current batch is full and
+            # awaiting the owner's review, defer the rest. The scheduler's apply_gate normally stops
+            # the stage from running at all while holding, but the worker self-checks too: the batch
+            # can fill mid-run, and ``av3 apply --once`` bypasses the scheduler gate entirely. A
+            # *soft* stop like session rotation — deferred jobs stay in QUEUED_APPLY for next batch.
+            if self._review_batch is not None and self._review_batch.is_holding():
+                remaining = len(queued) - queued.index(job)
+                summary.deferred_batch = remaining
+                summary.notes.append(
+                    f"batch barrier: {self._review_batch.count}/{self._review_batch.size} prepared "
+                    f"and awaiting review; deferring {remaining} job(s)"
+                )
+                break
+
             # Session rotation (spec §8a 8/M) — consult BEFORE any per-job work so the
             # budget is measured against the source we're about to apply to. on_source
             # (re)starts the timer when the source changes; should_rotate fires once the
@@ -539,6 +576,10 @@ class ApplyWorker:
             except Exception as exc:  # noqa: BLE001 — isolation is the point
                 summary.errors += 1
                 self._recover_job_to_review(job, exc)
+                # A failed job lands in REVIEW — it's awaiting the owner too, so it counts toward
+                # the batch (keeps the barrier from churning through many failing jobs without a
+                # pause). The next iteration's top-of-loop hold check defers the rest.
+                self._register_in_batch(job)
                 prior_was_apply = False
                 continue
 
@@ -552,6 +593,11 @@ class ApplyWorker:
             else:
                 summary.review += 1
                 prior_was_apply = True
+
+            # Register the prepared job into the review batch (batched assisted review, Phase 2).
+            # It's now awaiting the owner (QUEUED_APPLY in dry-run, REVIEW after a real assisted
+            # prep); once the batch is full the top-of-loop check defers the rest next iteration.
+            self._register_in_batch(job)
 
         summary.elapsed_s = time.perf_counter() - t0
         return summary
@@ -615,6 +661,13 @@ class ApplyWorker:
         # dry-run left no record of fills, which made the 2026-06-13 "nothing filled" report
         # un-diagnosable. Metadata only — never the answer value.
         self._log_resolutions(run_id, job, outcome)
+
+        # Batched assisted review, Phase 1 (prep-complete): compute + persist the COMPLETE
+        # proposed application for this job (the confident subset above PLUS an aggressive draft
+        # for every open-ended gap) so the "In Progress" page can render it and survive a refresh.
+        # Submit behavior is unchanged — this is an additive, local-only artifact. Always runs
+        # (dry-run + real), best-effort.
+        await self._persist_proposed(job, outcome, resume_used, cover_used)
 
         if self._dry_run:
             # No state transition (we never went to APPLYING) — job stays in QUEUED_APPLY.
@@ -770,6 +823,44 @@ class ApplyWorker:
         )
         self._job_repo.set_state(job.id, JobState.FAILED)
         self._job_repo.set_state(job.id, JobState.REVIEW)
+
+    def _register_in_batch(self, job: Job) -> None:
+        """Register a just-handled job into the review-batch barrier (no-op when batching is off).
+
+        Mirrors the other soft-pacing knobs: the worker keeps the *count*, the scheduler's
+        apply_gate reads the *hold*. Idempotent at the batch (a job counts once)."""
+        if self._review_batch is not None:
+            self._review_batch.add(job.id)
+
+    async def _persist_proposed(
+        self, job: Job, outcome: ApplyOutcome, resume_used: str, cover_used: str
+    ) -> None:
+        """Compute + persist the COMPLETE proposed application (batched assisted review, Phase 1).
+
+        Reuses the driver's already-computed confident resolutions (so the page's confident subset
+        matches the live form exactly) and additionally drafts every open-ended gap via
+        ``resolver.draft_open_ended`` — unconditional, because the owner is the submit gate on the
+        page. Writes a per-job JSON artifact (local-only, never mirrored).
+
+        Defensive: any failure is logged and swallowed. Building the page artifact must NEVER break
+        the apply loop (same posture as :meth:`_log_resolutions`) — and the draft path itself
+        already fails closed per question, so a flaky LLM just leaves gaps as needs-input rows.
+        ``self._resolver.current_job`` is still set to this job from ``_process_one``, so the
+        drafts use the right company/JD context.
+        """
+        try:
+            proposed = await build_proposed_application(
+                job_id=job.id,
+                applicant=self._applicant,
+                resume_path=resume_used,
+                cover_letter_path=cover_used,
+                questions=outcome.custom_questions,
+                resolutions=outcome.resolutions,
+                resolver=self._resolver,
+            )
+            save_proposed(self._settings, proposed)
+        except Exception as exc:  # noqa: BLE001 — artifact build is best-effort, never fatal
+            logger.warning("proposed-application build failed for job %s: %s", job.id, exc)
 
     def _log_resolutions(self, run_id: str, job: Job, outcome: ApplyOutcome) -> None:
         """Emit a local ``resolution`` event per discovered question (metadata only).

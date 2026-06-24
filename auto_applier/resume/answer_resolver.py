@@ -38,6 +38,7 @@ A bare string discards all three signals.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -46,6 +47,8 @@ from auto_applier.domain.models import Answer, utcnow_iso
 from auto_applier.llm.embed import EmbeddingClient, bytes_to_vec, cosine, vec_to_bytes
 from auto_applier.resume.factbank import FactBank
 from auto_applier.sources.browser.apply_base import CustomQuestion
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "AnswerResolver",
@@ -1178,6 +1181,37 @@ class AnswerResolver:
         )
 
     # ---- freeform draft (Tier 2b — assisted, opt-in; BUILD 6 Phase B) ----
+
+    async def draft_open_ended(self, question: CustomQuestion) -> Resolution | None:
+        """Aggressively draft an essay gap for the batched assisted-review 'In Progress' page
+        (batched-assisted-review.md Phase 1) — IGNORING ``self.draft_freeform``.
+
+        This is the "draft made unconditional" entry point. On the In-Progress page the owner is
+        the submit gate (the bot never auto-submits), so every open-ended gap gets a first draft
+        the owner edits — even when ``draft_freeform`` is OFF (the AUTO-submit posture). It is a
+        SUPERSET of the gating in :meth:`resolve`'s open-ended branch, so it can NEVER fabricate a
+        value the resolver itself would refuse to fill:
+
+          * a sensitive field (EEO / consent / attestation / work-auth / sponsorship / salary) →
+            ``None`` (those are policy/human decisions, never drafted);
+          * a 'how did you hear about us?' picker → ``None`` (honesty: derived from the discovery
+            source or left for the human, never invented);
+          * anything not actually open-ended (a binary screener, a contact field) → ``None``
+            (drafting a binary answer is exactly the overclaim risk the audit guards against).
+
+        Returns the fill-but-flag DRAFT resolution (``needs_review`` + ``draft``) on success, or
+        ``None`` when the question isn't a draftable essay gap or the copilot couldn't produce
+        text (the caller then keeps the safe bail). Never raises.
+        """
+        if self.llm_client is None:
+            return None
+        if classify_sensitive(question.label, getattr(question, "options", None)) is not SensitiveClass.NONE:
+            return None
+        if _is_how_heard(question.label):
+            return None
+        if not is_open_ended(question.label, getattr(question, "kind", "")):
+            return None
+        return await self._draft_open_ended(question)
 
     async def _draft_open_ended(self, question: CustomQuestion) -> Resolution | None:
         """Draft an open-ended/essay answer via the §8f copilot's freeform path and return a

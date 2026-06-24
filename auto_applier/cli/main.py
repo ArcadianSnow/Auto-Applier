@@ -2484,10 +2484,20 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
     conn = init_app_db(settings.app_db_path)
     _install_sink(settings)
 
+    # Batched assisted review (Phase 2): a shared barrier the apply worker fills and the scheduler's
+    # apply_gate reads. Built ONCE here (web-dashboard mode only — headless ``av3 run`` never sets
+    # it) so the worker, the gate, and the web layer all reference the same instance. ``None`` when
+    # the feature is off (default), which leaves apply draining continuously as before.
+    _review_batch = None
+    if settings.scheduler.batched_review:
+        from auto_applier.pipeline.review_batch import ReviewBatch
+        _review_batch = ReviewBatch(size=settings.scheduler.batch_review_size)
+
     web_state = WebState(
         settings=settings,
         app_db_path=settings.app_db_path,
         events_db_path=settings.events_db_path,
+        review_batch=_review_batch,
     )
 
     # Decide whether to spin up the scheduler. Pre-onboarding the fact bank
@@ -2519,6 +2529,15 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
     # stops driving the browser (gather stages keep running) until that tab closes.
     from auto_applier.web.control import ManualTakeover
     _takeover = ManualTakeover()
+
+    # Apply-gate predicate (the scheduler skips ONLY the apply stage when it returns True). Two
+    # sources OR together: a manual browser takeover, and — when batched assisted review is on — a
+    # full review batch awaiting the owner (Phase 2). Both keep gather stages running.
+    if _review_batch is not None:
+        def _apply_gate() -> bool:
+            return _takeover.is_active() or _review_batch.is_holding()
+    else:
+        _apply_gate = _takeover.is_active
 
     # LAZY browser start. The bot's headed Chrome is started on FIRST real need (the first
     # apply, or the first manual "Open in browser"/login) — NOT eagerly at startup — so plain
@@ -2636,11 +2655,12 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
                     resume_path=str(resume_path), new_page=_lazy_new_page,
                     embed_client=embed, llm_client=llm, mode=apply_mode,
                     dry_run=dry_run, drivers=default_drivers(),
+                    review_batch=_review_batch,
                 ),
                 cycle_interval_s=effective_cycle_interval,
                 quiet_hours=quiet_hours_window,
                 pause_predicate=pause_predicate,
-                apply_gate=_takeover.is_active,
+                apply_gate=_apply_gate,
                 maintenance=_maintenance,
                 maintenance_interval_s=settings.retention.maintenance_interval_s,
             )

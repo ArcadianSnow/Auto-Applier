@@ -229,10 +229,20 @@ class SchedulerConfig(BaseModel):
     cycle_interval_s: float = 60.0  # seconds between staged-loop cycles
     quiet_hours: str | None = None  # "HH:MM-HH:MM" local time, or None for 24/7
 
+    # Batched assisted review (research/batched-assisted-review.md). When ON (the web-dashboard
+    # posture), the apply stage prepares ``batch_review_size`` jobs then HOLDS on the apply_gate so
+    # the owner can verify / submit each on the "In Progress" page before the next N are prepared.
+    # OFF (default) keeps today's behavior — apply drains continuously — so headless ``av3 run``
+    # and the existing tests are unchanged; the dashboard turns it on.
+    batched_review: bool = False
+    batch_review_size: int = 5      # N jobs prepared per batch before the barrier holds
+
     @model_validator(mode="after")
     def _cycle_interval_positive(self) -> "SchedulerConfig":
         if self.cycle_interval_s <= 0:
             raise ValueError("cycle_interval_s must be > 0")
+        if self.batch_review_size < 1:
+            raise ValueError("batch_review_size must be >= 1")
         return self
 
 

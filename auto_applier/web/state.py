@@ -23,9 +23,12 @@ import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
 from auto_applier.config import Settings
+
+if TYPE_CHECKING:
+    from auto_applier.pipeline.review_batch import ReviewBatch
 
 
 @dataclass
@@ -35,6 +38,10 @@ class WebState:
     settings: Settings
     app_db_path: Path
     events_db_path: Path
+    #: The batched-assisted-review barrier (Phase 2), when enabled — shared with the apply worker +
+    #: the scheduler's apply_gate. ``None`` when batching is off or in --no-scheduler diagnostics.
+    #: Phase 3's "In Progress" page reads ``snapshot()`` and calls ``release()`` through this.
+    review_batch: "ReviewBatch | None" = None
 
     @contextmanager
     def app_conn(self) -> Iterator[sqlite3.Connection]:
