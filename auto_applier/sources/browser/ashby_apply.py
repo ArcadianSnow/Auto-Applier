@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 
 from auto_applier.domain.state import ApplicationStatus, ApplyMode
 from auto_applier.sources.ashby import AshbyListing
@@ -53,8 +54,13 @@ __all__ = [
     "ApplyOutcome",
     "CustomQuestion",
     "discover_custom_questions",
+    "fill_ashby_combobox",
     "prepare_application",
 ]
+
+# Synthetic id discovery assigns id/name-less widgets (``ashby_q<n>``), where <n> is the
+# 1-based position in ``.ashby-application-form-field-entry`` — see discover_custom_questions.
+_SYNTHETIC_ID_RE = re.compile(r"^ashby_q(\d+)$")
 
 # Stable system fields — same shape on every Ashby company (research §Ashby).
 _FIELD_SELECTORS = {
@@ -203,6 +209,116 @@ async def discover_custom_questions(page) -> list[CustomQuestion]:
     return out
 
 
+# Ashby combobox option DOM (live-probed on a Ramp form 2026-06-24). Ashby's id/name-less
+# ``input[role=combobox]`` is a geocoder-style autocomplete: it stays ``aria-expanded=false``
+# until you TYPE, then opens a portaled ``[role=listbox]`` (``_floatingContainer_*``) of
+# ``[role=option]`` (``_result_*``) place suggestions, the first auto-highlighted (``_active_``).
+# The react-select ``fill_combobox`` can't drive it (wrong DOM; the synthetic ``ashby_q<n>`` id
+# selects nothing), so Ashby gets this container-anchored filler. The matcher clicks the option
+# best overlapping the wanted value but ONLY when the leading (city) token is present — a missing
+# match returns False so a required combobox routes the job to assisted rather than a wrong place.
+_ASHBY_COMBO_PICK_JS = r"""
+(want) => {
+  const norm = s => (s || '').replace(/\s+/g,' ').trim().toLowerCase();
+  const w = norm(want);
+  if (!w) return false;
+  const tokens = w.split(/[,\/]+/).map(t => t.trim()).filter(Boolean);
+  const city = tokens[0] || w;
+  const opts = [...document.querySelectorAll('[role=option]')]
+    .map(el => ({el, t: norm(el.innerText || el.textContent)})).filter(o => o.t);
+  if (!opts.length) return false;
+  const click = el => { try { el.click(); return true; } catch(e) { return false; } };
+  for (const o of opts) if (o.t === w) return click(o.el);          // 1. exact
+  let best = null, bestScore = 0;                                   // 2. best overlap incl. city
+  for (const o of opts) {
+    if (!o.t.includes(city)) continue;
+    let score = 0;
+    for (const tk of tokens) if (tk && o.t.includes(tk)) score++;
+    if (score > bestScore) { bestScore = score; best = o; }
+  }
+  if (best) return click(best.el);
+  return false;                                                     // 3. city absent -> don't guess
+}
+"""
+
+
+async def _locate_ashby_combobox(page, question, selector: str):
+    """Return the ElementHandle for ``question``'s combobox input, or None.
+
+    Ashby's React comboboxes render an ``<input>`` with NEITHER id nor name, so discovery gives
+    them a synthetic ``ashby_q<n>`` id keyed to the field-entry position. We re-derive the entry by
+    that index and read the ``input[role=combobox]`` inside it. A combobox that DID carry a real
+    id/name falls back to the passed selector."""
+    fid = (getattr(question, "field_id", "") or "").strip()
+    m = _SYNTHETIC_ID_RE.match(fid)
+    if m:
+        try:
+            entries = await page.query_selector_all(".ashby-application-form-field-entry")
+        except Exception:  # noqa: BLE001
+            return None
+        i = int(m.group(1)) - 1
+        if 0 <= i < len(entries):
+            return await entries[i].query_selector("input[role=combobox], [role=combobox]")
+        return None
+    if selector:
+        el = await page.query_selector(selector)
+        if el is not None:
+            return el
+    if fid:
+        return await page.query_selector(f"[name='{fid}']")
+    return None
+
+
+async def fill_ashby_combobox(page, question, selector: str, value: str) -> bool:
+    """Fill an Ashby geocoder combobox by typing a query and clicking the matching suggestion.
+
+    Anchors on the field-entry (the synthetic ``ashby_q<n>`` id selects nothing), TYPES the
+    leading token of ``value`` to open the autocomplete (the menu is empty until you type), waits
+    for the ``[role=option]`` list, then clicks the best match (city token required). Returns True
+    only when an option is committed; on no-match it Escapes the menu (so it can't intercept later
+    fields) and returns False → a required field then routes the job to assisted, never a guess.
+    Fully defensive: any Playwright error is an observable False (mid-form-break policy)."""
+    want = (value or "").strip()
+    if not want:
+        return False
+    try:
+        el = await _locate_ashby_combobox(page, question, selector)
+        if el is None:
+            return False
+        try:
+            await el.scroll_into_view_if_needed(timeout=3000)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await el.click(timeout=8000)
+        except Exception:  # noqa: BLE001 — intercepted/unstable field -> observable skip
+            return False
+        # Clear any prefill, then type the leading token (a full address over-filters the geocoder).
+        try:
+            await el.fill("")
+        except Exception:  # noqa: BLE001
+            pass
+        query = (re.split(r"[\s,;:./]+", want)[0] or want)[:40]
+        for ch in query:
+            await el.type(ch)
+            await asyncio.sleep(random.uniform(0.03, 0.10))
+        # Wait for the autocomplete list to render (portaled; empty until typing settles).
+        for _ in range(20):
+            if await page.query_selector("[role=option]") is not None:
+                break
+            await asyncio.sleep(0.1)
+        if await page.evaluate(_ASHBY_COMBO_PICK_JS, want):
+            await asyncio.sleep(0.2)   # let the menu close before the next field
+            return True
+        try:
+            await page.keyboard.press("Escape")  # dismiss so it can't block later fields
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+    except Exception:  # noqa: BLE001 — mid-form break -> observable skip, never fatal
+        return False
+
+
 async def prepare_application(
     page,
     listing: AshbyListing,
@@ -276,7 +392,9 @@ async def prepare_application(
     # Resolve + fill custom questions (spec §8b). Same shape as Lever/GH.
     if resolver is not None and outcome.custom_questions:
         outcome.resolutions = await resolver.resolve_all(outcome.custom_questions)
-        custom_filled = await fill_resolutions(page, outcome.custom_questions, outcome.resolutions)
+        custom_filled = await fill_resolutions(
+            page, outcome.custom_questions, outcome.resolutions,
+            combobox_fill=fill_ashby_combobox)
         for fid, ok in custom_filled.items():
             outcome.filled[f"q:{fid}"] = ok
 

@@ -274,6 +274,21 @@ def _contact_bank():
     ("Mobile number", ProfileField.PHONE),
     # CITY must still win over LOCATION for "Location (City)" (order regression guard).
     ("Location (City)*", ProfileField.CITY),
+    # Round 2 (2026-06-24): spoken languages, availability/start-date, current company.
+    ("What languages are you fluent in?", ProfileField.LANGUAGES),
+    ("Which languages do you speak?", ProfileField.LANGUAGES),
+    ("Languages spoken", ProfileField.LANGUAGES),
+    # ...but a PROGRAMMING-language question is a skills field, not spoken languages.
+    ("Which programming languages are you fluent in?", ProfileField.NONE),
+    ("What coding languages do you know?", ProfileField.NONE),
+    ("When can you start a new role?", ProfileField.AVAILABILITY),
+    ("What is your earliest start date?", ProfileField.AVAILABILITY),
+    ("How soon can you start?", ProfileField.AVAILABILITY),
+    ("Current company", ProfileField.CURRENT_COMPANY),
+    ("Current/Last Company", ProfileField.CURRENT_COMPANY),
+    ("Who do you currently work for?", ProfileField.CURRENT_COMPANY),
+    # NOTICE_PERIOD still distinct from AVAILABILITY (a form may ask both).
+    ("What is your notice period?", ProfileField.NOTICE_PERIOD),
 ])
 def test_classify_profile_field(label, expected):
     assert classify_profile_field(label) is expected
@@ -1026,3 +1041,67 @@ class TestOnboardingExtras:
     def test_gender_unset_stays_prefer_not_to_answer(self, answer_repo):
         res = asyncio.run(AnswerResolver(_bank(), answer_repo).resolve(_q("What is your gender?")))
         assert res.value == "Prefer not to answer"
+
+    # ---- Round 2 (2026-06-24): languages / availability / notice default / current company ----
+
+    def test_languages_default_english_when_blank(self, answer_repo):
+        # Blank bank → owner default "English" (never bails — it's a trivial factual field).
+        res = asyncio.run(AnswerResolver(_bank(languages=[]), answer_repo).resolve(
+            _q("What languages are you fluent in?")))
+        assert res.value == "English"
+        assert res.needs_review is False
+
+    def test_languages_join_from_bank(self, answer_repo):
+        resolver = AnswerResolver(_bank(languages=["English", "Spanish"]), answer_repo)
+        res = asyncio.run(resolver.resolve(_q("What languages are you fluent in?")))
+        assert res.value == "English, Spanish"
+
+    def test_languages_textarea_fills_not_open_ended_bail(self, answer_repo):
+        # A textarea "What languages…" used to bail as open-ended; the profile classifier (which
+        # runs BEFORE is_open_ended) must fill it instead.
+        res = asyncio.run(AnswerResolver(_bank(), answer_repo).resolve(
+            _q("What languages are you fluent in?", kind="textarea")))
+        assert res.value == "English"
+        assert res.needs_review is False
+
+    def test_programming_languages_not_filled_with_spoken(self, answer_repo):
+        # A programming-language question must NOT be answered with the user's spoken languages —
+        # it falls through (no LLM here → bails) rather than filling "English".
+        res = asyncio.run(AnswerResolver(_bank(), answer_repo).resolve(
+            _q("Which programming languages are you fluent in?")))
+        assert res.value != "English"
+        assert res.needs_review is True
+
+    def test_availability_default_two_weeks(self, answer_repo):
+        res = asyncio.run(AnswerResolver(_bank(), answer_repo).resolve(
+            _q("When can you start a new role?")))
+        assert res.value == "2 weeks"
+        assert res.needs_review is False
+
+    def test_availability_from_bank_wins(self, answer_repo):
+        resolver = AnswerResolver(_bank(availability="Immediately"), answer_repo)
+        res = asyncio.run(resolver.resolve(_q("What is your earliest start date?")))
+        assert res.value == "Immediately"
+
+    def test_notice_period_defaults_two_weeks_when_blank(self, answer_repo):
+        # Round 2 owner directive: a blank notice period now DEFAULTS (was: fell through / bailed).
+        res = asyncio.run(AnswerResolver(_bank(), answer_repo).resolve(
+            _q("What is your notice period?")))
+        assert res.value == "2 weeks"
+        assert res.needs_review is False
+
+    def test_current_company_from_work_history(self, answer_repo):
+        from auto_applier.resume.factbank import WorkEntry
+        bank = _bank(work_history=[
+            WorkEntry(company="Acme Corp", title="DBA", start="2020", end="Present"),
+            WorkEntry(company="Old Co", title="Analyst", start="2017", end="2020"),
+        ])
+        res = asyncio.run(AnswerResolver(bank, answer_repo).resolve(_q("Current company")))
+        assert res.value == "Acme Corp"      # most-recent role (index 0), no new data
+        assert res.needs_review is False
+
+    def test_current_company_no_history_bails(self, answer_repo):
+        # No work history → bail to assisted (the LLM must never invent an employer).
+        res = asyncio.run(AnswerResolver(_bank(work_history=[]), answer_repo).resolve(
+            _q("Current company")))
+        assert res.needs_review is True

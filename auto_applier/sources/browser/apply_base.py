@@ -565,6 +565,7 @@ async def fill_resolutions(
     resolutions: list,
     *,
     selector_for=None,
+    combobox_fill=None,
 ) -> dict[str, bool]:
     """Type/select each resolved answer onto its field. Returns ``{field_id: filled?}``.
 
@@ -573,6 +574,11 @@ async def fill_resolutions(
         to assisted if it was required — see :func:`any_required_unresolved`).
       * any selector that doesn't resolve to an element on the page (mid-form break →
         caller decides; we just report False so the outcome is observable).
+
+    ``combobox_fill`` overrides how ``kind=='combobox'`` fields are filled. The default is the
+    react-select ``fill_combobox`` (Greenhouse). Ashby's id-less geocoder combobox needs a
+    container-anchored filler that the synthetic-id selector can't reach, so its driver passes
+    ``combobox_fill=fill_ashby_combobox`` (signature ``(page, question, selector, value)``).
     """
     selector_for = selector_for or _selector_for
     filled: dict[str, bool] = {}
@@ -604,7 +610,11 @@ async def fill_resolutions(
             filled[q.field_id] = await fill_option_group(page, q, str(r.value))
         elif q.kind == "combobox":
             # react-select: open + click the matching option (typing prose filters to empty).
-            filled[q.field_id] = await fill_combobox(page, sel, str(r.value))
+            # A per-ATS override drives non-react-select comboboxes (Ashby's id-less geocoder).
+            if combobox_fill is not None:
+                filled[q.field_id] = await combobox_fill(page, q, sel, str(r.value))
+            else:
+                filled[q.field_id] = await fill_combobox(page, sel, str(r.value))
         elif q.kind == "select":
             el = await page.query_selector(sel)
             if el is None:

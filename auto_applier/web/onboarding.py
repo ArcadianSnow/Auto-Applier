@@ -37,6 +37,7 @@ copy-paste convenience — the user is still in control of every field.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from auto_applier.resume.factbank import (
@@ -245,6 +246,8 @@ class OnboardingStatus:
             "requires_sponsorship": self.bank.requires_sponsorship,
             "primary_nationality": self.bank.primary_nationality,
             "notice_period": self.bank.notice_period,
+            "languages": list(self.bank.languages),
+            "availability": self.bank.availability,
             "eeo": dict(self.bank.eeo),
             "targeting": self.config.get("targeting") or {},
             "telemetry": self.config.get("telemetry") or {},
@@ -310,6 +313,8 @@ def _fact_bank_to_dict(bank: FactBank) -> dict:
         "requires_sponsorship": bank.requires_sponsorship,
         "primary_nationality": bank.primary_nationality,
         "notice_period": bank.notice_period,
+        "languages": list(bank.languages),
+        "availability": bank.availability,
         "eeo": dict(bank.eeo),
         # Was accepted on read (from_dict) but never written back — round-trip the relocation
         # preferences too so they survive a save.
@@ -414,6 +419,22 @@ def merge_extras(bank: FactBank, payload: dict) -> FactBank:
         bank.primary_nationality = (payload.get("primary_nationality") or "").strip()
     if "notice_period" in payload:
         bank.notice_period = (payload.get("notice_period") or "").strip()
+    if "availability" in payload:
+        bank.availability = (payload.get("availability") or "").strip()
+    if "languages" in payload:
+        # Accept a list (wizard) or a comma/newline-separated string (CLI/paste); trim + drop
+        # empties, dedupe case-insensitively. Blank ⇒ the resolver re-applies the English default.
+        raw = payload.get("languages")
+        if isinstance(raw, str):
+            raw = re.split(r"[,\n;]+", raw)
+        seen: set[str] = set()
+        langs: list[str] = []
+        for item in raw or []:
+            s = str(item).strip()
+            if s and s.lower() not in seen:
+                seen.add(s.lower())
+                langs.append(s)
+        bank.languages = langs
     if "gender" in payload:
         gender = (payload.get("gender") or "").strip()
         if gender:

@@ -1,8 +1,8 @@
 # Field coverage — Round 2 (onboarding-captured fields + classifiers + Ashby combobox fill)
 
-**Status:** PLANNED (handoff 2026-06-24). Round 1 (discovery rewrites + option-group fill + Lever location)
-is SHIPPED + live-verified — commits `abfb4db`, `07cd8b5`, `03ea750` on master. This doc is the next build:
-fill the remaining real misses surfaced by the 2026-06-24 live dry-run, per the owner's decisions.
+**Status:** ✅ SHIPPED 2026-06-24 (see "Build session" at the bottom). Round 1 (discovery rewrites +
+option-group fill + Lever location) shipped earlier — commits `abfb4db`, `07cd8b5`, `03ea750`. This doc is
+Round 2: fill the remaining real misses surfaced by the 2026-06-24 live dry-run, per the owner's decisions.
 
 Parent doc: `ats-field-coverage-audit.md` (the audit + Round 1 + the live-run table). Harness:
 `C:\JobSearch\diagnose_apply_multi.py` (dry-run, never submits; now passes the master résumé so the upload
@@ -82,3 +82,82 @@ once defaults seed them). Add a Lever + Ashby form to the `smoke` suite (still o
   combobox (D) + start date (B/C).
 - Greenhouse imagineworldwide: 9 discovered, 6 LAND, 3 bail (Primary Nationality, salary, notice). Target:
   all 3 fill once onboarding captures the data.
+
+---
+
+## Build session (2026-06-24) — SHIPPED
+
+All five work items (A–E) implemented + verified. Full suite **1430 passed, 1 skipped, 13 deselected**.
+
+**A. Fact-bank model** (`auto_applier/resume/factbank.py`): added `languages: list[str]`
+(default `["English"]`) and `availability: str` (default `""`). `from_dict` defaults
+`languages` to `["English"]` when absent/empty (so an old `master.json` still answers), passes
+`availability` through. Round-tripped in `onboarding._fact_bank_to_dict`.
+
+**C. Resolver classifiers** (`auto_applier/resume/answer_resolver.py`): three new `ProfileField`s,
+all classified in `classify_profile_field` (runs BEFORE `is_open_ended`, so a textarea phrasing
+fills instead of bailing as an essay):
+- `LANGUAGES` (`fluent in` / `what/which languages` / `spoken languages`) → joined `bank.languages`,
+  default English. Guarded by `_PROGRAMMING_LANG_GUARD` so "which **programming** languages…" is NOT
+  answered with spoken languages (→ skills/LLM/bail).
+- `AVAILABILITY` (`when can you start` / `earliest start date` / `start a new role`) → `bank.availability`,
+  owner default **"2 weeks"**. Kept DISTINCT from `NOTICE_PERIOD` (a form may ask both).
+- `CURRENT_COMPANY` (`current/last company`, `who do you work for`) → `work_history[0].company` (no new
+  data); **bails to assisted with no work history** (the LLM never invents an employer).
+- `NOTICE_PERIOD` now defaults **"2 weeks"** when blank (was: fell through). Removed from
+  `_OPTIONAL_PROFILE_EXTRAS` (it always resolves now). `NATIONALITY` still bails when blank (no safe
+  default) — captured in onboarding instead.
+- Owner defaults live in the resolver (`_DEFAULT_LANGUAGES`/`_DEFAULT_AVAILABILITY`/`_DEFAULT_NOTICE_PERIOD`),
+  so an **explicit onboarding value always wins** (read first; the default only fires on blank). 19 new
+  resolver tests (classify parametrize + resolution behavior + the programming guard).
+
+**B. Onboarding capture**: `merge_extras` now writes `languages` (accepts a list OR a comma/newline
+string; trim + case-insensitive dedupe) and `availability`. `POST /onboarding/extras` additionally writes
+`salary_floor` into `user_config.targeting` (NOT the fact bank — the resolver's SALARY branch reads it;
+field-merged so it cooperates with the `/onboarding/targeting` writer). `OnboardingStatus.to_dict` echoes
+both new fields. Wizard UI (`onboarding.html` + `onboarding.js` "More details" step) adds: earliest
+start/availability, languages, salary expectation; the notice-period default label now reads "default:
+2 weeks". 3 new web tests. No CLI onboarding path exists for extras (web-wizard only) → no parity work.
+
+**D. Ashby id-less combobox FILL** (`ashby_apply.py` + `apply_base.py`): `fill_resolutions` gained a
+`combobox_fill` hook (default = react-select `fill_combobox`); the Ashby driver passes
+`fill_ashby_combobox`. The new filler re-derives the field-entry by the **index encoded in the synthetic
+`ashby_q<n>` id** (the react-select selector `#ashby_q<n>` matches nothing), types the leading token to
+open the geocoder autocomplete, waits for `[role=option]`, and clicks the best-overlap option **only when
+the leading (city) token is present** (else Escapes + bails to assisted — never a wrong place). 6 new unit
+tests (locate-by-index, happy path, no-city bail+escape, empty, missing-entry).
+
+### Live DOM contract + end-to-end verification (Playwright MCP, read-only, NEVER submitted)
+
+Probed a CURRENT Ashby form (Ramp `Security Engineer, Cloud`, 2026-06-24) — the prior openai/plaid URLs
+are likely stale. The id-less combobox (`Where do you plan on working from…`) is a **geocoder
+autocomplete**:
+- `input[role=combobox]` is `aria-expanded=false` / `aria-autocomplete=list` / `aria-haspopup=listbox`
+  until you **type** (click alone does NOT open it).
+- Typing opens a portaled `[role=listbox]` (`_floatingContainer_*`) of `[role=option]` (`_result_*`)
+  place suggestions; the first is auto-highlighted (`_active_*`). Options carry the full place text
+  ("Dallas, Texas, United States").
+
+**End-to-end proof:** ran the EXACT `_ASHBY_COMBO_PICK_JS` against the live menu — typed "Dallas",
+want="Dallas, Texas, United States" → matcher returned `clicked:true`, picked "Dallas, Texas, United
+States" (disambiguated from Georgia/Oregon/PA/NC by token overlap), and the combobox **`value` committed
+to "Dallas, Texas, United States"** with `aria-expanded=false`. A DOM `.click()` on the option div fires
+React's onChange, so the production fill **lands**. (Same DOM-click pattern as the already-verified
+Ashby Yes/No button-group fill.)
+
+### Notes / deferrals
+
+- The Ramp combobox label "Where do you plan on working from (for payroll tax purposes)?" does NOT match
+  the LOCATION classifier (only "Where are you **currently located**?" does, via the Round-1 adverb fix),
+  so on that specific form the combobox resolves to a bail — the FILL mechanic is what Round 2 added and is
+  verified independently above. A "work location / plan on working from" classifier variant was left out of
+  scope (owner plan targeted the LOCATION combobox).
+- Production `master.json` has `languages`/`availability`/`notice_period`/`primary_nationality` all blank.
+  With Round 2: languages→English, availability→"2 weeks", notice→"2 weeks" now FILL via defaults;
+  nationality still bails (correct — needs onboarding) and `salary_floor` is unset (GH salary still bails —
+  a harness/data artifact, not a regression). The owner can set nationality + salary in the onboarding
+  "More details" step.
+- **Owner's optional final check:** the headed `diagnose_apply_multi.py` is the visual end-to-end harness,
+  but its default URLs are stale and it opens the persistent-profile Chrome (run it with a CURRENT Ashby
+  apply URL that has a "Where are you currently located?" combobox to see the LAND on a real form).
+- Still outstanding from Round 1: add a Lever + Ashby form to the `smoke` suite.

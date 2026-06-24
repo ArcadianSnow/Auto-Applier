@@ -279,14 +279,35 @@ class ProfileField(str, Enum):
     COUNTRY_TIMEZONE = "country_timezone"
     LOCATION = "location"        # full "City, State, Country"
     NATIONALITY = "nationality"          # bank.primary_nationality (optional onboarding extra)
-    NOTICE_PERIOD = "notice_period"      # bank.notice_period (optional onboarding extra)
+    NOTICE_PERIOD = "notice_period"      # bank.notice_period; owner default "2 weeks" (Round 2)
+    AVAILABILITY = "availability"        # bank.availability ("when can you start?"); default "2 weeks"
+    LANGUAGES = "languages"              # bank.languages (spoken); default ["English"] (Round 2)
+    CURRENT_COMPANY = "current_company"  # work_history[0].company — no new data, derived from the bank
     YEARS_EXPERIENCE = "years_experience"  # computed from work_history start dates
 
 
+# Owner-approved defaults (Round 2, 2026-06-24) the resolver applies when the bank field is blank,
+# so these common screeners FILL instead of bailing. An explicit onboarding value always wins (it's
+# read first, the default only fires when it's empty). NATIONALITY has NO safe default → still bails.
+_DEFAULT_LANGUAGES = ["English"]
+_DEFAULT_AVAILABILITY = "2 weeks"
+_DEFAULT_NOTICE_PERIOD = "2 weeks"
+
 # Optional onboarding extras: when the fact bank can't answer them the resolver falls through to
 # the bank/LLM tiers rather than bailing (unlike core contact fields, which must never be guessed).
+# NOTICE_PERIOD/AVAILABILITY/LANGUAGES are NOT here — they always resolve (to the owner default when
+# blank), so they never fall through. CURRENT_COMPANY bails to assisted with no work history (never
+# guessed via the LLM), so it's not optional either.
 _OPTIONAL_PROFILE_EXTRAS = frozenset(
-    {ProfileField.NATIONALITY, ProfileField.NOTICE_PERIOD, ProfileField.YEARS_EXPERIENCE}
+    {ProfileField.NATIONALITY, ProfileField.YEARS_EXPERIENCE}
+)
+
+# "Languages" means SPOKEN languages on an application form. A *programming*/markup/query
+# "language(s)" question is a skills field, not a contact fact — guard against answering it with
+# the user's spoken languages (live forms ask "Which programming languages are you fluent in?").
+_PROGRAMMING_LANG_GUARD = re.compile(
+    r"\b(programming|coding|code|markup|scripting|query|software|tech(nical)?|"
+    r"computer|spoken or programming)\b", re.IGNORECASE
 )
 
 
@@ -330,6 +351,30 @@ _PROFILE_PATTERNS: list[tuple[ProfileField, list[str]]] = [
     (ProfileField.NOTICE_PERIOD,
      [r"\bnotice period\b", r"\bperiod of notice\b", r"\bhow much notice\b",
       r"\bnotice (required|needed)\b"]),
+    # AVAILABILITY — "When can you start a new role?" / earliest start date. Distinct from
+    # NOTICE_PERIOD (above) so a form that asks BOTH fills each from its own field. Kept BEFORE
+    # the broad start-date phrasings can't collide with notice ("notice period" has no "start").
+    (ProfileField.AVAILABILITY,
+     [r"\bwhen can you start\b", r"\bhow soon can you (start|begin|join)\b",
+      r"\b(earliest|available|desired|preferred|expected|anticipated) start date\b",
+      r"\bstart date\b", r"\bavailab\w*\b.{0,20}\b(start|begin|date)\b",
+      r"\bwhen (are|would) you (be )?available\b",
+      r"\bstart a new (role|job|position)\b", r"\bnotice to start\b"]),
+    # LANGUAGES — spoken languages ("What languages are you fluent in?"). Runs here in the
+    # profile classifier (BEFORE is_open_ended), so a textarea phrasing fills from the bank
+    # instead of bailing as an essay. The programming-language guard in classify_profile_field
+    # keeps "which programming languages…" out (that's a skills question).
+    (ProfileField.LANGUAGES,
+     [r"\bfluent in\b", r"\bwhat languages?\b", r"\bwhich languages?\b",
+      r"\bspoken languages?\b", r"\blanguages? spoken\b",
+      r"\blanguages? (you |do you )?(speak|spoken|are fluent)\b",
+      r"\blanguage proficienc"]),
+    # CURRENT_COMPANY — "Current company" / "Current/Last Company" / "where do you work now".
+    # Derived from work_history[0] (most-recent role); no new data. Bails with no work history.
+    (ProfileField.CURRENT_COMPANY,
+     [r"\bcurrent(/last)?\s+(company|employer)\b", r"\bcurrent\s+or\s+last\s+(company|employer)\b",
+      r"\b(present|most recent)\s+(company|employer)\b",
+      r"\bwhere do you (currently )?work\b", r"\bwho do you (currently )?work for\b"]),
     (ProfileField.YEARS_EXPERIENCE,
      [r"\b(years|yrs)\b.{0,24}\bexperience\b", r"\bexperience\b.{0,16}\b(years|yrs)\b",
       r"\bnumber of (relevant )?(years|work)\b", r"\bhow many years\b"]),
@@ -341,6 +386,10 @@ def classify_profile_field(label: str) -> ProfileField:
     s = label or ""
     for field_kind, patterns in _PROFILE_PATTERNS:
         if _matches_any(s, patterns):
+            # A programming/markup "language(s)" question is a skills field, not the user's
+            # spoken languages — defer it (→ skills/LLM/bail) rather than answer "English".
+            if field_kind is ProfileField.LANGUAGES and _PROGRAMMING_LANG_GUARD.search(s):
+                continue
             return field_kind
     return ProfileField.NONE
 
@@ -893,7 +942,19 @@ class AnswerResolver:
         if field is ProfileField.NATIONALITY:
             value = (self.fact_bank.primary_nationality or "").strip()
         elif field is ProfileField.NOTICE_PERIOD:
-            value = (self.fact_bank.notice_period or "").strip()
+            # Owner default "2 weeks" when blank (Round 2); an explicit onboarding value wins.
+            value = (self.fact_bank.notice_period or "").strip() or _DEFAULT_NOTICE_PERIOD
+        elif field is ProfileField.AVAILABILITY:
+            value = (getattr(self.fact_bank, "availability", "") or "").strip() or _DEFAULT_AVAILABILITY
+        elif field is ProfileField.LANGUAGES:
+            langs = [str(x).strip() for x in (getattr(self.fact_bank, "languages", None) or [])
+                     if str(x).strip()]
+            value = ", ".join(langs or _DEFAULT_LANGUAGES)
+        elif field is ProfileField.CURRENT_COMPANY:
+            # Most-recent role's company — derived from the bank, no new data. Bails (no value)
+            # when there's no work history, so the LLM never invents an employer.
+            wh = getattr(self.fact_bank, "work_history", None) or []
+            value = (wh[0].company or "").strip() if wh else ""
         elif field is ProfileField.YEARS_EXPERIENCE:
             value = _compute_years_experience(self.fact_bank.work_history)
         else:

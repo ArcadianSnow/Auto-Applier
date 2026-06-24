@@ -349,3 +349,146 @@ def test_discover_excludes_system_fields_and_captcha_carriers():
     # All three IDs make it through Python dedup; the actual exclusion happens in the
     # browser-side JS (`startsWith('_systemfield_')` / `endsWith('-response')`).
     assert len(out) == 3
+
+
+# ----------------------------------------------------- Ashby id-less combobox FILL (Round 2)
+#
+# Ashby's location/geocoder combobox renders an <input role=combobox> with NO id/name, so
+# discovery gives it a synthetic ``ashby_q<n>`` id keyed to the field-entry position. The fill
+# must re-derive the entry by that index, type a query, and click the matching ``[role=option]``
+# suggestion. These fakes mirror the live DOM contract probed on a Ramp form (2026-06-24):
+# the menu is empty until typing, options carry the full place text, the matcher requires the
+# leading (city) token before it clicks.
+
+class _FakeCombo:
+    def __init__(self, page, opts):
+        self._page = page
+        self._opts = opts
+        self.typed = ""
+        self.clicked = False
+
+    async def scroll_into_view_if_needed(self, **kw):
+        pass
+
+    async def click(self, **kw):
+        self.clicked = True
+        self._page._active = self          # this combobox is now the open one
+
+    async def fill(self, v):
+        self.typed = v
+
+    async def type(self, ch):
+        self.typed += ch
+
+
+class _FakeEntry:
+    def __init__(self, combo):
+        self._combo = combo
+
+    async def query_selector(self, selector):
+        return self._combo if "combobox" in selector else None
+
+
+class _AshbyComboPage:
+    """Mirrors ``_ASHBY_COMBO_PICK_JS``: clicks the option whose text best overlaps ``want`` but
+    only when the leading (city) token is present; otherwise returns False (caller Escapes)."""
+
+    def __init__(self, entries_opts, *, options_present=True):
+        self._combos = [_FakeCombo(self, o) for o in entries_opts]
+        self._options_present = options_present
+        self._active = None
+        self.clicked = None
+        self.escaped = False
+        self.keyboard = self
+
+    async def query_selector_all(self, selector):
+        if "ashby-application-form-field-entry" in selector:
+            return [_FakeEntry(c) for c in self._combos]
+        return []
+
+    async def query_selector(self, selector):
+        if selector == "[role=option]":
+            return object() if self._options_present else None
+        return None
+
+    async def evaluate(self, js, arg=None):
+        import re as _re
+        want = arg
+        norm = lambda s: _re.sub(r"\s+", " ", (s or "")).strip().lower()
+        w = norm(want)
+        if not w:
+            return False
+        opts = self._active._opts if self._active else []
+        nopts = [(o, norm(o)) for o in opts]
+        for o, t in nopts:
+            if t == w:
+                self.clicked = o
+                return True
+        tokens = [t.strip() for t in _re.split(r"[,/]+", w) if t.strip()]
+        city = tokens[0] if tokens else w
+        best, best_score = None, 0
+        for o, t in nopts:
+            if city not in t:
+                continue
+            score = sum(1 for tk in tokens if tk and tk in t)
+            if score > best_score:
+                best_score, best = score, o
+        if best is not None:
+            self.clicked = best
+            return True
+        return False
+
+    async def press(self, key):       # keyboard.press("Escape")
+        self.escaped = True
+
+
+def _combo_q(field_id="ashby_q1"):
+    return CustomQuestion(field_id, "Where are you currently located?", True, "combobox")
+
+
+def test_locate_ashby_combobox_uses_synthetic_index():
+    from auto_applier.sources.browser.ashby_apply import _locate_ashby_combobox
+    page = _AshbyComboPage([["A opt"], ["B opt"], ["C opt"]])
+    # ashby_q2 → the 2nd field-entry (1-based) → that combo's options.
+    el = asyncio.run(_locate_ashby_combobox(page, _combo_q("ashby_q2"), "#ashby_q2"))
+    assert el is not None and el._opts == ["B opt"]
+
+
+def test_locate_ashby_combobox_out_of_range_none():
+    from auto_applier.sources.browser.ashby_apply import _locate_ashby_combobox
+    page = _AshbyComboPage([["only one"]])
+    assert asyncio.run(_locate_ashby_combobox(page, _combo_q("ashby_q5"), "#ashby_q5")) is None
+
+
+def test_fill_ashby_combobox_clicks_matching_location():
+    from auto_applier.sources.browser.ashby_apply import fill_ashby_combobox
+    opts = ["Dallas, Texas, United States", "Dallas, Oregon, United States",
+            "Dallasburg, Ohio, United States"]
+    page = _AshbyComboPage([opts])
+    ok = asyncio.run(fill_ashby_combobox(
+        page, _combo_q("ashby_q1"), "#ashby_q1", "Dallas, Texas, United States"))
+    assert ok is True
+    assert page.clicked == "Dallas, Texas, United States"   # most token-overlap, city present
+    assert page._combos[0].typed == "Dallas"                # typed the leading token as the query
+
+
+def test_fill_ashby_combobox_no_city_match_bails_and_escapes():
+    from auto_applier.sources.browser.ashby_apply import fill_ashby_combobox
+    page = _AshbyComboPage([["Austin, Texas, United States"]])
+    ok = asyncio.run(fill_ashby_combobox(
+        page, _combo_q("ashby_q1"), "#ashby_q1", "Remote"))
+    assert ok is False
+    assert page.clicked is None
+    assert page.escaped is True            # menu dismissed so it can't block later fields
+
+
+def test_fill_ashby_combobox_empty_value_false():
+    from auto_applier.sources.browser.ashby_apply import fill_ashby_combobox
+    page = _AshbyComboPage([["X"]])
+    assert asyncio.run(fill_ashby_combobox(page, _combo_q(), "#ashby_q1", "")) is False
+
+
+def test_fill_ashby_combobox_missing_entry_false():
+    from auto_applier.sources.browser.ashby_apply import fill_ashby_combobox
+    page = _AshbyComboPage([])             # no field-entries at all
+    assert asyncio.run(fill_ashby_combobox(page, _combo_q(), "#ashby_q1", "Dallas")) is False

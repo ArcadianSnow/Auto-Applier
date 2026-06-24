@@ -402,13 +402,23 @@
         </label>
         <label>Notice period
           <select x-model="extras.notice_period">
-            <option value="">&mdash; skip &mdash;</option>
+            <option value="">&mdash; default: 2 weeks &mdash;</option>
             <option value="Immediate">Immediate</option>
             <option value="One week">One week</option>
             <option value="Two weeks">Two weeks</option>
             <option value="One month">One month</option>
             <option value="Two months">Two months</option>
           </select>
+        </label>
+        <label>Earliest start / availability
+          <input type="text" x-model="extras.availability" placeholder="2 weeks">
+        </label>
+        <label>Languages you speak
+          <input type="text" x-model="extras.languages" placeholder="English">
+          <span class="muted small">Comma-separated. Blank defaults to English.</span>
+        </label>
+        <label>Salary expectation (yearly, your floor)
+          <input type="number" x-model.number="extras.salary_floor" placeholder="90000" min="0" step="1000">
         </label>
         <label>Gender (optional self-ID)
           <select x-model="extras.gender">
