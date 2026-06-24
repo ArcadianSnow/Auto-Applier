@@ -4,9 +4,10 @@
 via Playwright). Built from a friction discussion with the owner; the four shaping forks below were all
 decided up front. Supersedes the single-job direction in `e2-on-demand-fill-design.md` (that doc's per-job
 "prepare" became one primitive — `build_proposed_application` / `prepare`-time persistence — inside this
-batched flow). See the "Phase N — SHIPPED" sections below. Remaining (non-blocking) follow-ups: durable/DB
-batch state (barrier is in-memory), retention for `artifacts/proposed/*.json`, and `needs-work` re-prepare
-(today it's a side-lane).
+batched flow). See the "Phase N — SHIPPED" sections below. **Two follow-ups SHIPPED 2026-06-24** (see the
+"Follow-up — …" sections at the bottom): proposed-artifact retention + durable batch state (JSON sidecar).
+Remaining (non-blocking) follow-ups: `needs-work` re-prepare (today it's a side-lane), per-gap draft
+parallelization, Lever/Ashby live smoke.
 
 ## The friction this fixes
 
@@ -294,9 +295,8 @@ Plus the live Playwright pass. 1483 green.
 REVIEW (visible in the normal review queue) for the owner to revisit. Re-prepare-on-needs-work is a future
 enhancement (would tie into the E2 on-demand `prepare_single`).
 
-**Remaining (non-blocking) follow-ups:** durable/DB batch state (in-memory today — a restart starts the
-barrier empty; prepared jobs sit in REVIEW, no loss); parallelizing per-gap drafting if latency bites;
-Lever/Ashby live smoke.
+**Remaining (non-blocking) follow-ups:** parallelizing per-gap drafting if latency bites; Lever/Ashby live
+smoke; `needs-work` re-prepare (ties into the E2 on-demand `prepare_single`).
 
 ## Follow-up — proposed-artifact retention SHIPPED (2026-06-24, 1490 green)
 
@@ -318,3 +318,31 @@ right after `prune_ephemeral` so orphans created by that prune are swept the sam
 prune`** (new `pruned proposed-artifacts=N` output line). Tests: `test_retention.py` (+6: orphan, old-terminal,
 recent-terminal-kept, in-flight-review-kept, no-dir no-op, event) + `test_cli_retention.py` (+1 orphan via CLI,
 + empty-db line assert). 1490 green.
+
+## Follow-up — durable batch state SHIPPED (2026-06-24, 1497 green)
+
+The `ReviewBatch` barrier was pure in-memory: a mid-batch restart started it empty (no data loss — prepared
+jobs sit in REVIEW with their proposed JSON — but the *grouping* + dispositions were lost, so the In-Progress
+page reformed from scratch). Made it **optionally durable via a JSON sidecar** (consistent with the
+proposed-artifact file convention, not a DB table — the batch is runtime control state, not a system-of-record
+record):
+
+- `ReviewBatch(size=, path=)` — when `path` is given, persists `{batch_id, members}` (atomic temp-then-replace)
+  after every mutation (`add`/`dispose`/`release`) and restores it on construction. No `path` ⇒ pure in-memory
+  (prior behavior, every existing test unchanged).
+- **`size` is NOT restored** — it always comes from current config, so changing `batch_review_size` takes
+  effect on restart while the in-flight grouping is preserved (a shrunk size just makes the restored batch
+  "full" sooner).
+- **Best-effort:** a missing/corrupt/wrong-shaped file → fresh empty batch (never raises); a write error is
+  swallowed (the running process's in-memory barrier is still correct — durability is a bonus, never
+  load-bearing). An unknown disposition string in a hand-edited file is coerced to `pending`.
+- `Settings.review_batch_path` → `data_dir/review_batch.json` (local-only, never mirrored). `cli serve` passes
+  it when `batched_review` is on.
+- **Ghost-member caveat:** a restored member whose job row has since vanished doesn't render (the feed skips
+  missing jobs) but still counts toward the hold; the always-present "Release batch" button clears such a
+  batch. Not worth DB reconciliation for a single-user local tool.
+
+Tests: `test_review_batch.py` (+7: no-path-writes-nothing, persist+restore members/dispositions/id,
+release-persists-empty, size-from-config-not-file, corrupt→empty, unknown-disposition-coerced,
+best-effort-on-io-error) + an end-to-end restart smoke (fill→dispose→restart-restores→advance→release).
+1497 green.

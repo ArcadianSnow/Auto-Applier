@@ -444,6 +444,13 @@ class Settings(BaseModel):
         return self.data_dir / "research"
 
     @property
+    def review_batch_path(self) -> Path:
+        """Durable sidecar for the batched assisted-review barrier (``ReviewBatch``): the current
+        batch's id + per-job dispositions, so a mid-batch restart resumes the grouping instead of
+        starting empty. Local-only control state; never mirrored to telemetry."""
+        return self.data_dir / "review_batch.json"
+
+    @property
     def browser_profile_dir(self) -> Path:
         """One persistent shared Chrome profile across all sites (spec §8c)."""
         return self.data_dir / "browser_profile"

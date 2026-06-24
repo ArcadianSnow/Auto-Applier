@@ -25,15 +25,24 @@ components touch it from different threads:
 
 So a plain :class:`threading.Lock` guards every access.
 
-Scope: the batch is IN MEMORY — a runtime barrier, not durable state. The per-job proposed SET
-already survives a refresh as a file (Phase 1). On a process restart the barrier starts empty; jobs
-already prepared sit in REVIEW for the owner (visible in the review queue), and the next batch fills
-from whatever remains in QUEUED_APPLY. Durable/DB batch grouping is a future enhancement.
+Durability (optional): pass ``path=`` and the batch persists ``{batch_id, members}`` to a JSON
+sidecar after every mutation, and restores it on construction — so a mid-batch restart resumes the
+grouping (the open tabs + per-job dispositions) instead of starting empty. ``size`` is intentionally
+NOT restored (it always comes from current config, so changing ``batch_review_size`` takes effect on
+restart while the in-flight grouping is preserved). Persistence is **best-effort**: a write failure
+is swallowed (the in-memory barrier is still correct for the running process; durability is only a
+restart-resilience bonus) and a missing / corrupt file just yields a fresh empty batch. Without a
+``path`` the batch is pure in-memory (the prior behavior). The per-job proposed SET already survives
+as its own file (Phase 1); a restored member whose job row has since vanished simply doesn't render
+on the page (the feed skips missing jobs) — the owner's "Release batch" button always clears such a
+batch. Local-only control state; never mirrored to telemetry.
 """
 
 from __future__ import annotations
 
+import json
 import threading
+from pathlib import Path
 
 from auto_applier.domain.models import new_id
 
@@ -55,12 +64,16 @@ class ReviewBatch:
     the apply worker releases the batch (:meth:`release`) and prepares the next N.
     """
 
-    def __init__(self, *, size: int = 5) -> None:
+    def __init__(self, *, size: int = 5, path: Path | str | None = None) -> None:
         # A batch of < 1 is meaningless (apply could never run); clamp so a bad config can't wedge.
         self._size = max(1, int(size))
         self._lock = threading.Lock()
         self._members: dict[str, str] = {}   # job_id -> disposition (PENDING by default)
         self._batch_id = new_id()
+        # Optional durable sidecar. None ⇒ pure in-memory (prior behavior).
+        self._path = Path(path) if path is not None else None
+        if self._path is not None:
+            self._load()
 
     # ---- mutate ----------------------------------------------------------
 
@@ -71,6 +84,7 @@ class ReviewBatch:
         with self._lock:
             if job_id and job_id not in self._members:
                 self._members[job_id] = PENDING
+                self._persist_locked()
             return len(self._members) >= self._size
 
     def dispose(self, job_id: str, disposition: str) -> bool:
@@ -87,6 +101,7 @@ class ReviewBatch:
         with self._lock:
             if job_id in self._members:
                 self._members[job_id] = disposition
+                self._persist_locked()
             return bool(self._members) and all(
                 d != PENDING for d in self._members.values()
             )
@@ -98,7 +113,56 @@ class ReviewBatch:
         with self._lock:
             self._members.clear()
             self._batch_id = new_id()
+            self._persist_locked()
             return self._batch_id
+
+    # ---- durability ------------------------------------------------------
+
+    def _load(self) -> None:
+        """Best-effort restore of ``{batch_id, members}`` from the durable sidecar. A missing /
+        corrupt / partial / wrong-shaped file leaves the fresh empty batch (same as no persistence),
+        never raising. Unknown disposition strings are coerced to ``PENDING`` so a hand-edited file
+        can't smuggle an out-of-vocabulary value into the barrier. ``size`` is NOT restored — it
+        always comes from current config."""
+        assert self._path is not None
+        try:
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(data, dict):
+            return
+        members = data.get("members")
+        if isinstance(members, dict):
+            valid = DISPOSITIONS | {PENDING}
+            self._members = {
+                str(k): (str(v) if v in valid else PENDING)
+                for k, v in members.items()
+                if k
+            }
+        batch_id = data.get("batch_id")
+        if isinstance(batch_id, str) and batch_id:
+            self._batch_id = batch_id
+
+    def _persist_locked(self) -> None:
+        """Atomically write ``{batch_id, members}`` to the sidecar. Caller MUST hold ``self._lock``
+        (every mutation does). No-op when persistence is off. Best-effort: a write error is swallowed
+        — the running process's barrier is already correct in memory; only restart-resilience is lost.
+        Atomic temp-then-replace, so a crash mid-write never leaves a half-file the next start parses."""
+        if self._path is None:
+            return
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._path.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps(
+                    {"batch_id": self._batch_id, "members": dict(self._members)},
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            tmp.replace(self._path)
+        except OSError:
+            pass
 
     # ---- read ------------------------------------------------------------
 

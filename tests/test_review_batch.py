@@ -129,3 +129,91 @@ def test_partial_batch_advances_when_all_dispositioned():
     assert b.is_full() is False
     assert b.all_dispositioned() is True
     assert b.is_holding() is False
+
+
+# ---- durability (follow-up: durable batch state) ----------------------------
+
+def test_no_path_writes_nothing(tmp_path):
+    """Without a ``path`` the batch is pure in-memory — no sidecar appears."""
+    b = ReviewBatch(size=2, path=None)
+    b.add("j1")
+    assert list(tmp_path.iterdir()) == []   # nothing written anywhere we control
+
+
+def test_persists_and_restores_members_and_dispositions(tmp_path):
+    """A new ReviewBatch over the same sidecar resumes the grouping: members, their
+    dispositions, and the batch id all survive a (simulated) restart."""
+    path = tmp_path / "review_batch.json"
+    b = ReviewBatch(size=2, path=path)
+    b.add("j1")
+    b.add("j2")
+    b.dispose("j1", "applied")
+    saved_id = b.batch_id
+    assert path.exists()
+
+    restored = ReviewBatch(size=2, path=path)   # "restart"
+    snap = restored.snapshot()
+    assert snap["batch_id"] == saved_id
+    assert snap["members"] == ["j1", "j2"]
+    assert snap["dispositions"] == {"j1": "applied", "j2": "pending"}
+    assert restored.is_holding() is True        # full, one still pending — hold resumes
+    assert restored.pending == 1
+
+
+def test_release_persists_empty_batch(tmp_path):
+    """A released batch persists as empty with the fresh id, so a restart starts clean."""
+    path = tmp_path / "review_batch.json"
+    b = ReviewBatch(size=2, path=path)
+    b.add("j1")
+    b.add("j2")
+    new_id = b.release()
+
+    restored = ReviewBatch(size=2, path=path)
+    assert restored.count == 0
+    assert restored.batch_id == new_id
+    assert restored.is_holding() is False
+
+
+def test_size_comes_from_config_not_file(tmp_path):
+    """``size`` is never restored from the sidecar — changing batch_review_size takes effect on
+    restart while the in-flight grouping is preserved."""
+    path = tmp_path / "review_batch.json"
+    b = ReviewBatch(size=2, path=path)
+    b.add("j1")
+    b.add("j2")
+    assert b.is_full() is True              # 2/2 under the old size
+
+    restored = ReviewBatch(size=5, path=path)   # config bumped to 5
+    assert restored.size == 5
+    assert restored.count == 2                  # members preserved
+    assert restored.is_full() is False          # 2 < 5 → room for more
+
+
+def test_corrupt_sidecar_yields_empty_batch(tmp_path):
+    """A corrupt / non-JSON sidecar must never raise — it just starts empty."""
+    path = tmp_path / "review_batch.json"
+    path.write_text("{not json", encoding="utf-8")
+    b = ReviewBatch(size=2, path=path)
+    assert b.count == 0
+
+
+def test_load_coerces_unknown_disposition_to_pending(tmp_path):
+    """A hand-edited file can't smuggle an out-of-vocabulary disposition into the barrier."""
+    import json
+    path = tmp_path / "review_batch.json"
+    path.write_text(
+        json.dumps({"batch_id": "b1", "members": {"j1": "bogus", "j2": "applied"}}),
+        encoding="utf-8",
+    )
+    b = ReviewBatch(size=2, path=path)
+    assert b.snapshot()["dispositions"] == {"j1": "pending", "j2": "applied"}
+
+
+def test_persistence_is_best_effort_on_io_error(tmp_path):
+    """A read/write failure on the sidecar is swallowed; the in-memory barrier stays correct."""
+    bad = tmp_path / "review_batch.json"
+    bad.mkdir()                              # a directory where a file is expected
+    b = ReviewBatch(size=1, path=bad)        # _load swallows the read error
+    assert b.count == 0
+    assert b.add("j1") is True               # _persist_locked swallows the write error
+    assert b.count == 1

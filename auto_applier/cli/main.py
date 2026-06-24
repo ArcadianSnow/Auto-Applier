@@ -2505,7 +2505,12 @@ def serve_cmd(host: str | None, port: int | None, no_scheduler: bool,
     _review_batch = None
     if settings.scheduler.batched_review:
         from auto_applier.pipeline.review_batch import ReviewBatch
-        _review_batch = ReviewBatch(size=settings.scheduler.batch_review_size)
+        # Durable sidecar: a mid-batch restart resumes the grouping (open tabs + dispositions)
+        # instead of starting empty. Best-effort — a missing/corrupt file just starts fresh.
+        _review_batch = ReviewBatch(
+            size=settings.scheduler.batch_review_size,
+            path=settings.review_batch_path,
+        )
 
     web_state = WebState(
         settings=settings,
