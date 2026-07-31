@@ -1132,3 +1132,45 @@ class TestOnboardingExtras:
         res = asyncio.run(AnswerResolver(_bank(work_history=[]), answer_repo).resolve(
             _q("Current Job Title")))
         assert res.needs_review is True
+
+
+# ---- cover letter as a TEXT field (Ashby's shape; live Linear form 2026-07-31) ------------
+
+class TestCoverLetterField:
+    """Ashby renders the cover letter as a REQUIRED textarea, not an upload.
+
+    Before this, the label hit ``is_open_ended`` and bailed — so every such job went to
+    assisted even though the optimize stage had already generated a fabrication-guard-vetted
+    letter for that exact job and written it as plain ``.txt`` *specifically* so a driver
+    could paste it. Greenhouse uploads that same artifact as a file; this fills the textarea
+    shape with it.
+    """
+
+    def test_fills_a_cover_letter_textarea_with_the_generated_letter(self):
+        resolver = AnswerResolver(_bank(), answer_repo=_make_empty_repo())
+        resolver.cover_letter_text = "Dear Linear team,\n\nI build data platforms..."
+        res = asyncio.run(resolver.resolve(_q("Cover letter", kind="textarea")))
+        assert res.value.startswith("Dear Linear team,")
+        assert res.source is ResolutionSource.ARTIFACT
+        assert res.needs_review is False
+
+    def test_is_not_a_draft_so_it_does_not_force_assisted(self):
+        """The upload path doesn't force assisted, so neither should the textarea path — it's
+        the same vetted artifact, not the LLM free-writing at fill time."""
+        resolver = AnswerResolver(_bank(), answer_repo=_make_empty_repo())
+        resolver.cover_letter_text = "Dear team,"
+        res = asyncio.run(resolver.resolve(_q("Cover letter", kind="textarea")))
+        assert getattr(res, "draft", False) is False
+
+    def test_falls_through_to_the_normal_bail_when_no_letter_was_generated(self):
+        """No artifact → behave exactly as before (open-ended bail), never a blank fill."""
+        resolver = AnswerResolver(_bank(), answer_repo=_make_empty_repo())
+        res = asyncio.run(resolver.resolve(_q("Cover letter", kind="textarea")))
+        assert res.needs_review is True
+
+    def test_does_not_hijack_a_question_that_merely_mentions_a_cover_letter(self):
+        """"Did you attach a cover letter?" is a yes/no question, not a request for the body."""
+        resolver = AnswerResolver(_bank(), answer_repo=_make_empty_repo())
+        resolver.cover_letter_text = "Dear team,"
+        res = asyncio.run(resolver.resolve(_q("Did you attach a cover letter?")))
+        assert res.source is not ResolutionSource.ARTIFACT

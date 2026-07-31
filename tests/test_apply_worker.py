@@ -1686,3 +1686,32 @@ def test_prepare_single_is_single_flight(settings, conn):
     # The rejected second job was never touched — still REVIEW, no attempt row.
     assert JobRepo(conn).get(job2.id).state is JobState.REVIEW
     assert ApplicationRepo(conn).list_by_job(job2.id) == []
+
+
+# ---- cover-letter TEXT handoff (Ashby renders it as a textarea, often required) -----------
+
+def test_read_cover_letter_text_reads_the_generated_txt(tmp_path):
+    from auto_applier.pipeline.apply_worker import _read_cover_letter_text
+
+    p = tmp_path / "Pat Doe Cover Letter.txt"
+    p.write_text("Dear team,\n\nI build data platforms.\n", encoding="utf-8")
+    assert _read_cover_letter_text(str(p)).startswith("Dear team,")
+
+
+def test_read_cover_letter_text_refuses_binary_artifacts(tmp_path):
+    """A .docx/.pdf is an UPLOAD artifact — pasting its raw bytes into a form would be worse
+    than leaving the field to the human. Only the plain .txt the optimize stage writes for
+    exactly this purpose is readable."""
+    from auto_applier.pipeline.apply_worker import _read_cover_letter_text
+
+    for ext in (".docx", ".pdf", ".rtf"):
+        p = tmp_path / f"letter{ext}"
+        p.write_bytes(b"PK\x03\x04binary")
+        assert _read_cover_letter_text(str(p)) == ""
+
+
+def test_read_cover_letter_text_is_empty_when_absent(tmp_path):
+    from auto_applier.pipeline.apply_worker import _read_cover_letter_text
+
+    assert _read_cover_letter_text("") == ""
+    assert _read_cover_letter_text(str(tmp_path / "missing.txt")) == ""

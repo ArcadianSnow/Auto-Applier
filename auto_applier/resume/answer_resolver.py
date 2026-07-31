@@ -75,6 +75,7 @@ class ResolutionSource(str, Enum):
     USER_CONFIG = "user_config"  # e.g. salary expectation from user_config.json
     PROFILE = "profile"         # contact/profile field (LinkedIn, city, name) from the bank
     DISCOVERY = "discovery"     # "how did you hear?" derived from how the bot found the job
+    ARTIFACT = "artifact"       # the optimize stage's own generated, guard-vetted artifact
     REVIEW = "review"           # bailed; human must answer
 
 
@@ -473,6 +474,41 @@ def _is_authorized(bank) -> bool:
 # first: because the bot discovers every job by automated search, there is no authentic answer
 # here — it bails to the human by default and only uses a value the user EXPLICITLY banked for
 # this question (owner directive 2026-06-21; a blank how-heard is by design, not a config gap).
+# "Cover letter" as a TEXT field (live: Ashby/Linear 2026-07-31 — a REQUIRED textarea with a
+# description "Tell us why you want to join our team!"). Greenhouse renders the cover letter as a
+# file upload the driver already attaches; Ashby commonly renders it as a textarea instead, and
+# Lever often has no cover-letter field at all.
+#
+# Without a dedicated route this label hits `is_open_ended` and bails — so a REQUIRED cover-letter
+# textarea sent every such job to assisted, even though the optimize stage had already generated a
+# fabrication-guard-vetted letter for that exact job and written it as plain `.txt` **specifically
+# so drivers could paste it** (see resume/generate.py: "drivers paste it into a textarea").
+#
+# This is NOT the LLM free-writing at fill time: it's the same vetted artifact Greenhouse uploads,
+# so filling it here is exactly as safe as the upload path — and it is deliberately not marked as a
+# DRAFT, because a draft forces the job to assisted and the upload path doesn't.
+_COVER_LETTER_PATTERNS = [
+    r"^\s*cover\s*letter\s*$",
+    r"\bcover\s*letter\b",
+    r"\bcovering\s+letter\b",
+    r"\bletter\s+of\s+(interest|introduction|motivation)\b",
+    r"\bmotivation\s+letter\b",
+]
+
+
+def _is_cover_letter(label: str) -> bool:
+    """True for a field asking for the cover letter itself.
+
+    Deliberately narrow: "cover letter" must be the field's own subject. A question that merely
+    MENTIONS one ("Did you attach a cover letter?", "Do you have a cover letter?") is a different
+    question and must not be answered with the letter's body.
+    """
+    s = (label or "").strip()
+    if re.search(r"\b(did|do|have|would|will|are)\s+you\b", s, re.IGNORECASE):
+        return False
+    return _matches_any(s, _COVER_LETTER_PATTERNS)
+
+
 _HOW_HEARD_PATTERNS = [
     r"\bhear about\b",
     r"\bhow did you (hear|find|learn|come across)\b",
@@ -737,6 +773,11 @@ class AnswerResolver:
         # ``salary_expectation``) so the draft can use the company/JD as context.
         self.draft_freeform = draft_freeform
         self.current_job = None
+        # Per-job, set by the apply worker alongside ``current_job``/``salary_expectation``: the
+        # text of the optimize stage's generated cover letter. Fills a "Cover letter" TEXTAREA
+        # (Ashby's shape) with the same artifact Greenhouse uploads as a file. Empty → the field
+        # falls through to the normal open-ended bail/draft path.
+        self.cover_letter_text = ""
         # Owner opt-in (default OFF): fill the human option on a STATIC "which best describes
         # you? [human/AI]" self-ID FORM FIELD. The applicant is a human, and such a field is
         # not a behavioural/risk-scored anti-bot challenge (those are CAPTCHA/fingerprint,
@@ -764,6 +805,17 @@ class AnswerResolver:
         # "How did you hear about us?" — intercept BEFORE the bank/LLM/essay tiers so none of
         # them can invent a source. It's a human-fill field by design (the bot discovered the
         # job programmatically, so there's no authentic answer; owner directive 2026-06-21).
+        # "Cover letter" as a TEXT field (Ashby renders it as a textarea, often REQUIRED). Must
+        # run BEFORE is_open_ended, which would otherwise bail it and send the job to assisted —
+        # while the optimize stage has already produced a guard-vetted letter for this exact job.
+        if _is_cover_letter(question.label) and self.cover_letter_text:
+            return Resolution(
+                question=question,
+                value=self.cover_letter_text,
+                source=ResolutionSource.ARTIFACT,
+                note="the optimize stage's generated, guard-vetted cover letter for this job "
+                     "(same artifact Greenhouse uploads as a file)",
+            )
         if _is_how_heard(question.label):
             return self._resolve_how_heard(question)
         # "located in / willing to relocate to <country>?" — Yes only for the residence/

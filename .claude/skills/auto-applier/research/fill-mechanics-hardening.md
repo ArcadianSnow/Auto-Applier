@@ -463,3 +463,48 @@ since May it would have failed every run with a collection error, not a drift re
 command is documented (`pwsh scripts/register-smoke-task.ps1`) rather than run.
 
 1593 green (was 1568).
+
+---
+
+## Cover letter as a TEXT field (2026-07-31) — SHIPPED
+
+Carried for a while as "Lever/Ashby cover-letter **upload** not wired". Probing live forms
+showed that framing was wrong, and the real gap was more valuable to close.
+
+### What live forms actually do (read-only probes, 2026-07-31)
+
+| ATS | Cover letter |
+|---|---|
+| Greenhouse | hidden `#cover_letter` **file input** — already wired |
+| **Ashby** (Linear) | a **TEXTAREA**, `required=true`, real UUID id, described "Tell us why you want to join our team!" |
+| **Lever** (Match Group) | **no cover-letter field at all** — one file input (`resume`), zero mentions |
+
+So there was no Lever upload to wire, and the Ashby case wasn't an upload either.
+
+### The bug this exposed
+
+An Ashby "Cover letter" textarea hit `is_open_ended` and **bailed** → a REQUIRED field with no
+answer → `any_required_unresolved` → **every such job went to assisted**. Meanwhile the optimize
+stage had already generated a fabrication-guard-vetted cover letter for that exact job, and
+writes it as plain `.txt` **specifically so a driver can paste it** (`resume/generate.py`:
+*"Plain `.txt` — drivers paste it into a textarea"*). The artifact and the intent both existed;
+only the wiring was missing.
+
+### Fix
+
+* `_is_cover_letter(label)` + a branch in `resolve()` **before `is_open_ended`**, returning the
+  generated letter with a new `ResolutionSource.ARTIFACT`.
+* `AnswerResolver.cover_letter_text`, set per-job by the apply worker (same pattern as
+  `current_job` / `salary_expectation`).
+* `apply_worker._read_cover_letter_text` reads **only `.txt`** — a `.docx`/`.pdf` is an upload
+  artifact, and pasting its raw bytes into a form is worse than leaving the field to the human.
+
+**Deliberately NOT a `draft`.** A draft forces the job to assisted; the Greenhouse *upload* path
+doesn't, and this is the same vetted artifact — so treating the two shapes differently would be
+incoherent. This is not the LLM free-writing at fill time.
+
+**The classifier is narrow on purpose**: a question that merely MENTIONS a cover letter ("Did you
+attach a cover letter?", "Do you have one?") is a different question and must not be answered
+with the letter's body. Covered by tests.
+
+1615 green (was 1608).

@@ -85,6 +85,7 @@ import random
 import sqlite3
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from auto_applier.config.settings import Settings
@@ -167,6 +168,23 @@ class DriverEntry:
 
     listing_from_job: Callable[[Job], Any]
     prepare: Callable[..., Awaitable[ApplyOutcome]]
+
+
+def _read_cover_letter_text(path: str) -> str:
+    """The generated cover letter's TEXT, or ``""``.
+
+    The optimize stage writes it as plain ``.txt`` precisely so a driver can paste it into a
+    textarea (see ``resume/generate.py``). Only ``.txt`` is read: a ``.docx``/``.pdf`` is a
+    binary upload artifact, and pasting its raw bytes into a form would be worse than leaving
+    the field to the human. Any read failure is an empty string — the field then takes the
+    normal open-ended path rather than breaking the apply.
+    """
+    if not path or not str(path).lower().endswith(".txt"):
+        return ""
+    try:
+        return Path(path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def _gh_token_from_url(url: str) -> str:
@@ -705,6 +723,12 @@ class ApplyWorker:
         # them by the same derivation (file existence is the durable contract).
         # The global resume.pdf the worker was built with is only a fallback.
         resume_used, cover_used = self._artifacts_for(job)
+        # Ashby (and some GH configs) render the cover letter as a TEXTAREA, not an upload, and
+        # it is frequently REQUIRED — which used to send every such job to assisted even though
+        # we had just generated a guard-vetted letter for it. Hand the text to the resolver so
+        # the same artifact fills either shape. Best-effort: unreadable → the field falls back
+        # to the normal open-ended bail.
+        self._resolver.cover_letter_text = _read_cover_letter_text(cover_used)
 
         outcome = await driver.prepare(
             page,
