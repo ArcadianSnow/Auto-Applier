@@ -287,6 +287,7 @@ class ProfileField(str, Enum):
     #: an employed candidate, so Round 2 routes both phrasings to this one field (no separate field).
     LANGUAGES = "languages"              # bank.languages (spoken); default ["English"] (Round 2)
     CURRENT_COMPANY = "current_company"  # work_history[0].company — no new data, derived from the bank
+    CURRENT_TITLE = "current_title"      # work_history[0].title — the sibling of CURRENT_COMPANY
     YEARS_EXPERIENCE = "years_experience"  # computed from work_history start dates
 
 
@@ -376,6 +377,16 @@ _PROFILE_PATTERNS: list[tuple[ProfileField, list[str]]] = [
      [r"\bcurrent(/last)?\s+(company|employer)\b", r"\bcurrent\s+or\s+last\s+(company|employer)\b",
       r"\b(present|most recent)\s+(company|employer)\b",
       r"\bwhere do you (currently )?work\b", r"\bwho do you (currently )?work for\b"]),
+    # CURRENT_TITLE — the sibling of CURRENT_COMPANY, found unclassified on a live Ashby form
+    # ("Current/Most Recent Job Title", Vanta 2026-07-31) where the company variant already filled.
+    # Derived from work_history[0]; bails with no work history so a title is never invented.
+    # Must NOT swallow "desired/preferred job title" (a targeting preference, not a bank fact).
+    (ProfileField.CURRENT_TITLE,
+     [r"\bcurrent(/(last|most recent))?\s+(job\s+)?title\b",
+      r"\bcurrent\s+or\s+(last|most recent)\s+(job\s+)?title\b",
+      r"\b(present|most recent)\s+(job\s+)?title\b",
+      r"\bcurrent\s+(job\s+)?(role|position)\b",
+      r"\byour current title\b", r"\bwhat is your (current )?job title\b"]),
     (ProfileField.YEARS_EXPERIENCE,
      [r"\b(years|yrs)\b.{0,24}\bexperience\b", r"\bexperience\b.{0,16}\b(years|yrs)\b",
       r"\bnumber of (relevant )?(years|work)\b", r"\bhow many years\b"]),
@@ -955,6 +966,11 @@ class AnswerResolver:
             # when there's no work history, so the LLM never invents an employer.
             wh = getattr(self.fact_bank, "work_history", None) or []
             value = (wh[0].company or "").strip() if wh else ""
+        elif field is ProfileField.CURRENT_TITLE:
+            # Most-recent role's title — same contract as CURRENT_COMPANY: derived from the
+            # bank, bails (no value) with no work history so the LLM never invents a title.
+            wh = getattr(self.fact_bank, "work_history", None) or []
+            value = (getattr(wh[0], "title", "") or "").strip() if wh else ""
         elif field is ProfileField.YEARS_EXPERIENCE:
             value = _compute_years_experience(self.fact_bank.work_history)
         else:

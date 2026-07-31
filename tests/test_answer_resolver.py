@@ -284,6 +284,13 @@ def _contact_bank():
     ("Current company", ProfileField.CURRENT_COMPANY),
     ("Current/Last Company", ProfileField.CURRENT_COMPANY),
     ("Who do you currently work for?", ProfileField.CURRENT_COMPANY),
+    ("Current/Most Recent Job Title", ProfileField.CURRENT_TITLE),
+    ("Current Job Title", ProfileField.CURRENT_TITLE),
+    ("What is your current title?", ProfileField.CURRENT_TITLE),
+    ("Current Role", ProfileField.CURRENT_TITLE),
+    # A DESIRED title is a targeting preference, not a bank fact — must stay unclassified.
+    ("Desired job title", ProfileField.NONE),
+    ("Preferred Job Title", ProfileField.NONE),
     # notice period AND "when can you start / earliest start" fold to ONE field (NOTICE_PERIOD).
     ("What is your notice period?", ProfileField.NOTICE_PERIOD),
     ("When can you start a new role?", ProfileField.NOTICE_PERIOD),
@@ -1106,4 +1113,22 @@ class TestOnboardingExtras:
         # No work history → bail to assisted (the LLM must never invent an employer).
         res = asyncio.run(AnswerResolver(_bank(work_history=[]), answer_repo).resolve(
             _q("Current company")))
+        assert res.needs_review is True
+
+    def test_current_title_from_work_history(self, answer_repo):
+        """Found unclassified on a live Ashby form (Vanta 2026-07-31) alongside the company
+        variant that already filled — same derivation, no new data."""
+        from auto_applier.resume.factbank import WorkEntry
+        bank = _bank(work_history=[
+            WorkEntry(company="Acme Corp", title="Senior DBA", start="2020", end="Present"),
+            WorkEntry(company="Old Co", title="Analyst", start="2017", end="2020"),
+        ])
+        res = asyncio.run(AnswerResolver(bank, answer_repo).resolve(
+            _q("Current/Most Recent Job Title")))
+        assert res.value == "Senior DBA"
+        assert res.needs_review is False
+
+    def test_current_title_no_history_bails(self, answer_repo):
+        res = asyncio.run(AnswerResolver(_bank(work_history=[]), answer_repo).resolve(
+            _q("Current Job Title")))
         assert res.needs_review is True

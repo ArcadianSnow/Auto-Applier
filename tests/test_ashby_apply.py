@@ -381,20 +381,37 @@ class _FakeCombo:
         self.typed += ch
 
 
+class _FakeTitle:
+    def __init__(self, text):
+        self._text = text
+
+    async def inner_text(self):
+        return self._text
+
+
 class _FakeEntry:
-    def __init__(self, combo):
+    """A field-entry. ``title=None`` models a layout whose question title can't be read —
+    the locator then keeps its positional behaviour instead of bailing."""
+
+    def __init__(self, combo, title=None):
         self._combo = combo
+        self._title = title
 
     async def query_selector(self, selector):
-        return self._combo if "combobox" in selector else None
+        if "combobox" in selector:
+            return self._combo
+        if "question-title" in selector:
+            return _FakeTitle(self._title) if self._title is not None else None
+        return None
 
 
 class _AshbyComboPage:
     """Mirrors ``_ASHBY_COMBO_PICK_JS``: clicks the option whose text best overlaps ``want`` but
     only when the leading (city) token is present; otherwise returns False (caller Escapes)."""
 
-    def __init__(self, entries_opts, *, options_present=True):
+    def __init__(self, entries_opts, *, options_present=True, titles=None):
         self._combos = [_FakeCombo(self, o) for o in entries_opts]
+        self._titles = titles or [None] * len(self._combos)
         self._options_present = options_present
         self._active = None
         self.clicked = None
@@ -403,7 +420,7 @@ class _AshbyComboPage:
 
     async def query_selector_all(self, selector):
         if "ashby-application-form-field-entry" in selector:
-            return [_FakeEntry(c) for c in self._combos]
+            return [_FakeEntry(c, t) for c, t in zip(self._combos, self._titles)]
         return []
 
     async def query_selector(self, selector):
@@ -452,6 +469,27 @@ def test_locate_ashby_combobox_uses_synthetic_index():
     # ashby_q2 → the 2nd field-entry (1-based) → that combo's options.
     el = asyncio.run(_locate_ashby_combobox(page, _combo_q("ashby_q2"), "#ashby_q2"))
     assert el is not None and el._opts == ["B opt"]
+
+
+def test_locate_ashby_combobox_follows_label_when_entries_shift():
+    """Round 3 F5: answering an Ashby question can reveal a conditional one, shifting every
+    later field-entry index. The locator must follow the question TITLE, not the stale index."""
+    from auto_applier.sources.browser.ashby_apply import _locate_ashby_combobox
+    page = _AshbyComboPage(
+        [["inserted"], ["A opt"], ["B opt"]],
+        titles=["A newly revealed question", "Where are you currently located?", "Other"],
+    )
+    # Discovery captured this combobox as entry #3; a new entry appeared above it.
+    el = asyncio.run(_locate_ashby_combobox(page, _combo_q("ashby_q3"), "#ashby_q3"))
+    assert el is not None and el._opts == ["A opt"]
+
+
+def test_locate_ashby_combobox_bails_when_label_matches_nothing():
+    """No entry carries this question's title -> None (assisted), never a wrong widget."""
+    from auto_applier.sources.browser.ashby_apply import _locate_ashby_combobox
+    page = _AshbyComboPage([["A opt"], ["B opt"]],
+                           titles=["Some other question", "And another"])
+    assert asyncio.run(_locate_ashby_combobox(page, _combo_q("ashby_q1"), "#ashby_q1")) is None
 
 
 def test_locate_ashby_combobox_out_of_range_none():

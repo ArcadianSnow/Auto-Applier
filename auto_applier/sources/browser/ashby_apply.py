@@ -242,13 +242,35 @@ _ASHBY_COMBO_PICK_JS = r"""
 """
 
 
+def _norm_label(text: str) -> str:
+    """Lowercase/collapse a question label and drop trailing required markers ("Location*")."""
+    return re.sub(r"[\s*✱]+$", "", re.sub(r"\s+", " ", text or "").strip().lower())
+
+
+async def _entry_title(entry) -> str:
+    """The visible question title of an Ashby field-entry, normalized for comparison."""
+    try:
+        el = await entry.query_selector(".ashby-application-form-question-title")
+        if el is None:
+            return ""
+        return _norm_label(await el.inner_text())
+    except Exception:  # noqa: BLE001 — a detached/stub element is simply "unknown title"
+        return ""
+
+
 async def _locate_ashby_combobox(page, question, selector: str):
     """Return the ElementHandle for ``question``'s combobox input, or None.
 
     Ashby's React comboboxes render an ``<input>`` with NEITHER id nor name, so discovery gives
     them a synthetic ``ashby_q<n>`` id keyed to the field-entry position. We re-derive the entry by
     that index and read the ``input[role=combobox]`` inside it. A combobox that DID carry a real
-    id/name falls back to the passed selector."""
+    id/name falls back to the passed selector.
+
+    The positional index is CONFIRMED against the question's label before use (Round 3 F5,
+    research/fill-mechanics-hardening.md): answering an Ashby question can reveal a conditional
+    one, which shifts every later entry index and would otherwise type the value into a
+    different question's widget. On a title mismatch we search the entries for the matching
+    title; no match → None (the required field then routes to assisted, never a wrong place)."""
     fid = (getattr(question, "field_id", "") or "").strip()
     m = _SYNTHETIC_ID_RE.match(fid)
     if m:
@@ -256,10 +278,23 @@ async def _locate_ashby_combobox(page, question, selector: str):
             entries = await page.query_selector_all(".ashby-application-form-field-entry")
         except Exception:  # noqa: BLE001
             return None
+        want = _norm_label(getattr(question, "label", "") or "")
         i = int(m.group(1)) - 1
-        if 0 <= i < len(entries):
-            return await entries[i].query_selector("input[role=combobox], [role=combobox]")
-        return None
+        entry = entries[i] if 0 <= i < len(entries) else None
+        # Only override the index on POSITIVE evidence of a mismatch: an entry whose title we
+        # can't read (older layout, or a test stub) keeps the positional behaviour.
+        if entry is not None and want:
+            title = await _entry_title(entry)
+            if title and title != want:
+                entry = None            # the list shifted — find it by title instead
+        if entry is None and want:
+            for cand in entries:
+                if await _entry_title(cand) == want:
+                    entry = cand
+                    break
+        if entry is None:
+            return None
+        return await entry.query_selector("input[role=combobox], [role=combobox]")
     if selector:
         el = await page.query_selector(selector)
         if el is not None:

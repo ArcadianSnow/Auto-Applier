@@ -45,6 +45,7 @@ __all__ = [
     "fill_option_group",
     "fill_resolutions",
     "human_type",
+    "snap_to_option",
 ]
 
 
@@ -461,19 +462,65 @@ async def fill_combobox(page, selector: str, value: str) -> bool:
 # field's container. The match is deliberately conservative: exact text, else a single
 # unambiguous whole-word match — a bare "No" against several "No - I already…" options finds
 # >1 and bails (returns false → the required field routes the job to assisted, never a guess).
+#
+# FAIL-CLOSED SCOPING (Round 3, research/fill-mechanics-hardening.md F1). This JS used to fall
+# back to ``scope = document`` when the field_id resolved to no element — and Ashby's Yes/No
+# questions carry SYNTHETIC ids (``ashby_q<n>``) that never resolve, so the option search went
+# global and clicked the first matching text on the page. Verified in a real browser: two
+# Ashby-style questions, work-auth "Yes" then sponsorship "No", produced clicks
+# ``[workauth=Yes, workauth=No]`` — the applicant recorded as NOT authorized to work, with both
+# fills reported as successful. A wrong answer is strictly worse than a bail (a bail routes to a
+# human; a wrong answer submits). So the container is now resolved by name/id → Ashby synthetic
+# index → question-label text → a BOUNDED ancestor walk from the anchor, and a container we
+# cannot identify returns false instead of widening the search.
 _OPTION_GROUP_CLICK_JS = r"""
-([fid, want]) => {
+([fid, want, label]) => {
   const norm = s => (s || '').replace(/\s+/g,' ').trim().toLowerCase();
+  // Question labels carry required markers ("Location*", "Gender ✱") that the discovered
+  // label may or may not include — strip them from both sides before comparing.
+  const normLabel = s => norm(s).replace(/[\s*✱]+$/,'');
   const w = norm(want);
   if (!w) return false;
-  // Locate the question container from any element carrying this name/id.
+  const CONTAINER_SEL = '.application-question, .ashby-application-form-field-entry, fieldset, [role=radiogroup], [role=group]';
+  const titleOf = (el) => {
+    const t = el.querySelector('.application-label, .ashby-application-form-question-title, legend, h4, label');
+    return t ? normLabel(t.innerText || t.textContent) : '';
+  };
+  const wantLabel = normLabel(label);
   let anchor = null;
-  try { anchor = document.querySelector(`[name='${fid.replace(/'/g, "\\'")}']`); } catch(e) {}
+  try { anchor = document.querySelector(`[name='${(fid||'').replace(/'/g, "\\'")}']`); } catch(e) {}
   if (!anchor) { try { anchor = document.getElementById(fid); } catch(e) {} }
-  const container = anchor
-    ? anchor.closest('.application-question, .ashby-application-form-field-entry, fieldset, [role=radiogroup], [role=group]')
-    : null;
-  const scope = container || document;
+  let container = anchor ? anchor.closest(CONTAINER_SEL) : null;
+  // Ashby synthetic id -> the nth field-entry, CONFIRMED against the question title (the
+  // entry list can grow when answering a question reveals a conditional one, which would
+  // otherwise shift every later index onto the wrong widget).
+  if (!container) {
+    const m = /^ashby_q(\d+)$/.exec(fid || '');
+    if (m) {
+      const entries = [...document.querySelectorAll('.ashby-application-form-field-entry')];
+      const cand = entries[parseInt(m[1], 10) - 1] || null;
+      if (cand && (!wantLabel || titleOf(cand) === wantLabel)) container = cand;
+      else if (wantLabel) container = entries.filter(e => titleOf(e) === wantLabel)[0] || null;
+    }
+  }
+  // Any ATS: a single container whose visible question text matches this question's label.
+  if (!container && wantLabel) {
+    const hits = [...document.querySelectorAll(CONTAINER_SEL)].filter(e => titleOf(e) === wantLabel);
+    if (hits.length === 1) container = hits[0];
+  }
+  // Anchor found but no recognised container class (selector drift): walk up a BOUNDED number
+  // of ancestors to the first that holds more than one option candidate. Still local — never
+  // the whole document.
+  if (!container && anchor) {
+    let el = anchor.parentElement;
+    for (let depth = 0; el && depth < 4; depth++, el = el.parentElement) {
+      const n = el.querySelectorAll('button, label, [role=radio], input[type=radio], input[type=checkbox]').length;
+      if (n > 1) { container = el; break; }
+    }
+    if (!container) container = anchor.parentElement;
+  }
+  if (!container) return false;   // cannot prove scope -> bail to assisted, never guess
+  const scope = container;
   const cands = [];
   scope.querySelectorAll('button, label, [role=radio], [role=button]').forEach(el => {
     const t = norm(el.innerText || el.textContent);
@@ -499,16 +546,21 @@ _OPTION_GROUP_CLICK_JS = r"""
 async def fill_option_group(page, question, value: str) -> bool:
     """Select ``value`` in a radio/checkbox/button-group question (Lever cards, Ashby Yes/No).
 
-    Anchors on the question's container via ``field_id`` and clicks the matching option;
-    returns True only when an option is actually clicked. Conservative matching (exact, else a
-    single whole-word hit) means a bare "No" against several "No - …" options bails (False), so
-    a required field with no confident option routes the job to assisted rather than guessing.
+    Anchors on the question's container (by name/id, Ashby synthetic index, or matching question
+    label) and clicks the matching option; returns True only when an option is actually clicked.
+    Conservative matching (exact, else a single whole-word hit) means a bare "No" against several
+    "No - …" options bails (False), so a required field with no confident option routes the job to
+    assisted rather than guessing. **Scope is never widened to the whole document** — a question
+    whose container can't be identified bails too (Round 3 F1).
     Defensive: any Playwright error is an observable False, never fatal (mid-form break policy)."""
     want = (value or "").strip()
     if not want:
         return False
+    label = getattr(question, "label", "") or ""
     try:
-        return bool(await page.evaluate(_OPTION_GROUP_CLICK_JS, [question.field_id, want]))
+        return bool(await page.evaluate(
+            _OPTION_GROUP_CLICK_JS, [question.field_id, want, label]
+        ))
     except Exception:  # noqa: BLE001 — mid-form break -> observable skip
         return False
 
@@ -516,27 +568,96 @@ async def fill_option_group(page, question, value: str) -> bool:
 async def settle_open_dropdown(page, value: str) -> bool:
     """Commit or dismiss a combo-box menu left open by typing (react-select).
 
-    Tries to click the menu option matching ``value`` (case-insensitive,
-    substring either way) — which COMMITS the selection properly; otherwise
-    presses Escape so the menu can't block later fields. Fully defensive: any
-    failure is a no-op (returns False) — this is cleanup, never a new failure
-    mode. Returns True only when an option was actually committed.
+    Tries to click the menu option matching ``value`` — which COMMITS the
+    selection properly; otherwise presses Escape so the menu can't block later
+    fields. Fully defensive: any failure is a no-op (returns False) — this is
+    cleanup, never a new failure mode. Returns True only when an option was
+    actually committed.
+
+    Matching delegates to :func:`_click_combobox_option` so BOTH combobox paths share
+    one conservative ladder (exact → decline-synonym-only → whole-word). This used to
+    use a loose substring test (``want in text or text in want``) — the very rule
+    ``_click_combobox_option`` was written to replace. Verified in a real browser
+    (Round 3 F3): value ``"No"`` against options ``["Nope, never used it", "No"]``
+    committed **"Nope, never used it"**.
     """
     try:
         menu = await page.query_selector(_REACT_SELECT_MENU)
         if menu is None:
             return False
-        want = (value or "").strip().lower()
-        if want:
-            for opt in await page.query_selector_all(_REACT_SELECT_OPTION):
-                text = ((await opt.text_content()) or "").strip().lower()
-                if text and (want == text or want in text or text in want):
-                    await opt.click(timeout=3000)
-                    return True
+        if (value or "").strip() and await _click_combobox_option(page, value):
+            return True
         await page.keyboard.press("Escape")
     except Exception:  # noqa: BLE001 — cleanup must never raise
         pass
     return False
+
+
+def snap_to_option(value: str, options: list[str] | None) -> str | None:
+    """Map a resolved value onto one of the form's OWN option strings, or ``None``.
+
+    The resolver answers in canonical terms ("Yes", "No", "Prefer not to answer", "6") but a
+    form's options are its own prose ("Yes, I am authorized to work in the US", "Decline To
+    Self Identify", "6 to 9 years"). Both fill paths need the form's exact text:
+    ``select_option`` matches an option's ``value`` **or** label but only EXACTLY (verified in
+    ``patchright/_impl/_element_handle.py::convert_select_option_values``), and the option-group
+    clicker matches on visible text. Without snapping, a correct answer simply doesn't land
+    (Round 3 F4) — a coverage loss, not a wrong answer, but it's the bulk of the remaining
+    "it didn't fill everything" surface.
+
+    Same conservative ladder as the click matchers, so snapping can never *invent* a choice:
+      1. exact (case/whitespace-insensitive);
+      2. a decline/prefer-not value → a decline-synonym option ONLY;
+      3. a SINGLE unambiguous whole-word hit either direction;
+      4. otherwise ``None`` — ambiguous or absent → the caller bails to assisted.
+
+    Returns the option's ORIGINAL text (not the normalized form) so it can be typed/selected
+    verbatim. ``None`` options / empty list → ``None`` (caller keeps the raw value).
+    """
+    opts = [o for o in (options or []) if (o or "").strip()]
+    want = re.sub(r"\s+", " ", (value or "")).strip()
+    if not want or not opts:
+        return None
+    norm = [(o, re.sub(r"\s+", " ", o).strip().lower()) for o in opts]
+    w = want.lower()
+    for original, t in norm:                       # 1. exact
+        if t == w:
+            return original
+    if _DECLINE_SYNONYMS.search(w):                # 2. decline → decline option only
+        hits = [o for o, t in norm if _DECLINE_SYNONYMS.search(t)]
+        return hits[0] if hits else None
+    hits = [o for o, t in norm if _word_in(w, t) or _word_in(t, w)]   # 3. whole-word
+    return hits[0] if len(hits) == 1 else None
+
+
+async def _control_kind(page, selector: str) -> str:
+    """The control's REAL type at fill time: ``'checkbox'`` / ``'radio'`` / ``''``.
+
+    Discovery can mis-type a choice control as a plain input (Greenhouse maps every
+    non-textarea/select/combobox control to ``kind='input'``, checkboxes included). That matters
+    because the text path's ``human_type`` CLICKS the element to focus it — which TOGGLES a
+    checkbox and discards the typed characters. Verified in a real browser (Round 3 F2):
+    ``human_type(value="No")`` on an unchecked box returned True and left it **checked**, i.e. a
+    "No" answer affirmed the question. Probing the live element makes a discovery mis-type
+    degrade to "bails to assisted" instead of "answers the opposite".
+
+    Defensive by construction: a page/element stub without ``get_attribute`` (the unit-test
+    fakes) or any Playwright error yields ``''`` = "not a choice control, use the text path".
+    """
+    try:
+        el = await page.query_selector(selector)
+    except Exception:  # noqa: BLE001
+        return ""
+    if el is None:
+        return ""
+    getter = getattr(el, "get_attribute", None)
+    if getter is None:
+        return ""
+    try:
+        kind = ((await getter("type")) or "").strip().lower()
+    except Exception:  # noqa: BLE001
+        return ""
+    return kind if kind in ("checkbox", "radio") else ""
 
 
 # --- resolver wiring (shared across ATSes) --------------------------------------
@@ -602,37 +723,55 @@ async def fill_resolutions(
         if not sel:
             filled[q.field_id] = False
             continue
+        value = str(r.value)
+        # Snap the canonical answer onto the form's own option text when the driver scraped
+        # options ("Yes" -> "Yes, I am authorized to work in the US"). Ambiguous -> None, and
+        # for an option-constrained control that means bail to assisted (see below).
+        snapped = snap_to_option(value, getattr(q, "options", None))
         if q.kind == "radio":
             # Radio/checkbox/button option groups (Lever cards, Ashby Yes/No buttons): click
             # the option matching the resolved value within the question's container. The
             # selector_for() name/id won't drive these (a shared-name checkbox pair, or a hidden
             # carrier behind <button>s), so we anchor on field_id inside the helper instead.
-            filled[q.field_id] = await fill_option_group(page, q, str(r.value))
+            filled[q.field_id] = await fill_option_group(page, q, snapped or value)
         elif q.kind == "combobox":
             # react-select: open + click the matching option (typing prose filters to empty).
             # A per-ATS override drives non-react-select comboboxes (Ashby's id-less geocoder).
             if combobox_fill is not None:
-                filled[q.field_id] = await combobox_fill(page, q, sel, str(r.value))
+                filled[q.field_id] = await combobox_fill(page, q, sel, value)
             else:
-                filled[q.field_id] = await fill_combobox(page, sel, str(r.value))
+                filled[q.field_id] = await fill_combobox(page, sel, value)
         elif q.kind == "select":
             el = await page.query_selector(sel)
             if el is None:
                 filled[q.field_id] = False
                 continue
+            # A native <select> can only hold one of its own options. If we scraped options
+            # and none confidently matches, selecting would raise anyway — bail explicitly so
+            # a required field routes to assisted instead of burning the select_option timeout.
+            if getattr(q, "options", None) and snapped is None:
+                filled[q.field_id] = False
+                continue
             try:
-                await page.select_option(sel, str(r.value))
+                await page.select_option(sel, snapped or value)
                 filled[q.field_id] = True
             except Exception:  # noqa: BLE001 — mid-form break -> fail closed
                 filled[q.field_id] = False
         else:
+            # Discovery may have typed a choice control as a plain input (Greenhouse maps every
+            # non-textarea/select/combobox control to 'input', checkboxes included). Typing into
+            # one CLICKS it — i.e. a "No" answer would tick the box — so probe the live element
+            # and route real checkboxes/radios to the option-group clicker (Round 3 F2).
+            if await _control_kind(page, sel):
+                filled[q.field_id] = await fill_option_group(page, q, snapped or value)
+                continue
             # Both <input> and <textarea> take typed text. Same human_type for both
             # keeps the behavioral signal uniform across ATSes.
-            ok = await human_type(page, sel, str(r.value))
+            ok = await human_type(page, sel, value)
             # Combo-box cleanup: if the typing opened a react-select menu (the new
             # GH layout), commit the matching option or dismiss it — an open menu
             # intercepts pointer events over every later field (live 2026-06-11).
-            committed = await settle_open_dropdown(page, str(r.value))
+            committed = await settle_open_dropdown(page, value)
             filled[q.field_id] = ok or committed
     return filled
 

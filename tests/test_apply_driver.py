@@ -473,8 +473,11 @@ def test_optional_unresolved_does_not_block_auto_submit():
 
 class _OptionGroupPage:
     """Fake page that simulates the in-DOM option-click JS: a question (by field_id) has a set
-    of option labels; ``evaluate([fid, want])`` clicks IFF ``want`` exact-matches one option or
-    is an unambiguous whole-word hit. Mirrors the real ``_OPTION_GROUP_CLICK_JS`` contract."""
+    of option labels; ``evaluate([fid, want, label])`` clicks IFF the question's container can be
+    identified AND ``want`` exact-matches one option or is an unambiguous whole-word hit.
+    Mirrors the real ``_OPTION_GROUP_CLICK_JS`` contract, including its **fail-closed scoping**:
+    a field_id this page doesn't know about resolves to no container, so it never falls through
+    to some other question's options (research/fill-mechanics-hardening.md F1)."""
 
     def __init__(self, options_by_fid: dict[str, list[str]]):
         self._opts = options_by_fid
@@ -482,8 +485,10 @@ class _OptionGroupPage:
 
     async def evaluate(self, js, arg=None):
         import re as _re
-        fid, want = arg
+        fid, want, _label = arg
         w = (want or "").strip().lower()
+        if fid not in self._opts:           # no identifiable container -> bail, never widen
+            return False
         opts = [o.strip().lower() for o in self._opts.get(fid, [])]
         if not w:
             return False
@@ -536,6 +541,108 @@ def test_fill_resolutions_routes_radio_to_option_group():
     filled = asyncio.run(fill_resolutions(page, [q], [r]))
     assert filled["cards[uuid][field0]"] is True
     assert page.clicked["cards[uuid][field0]"] == "Yes"
+
+
+# ---- Round 3 fill hardening (research/fill-mechanics-hardening.md) ------------------------
+
+def test_fill_option_group_unknown_container_bails_not_document_scope():
+    """F1: a question whose container can't be identified must NOT click some other question's
+    option. The old JS widened the search to `document`; verified live that Ashby's synthetic
+    `ashby_q<n>` ids made the sponsorship answer land on the work-auth question."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion, fill_option_group
+    page = _OptionGroupPage({"workauth": ["Yes", "No"]})
+    ghost = CustomQuestion("ashby_q7", "Not a question on this form", True, "radio",
+                           options=["Yes", "No"])
+    assert asyncio.run(fill_option_group(page, ghost, "No")) is False
+    assert page.clicked == {}
+
+
+def test_fill_option_group_passes_label_for_container_matching():
+    """The label is handed to the JS so it can find the container by question text."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion, fill_option_group
+
+    seen = {}
+
+    class _Recorder:
+        async def evaluate(self, js, arg=None):
+            seen["arg"] = arg
+            return True
+
+    q = CustomQuestion("ashby_q1", "Authorized to work?", True, "radio", options=["Yes", "No"])
+    assert asyncio.run(fill_option_group(_Recorder(), q, "Yes")) is True
+    assert seen["arg"] == ["ashby_q1", "Yes", "Authorized to work?"]
+
+
+def test_snap_to_option_maps_canonical_answer_onto_form_prose():
+    """F4: 'Yes' must reach an option worded 'Yes, I am authorized to work in the US'."""
+    from auto_applier.sources.browser.apply_base import snap_to_option
+    opts = ["-- select --", "Yes, I am authorized to work in the US", "No, I require sponsorship"]
+    assert snap_to_option("Yes", opts) == "Yes, I am authorized to work in the US"
+    assert snap_to_option("No", opts) == "No, I require sponsorship"
+
+
+def test_snap_to_option_decline_synonym_and_exact_and_ambiguous():
+    from auto_applier.sources.browser.apply_base import snap_to_option
+    # exact wins first
+    assert snap_to_option("Male", ["Male", "Female"]) == "Male"
+    # a decline value only ever maps onto a decline option
+    assert snap_to_option(
+        "Prefer not to answer", ["Male", "Female", "Decline To Self Identify"]
+    ) == "Decline To Self Identify"
+    # ambiguous -> None (caller bails to assisted, never guesses)
+    assert snap_to_option("No", ["No - I have a visa", "No - I do not"]) is None
+    # nothing to snap against -> None (caller keeps the raw value)
+    assert snap_to_option("Yes", []) is None
+    assert snap_to_option("", ["Yes"]) is None
+
+
+def test_fill_resolutions_select_bails_when_no_option_matches():
+    """A native <select> can only hold its own options: an unmatchable answer bails to assisted
+    rather than burning a select_option timeout."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion, fill_resolutions
+    from auto_applier.resume.answer_resolver import Resolution, ResolutionSource
+    page = FakePage("", [], [])
+    q = CustomQuestion("question_9", "Level?", True, "select", options=["Junior", "Senior"])
+    r = Resolution(question=q, value="Staff", source=ResolutionSource.FACT_BANK)
+    assert asyncio.run(fill_resolutions(page, [q], [r]))["question_9"] is False
+
+
+def test_fill_resolutions_select_snaps_to_option_text():
+    from auto_applier.sources.browser.apply_base import CustomQuestion, fill_resolutions
+    from auto_applier.resume.answer_resolver import Resolution, ResolutionSource
+    page = FakePage("", [], [])
+    opts = ["0-2 years", "3-5 years", "6 to 9 years", "10+ years"]
+    q = CustomQuestion("question_4", "Years of experience", True, "select", options=opts)
+    r = Resolution(question=q, value="6", source=ResolutionSource.FACT_BANK)
+    assert asyncio.run(fill_resolutions(page, [q], [r]))["question_4"] is True
+    assert page.elements["#question_4"].selected == "6 to 9 years"
+
+
+def test_fill_resolutions_routes_live_checkbox_away_from_typing():
+    """F2: a checkbox discovered as kind='input' must not be TYPED into — human_type clicks to
+    focus, which toggles the box, so a 'No' answer would tick it. Verified live in Chromium."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion, fill_resolutions
+    from auto_applier.resume.answer_resolver import Resolution, ResolutionSource
+
+    class _CheckboxElement(FakeElement):
+        async def get_attribute(self, name):
+            return "checkbox" if name == "type" else None
+
+    class _CheckboxPage(_OptionGroupPage):
+        def __init__(self, opts):
+            super().__init__(opts)
+            self.el = _CheckboxElement()
+
+        async def query_selector(self, selector):
+            return self.el
+
+    page = _CheckboxPage({"question_1": ["Yes", "No"]})
+    q = CustomQuestion("question_1", "Sponsorship needed?", True, "input")
+    r = Resolution(question=q, value="No", source=ResolutionSource.FACT_BANK)
+    filled = asyncio.run(fill_resolutions(page, [q], [r]))
+    assert filled["question_1"] is True          # routed to the option-group clicker
+    assert page.clicked["question_1"] == "No"    # clicked the No option
+    assert page.el.typed == ""                   # and never typed into the checkbox
 
 
 def test_fill_option_group_evaluate_error_is_false():
