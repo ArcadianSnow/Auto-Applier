@@ -415,3 +415,51 @@ Both drivers were then restored from git. Default suite unaffected: 1568 green, 
 | unit (fake pages) | always | Python-side logic, wiring, contracts | ms |
 | **`-m browser`** | opt-in | the fill/read-back **JS** against fixed DOM contracts | ~8s, needs Chromium |
 | **`-m smoke`** | cron | **live selector drift** — the #1 v2 bug source | ~44s, needs network |
+
+---
+
+## Scheduling the drift guard — and the rot it uncovered (2026-07-31) — SHIPPED
+
+A drift guard that nothing runs catches nothing. Wiring the smoke suite to a schedule turned up
+that the runner had been **dead for two months**.
+
+### The rot
+
+At the v3→master rename (2026-05-30: `av3/` → `auto_applier/`, `tests_v3/` → `tests/`) four
+helper scripts were missed, and nothing noticed because **scripts aren't imported by the suite**:
+
+| Script | Broken how |
+|---|---|
+| `scripts/run_smoke.py` | ran `pytest tests_v3/test_live_smoke.py` — path gone |
+| `scripts/refresh_fixtures.py` | wrote to `tests_v3/fixtures/` **and** imported `from av3.config …` |
+| `scripts/measure_enterprise_score.py` | imported `from av3.…` |
+| `scripts/smoketest_captcha_score.py` | imported `from av3.…` |
+
+The first is the worst shape this bug can take: **`run_smoke.py` IS the selector-drift alarm, and
+a broken alarm is indistinguishable from "no drift."** Had the suite been scheduled at any point
+since May it would have failed every run with a collection error, not a drift report.
+
+### What shipped
+
+* **All four scripts fixed** (paths + package namespace).
+* **`scripts/run_smoke.py` reworked** for unattended use: `--log` (defaults to
+  `<data_dir>/smoke.log`), `--no-log`, structured `[smoke] started_at=… / finished_at=… status=…`
+  lines for log grepping, a fail-fast check that the suite file exists, and a non-zero exit so
+  Task Scheduler's "Last Run Result" reflects drift. Verified end to end: `10 passed`, exit 0,
+  log written.
+* **`scripts/register-smoke-task.ps1`** — mirrors `register-discovery-task.ps1` (venv-python
+  resolution, `AV3_DATA_DIR` via a powershell wrapper since task actions can't carry env vars,
+  `-Unregister`). **Weekly by default on purpose**: the run opens a real Chrome window, so a
+  daily task would interrupt the owner for no benefit — drift moves far slower than that.
+  `-Schedule Daily` is there for anyone who wants it.
+* **`tests/test_scripts_paths.py`** — the actual fix. Cheap, no false-alarm mode, and it
+  fails loudly the next time a rename outruns the scripts: every `scripts/*.py` must parse,
+  must not import the pre-rename package, must not reference the pre-rename test dir; the
+  smoke runner's target and the fixtures dir must exist; each `register-*.ps1` must invoke
+  something real. **It found the two `measure_*`/`smoketest_*` scripts immediately** — they
+  were not on the radar when it was written.
+
+**Not done unilaterally:** registering the scheduled task changes the owner's machine, so the
+command is documented (`pwsh scripts/register-smoke-task.ps1`) rather than run.
+
+1593 green (was 1568).

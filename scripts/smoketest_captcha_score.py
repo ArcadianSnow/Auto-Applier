@@ -20,8 +20,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from av3.config import load_settings  # noqa: E402
-from av3.sources.browser.session import BrowserSession  # noqa: E402
+from auto_applier.config import load_settings  # noqa: E402
+from auto_applier.sources.browser.session import BrowserSession  # noqa: E402
 
 _SCORE_RE = re.compile(r"score(?:\s*(?:is|:|=))?\s*(\d(?:\.\d+)?)", re.I)
 _FLOAT_RE = re.compile(r"\b(0\.\d|1\.0)\b")

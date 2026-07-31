@@ -1,8 +1,8 @@
-"""Refresh the per-ATS HTML fixtures in ``tests_v3/fixtures/`` (spec section 10 + 11b).
+"""Refresh the per-ATS HTML fixtures in ``tests/fixtures/`` (spec section 10 + 11b).
 
 Manual-run helper to capture real apply-form HTML from a live ATS posting and
-overwrite the matching ``tests_v3/fixtures/<ats>/apply_form.html`` fixture so
-the selector-drift test (``tests_v3/test_selector_drift.py``) is checking
+overwrite the matching ``tests/fixtures/<ats>/apply_form.html`` fixture so
+the selector-drift test (``tests/test_selector_drift.py``) is checking
 *current* selectors, not a stale snapshot from the day the test landed.
 
 Usage:
@@ -39,7 +39,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-FIXTURES_DIR = REPO_ROOT / "tests_v3" / "fixtures"
+FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
 SUPPORTED_ATSES = ("greenhouse", "lever", "ashby")
 
 
@@ -54,8 +54,8 @@ async def _refresh(ats: str, url: str) -> None:
         sys.exit(2)
 
     # Import here so a `--help` invocation doesn't require Playwright be installed.
-    from av3.config import load_settings
-    from av3.sources.browser.session import BrowserSession
+    from auto_applier.config import load_settings
+    from auto_applier.sources.browser.session import BrowserSession
 
     settings = load_settings()
     session = BrowserSession(settings.browser_profile_dir)
@@ -80,7 +80,7 @@ async def _refresh(ats: str, url: str) -> None:
     print(f"  new size: {new_size:>8} bytes")
     print(f"  source:   {url}")
     print()
-    print("Next: run `pytest tests_v3/test_selector_drift.py -v` to verify "
+    print("Next: run `pytest tests/test_selector_drift.py -v` to verify "
           "all selectors still resolve.")
 
 

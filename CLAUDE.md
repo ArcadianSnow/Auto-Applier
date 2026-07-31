@@ -91,10 +91,13 @@ av3 research <company> [--source-file F] [--show]   # grounded briefing from PAS
 
 # Tests
 pip install -e ".[v3,dev]"
-pytest tests/                     # 1554 green / 21 deselected (smoke/eval/integration/browser markers)
+pytest tests/                     # 1593 green / 24 deselected (smoke/eval/integration/browser markers)
 pytest tests/test_apply_worker.py -k name
 pytest -m browser                 # real headless Chromium vs LOCAL DOM fixtures, NO network —
                                   # runs the actual fill/read-back JS the fake pages can't execute
+pytest -m smoke                   # live ATS drift guard (read-only, NEVER submits) — or
+python scripts/run_smoke.py       # …the cron-friendly runner (logs + non-zero exit on drift)
+pwsh scripts/register-smoke-task.ps1   # schedule it weekly (Windows Task Scheduler)
 
 # Build the standalone executable (PyInstaller; build-host tool, not a runtime dep)
 pip install pyinstaller && python build_v3.py     # → dist/AutoApplierV3

@@ -15,7 +15,7 @@ BrowserSession, then call the Assessment API with our secret to read the score b
 
 Flow:
     1. Serve a one-page HTML harness on http://localhost:PORT/ with our Enterprise site key.
-    2. Drive it with av3.sources.browser.session.BrowserSession (the EXACT stack the apply
+    2. Drive it with auto_applier.sources.browser.session.BrowserSession (the EXACT stack the apply
        path uses -- patchright, real Chrome channel, persistent profile).
     3. Page calls grecaptcha.enterprise.execute(siteKey, {action}) -> token at window.__token.
     4. We POST {token, siteKey, expectedAction} to the Assessment API and read
@@ -58,8 +58,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import httpx  # noqa: E402  (same client the av3 sources use)
 
-from av3.config import load_settings  # noqa: E402
-from av3.sources.browser.session import BrowserSession  # noqa: E402
+from auto_applier.config import load_settings  # noqa: E402
+from auto_applier.sources.browser.session import BrowserSession  # noqa: E402
 
 _ASSESS_URL = (
     "https://recaptchaenterprise.googleapis.com/v1/projects/{project}/assessments?key={api_key}"
