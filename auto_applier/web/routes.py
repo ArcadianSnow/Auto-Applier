@@ -10,6 +10,10 @@ Surface as of Phase 4 (4/M):
   * ``/api/sources/<source>/login``       — POST: open the source's login URL
                                             in the bot's headed browser (4/M)
   * ``/api/sources/<source>/healthy``     — POST: clear AUTH_REQUIRED (4/M)
+  * ``/api/diagnostics/export``           — POST: build a SCRUBBED support bundle
+                                            (the tester-facing half of
+                                            ``av3 export-diagnostics``; --raw stays CLI-only)
+  * ``/api/diagnostics/download/<name>``  — GET: stream a built bundle
   * ``/api/queue``                        — review + queued_apply + applying lists
   * ``/api/history``                      — recent applications + outcomes
                                             joined with jobs
@@ -35,9 +39,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from auto_applier import __version__
 from auto_applier.db.repositories import ApplicationRepo, JobRepo, OutcomeRepo, ScoreRepo
@@ -1956,6 +1962,55 @@ async def in_progress_page(request: Request) -> HTMLResponse:
         "in_progress.html",
         {"version": __version__},
     )
+
+
+# ---------------------------------------------------------------- diagnostics
+#
+# A support bundle nobody can produce is not a support bundle. `av3 export-diagnostics` existed
+# only as a CLI command, so the people this product is FOR — the non-technical testers who will
+# actually hit the bugs — had no way to send anything back. This is the one artifact you ask a
+# tester for when something breaks, so it has to be reachable without a terminal.
+#
+# SCRUBBED BY DEFAULT, and there is no way to ask for the raw variant from the web. `--raw`
+# bundles a verbatim events.db (PII-bearing) and stays CLI-only + deliberate: a browser button
+# is exactly the wrong place to make that easy to do by accident.
+
+@api_router.post("/diagnostics/export")
+async def diagnostics_export(request: Request) -> dict:
+    """Build a scrubbed support bundle and return where it landed + how to send it."""
+    from auto_applier.telemetry.diagnostics import build_diagnostics
+
+    settings = _get_state(request).settings
+    try:
+        result = await asyncio.to_thread(build_diagnostics, settings, raw=False)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"could not write bundle: {exc}") from exc
+    return {
+        "ok": True,
+        "name": result.path.name,
+        "path": str(result.path),
+        "bytes": result.bytes_written,
+        "error_rows": result.error_rows,
+        "scrubbed": True,
+        "download_url": f"/api/diagnostics/download/{result.path.name}",
+    }
+
+
+@api_router.get("/diagnostics/download/{name}")
+async def diagnostics_download(request: Request, name: str) -> FileResponse:
+    """Stream a previously built bundle so a tester can just save and send it."""
+    settings = _get_state(request).settings
+    # Serve ONLY diagnostics bundles from the data dir, by exact filename. `name` comes off the
+    # URL, so anything that isn't a plain diagnostics filename is refused rather than resolved —
+    # a path-traversal here would hand out arbitrary files from the user's disk.
+    # ``+`` is allowed for bundles written before the timestamp fix (those were named
+    # "…T203320+0000.tar.gz"), so a tester's existing file still downloads.
+    if Path(name).name != name or not re.fullmatch(r"diagnostics-[\w.+\-]+\.tar\.gz", name):
+        raise HTTPException(status_code=400, detail="not a diagnostics bundle name")
+    path = settings.data_dir / name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"{name} not found")
+    return FileResponse(path, media_type="application/gzip", filename=name)
 
 
 @pages_router.get("/jobs/{job_id}", response_class=HTMLResponse)

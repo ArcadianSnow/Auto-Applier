@@ -243,7 +243,11 @@ def build_diagnostics(
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     # Filename-safe timestamp (no colons — Windows rejects them in paths).
     stamp = (now_iso or datetime.now(timezone.utc).isoformat(timespec="seconds"))
-    stamp = stamp.replace(":", "").replace("+00:00", "Z")
+    # Order matters: strip the UTC offset to "Z" FIRST. Removing colons first turned
+    # "+00:00" into "+0000", so the "+00:00"→"Z" replacement never matched and every bundle
+    # was named "…T203320+0000.tar.gz" instead of the intended "…T203320Z.tar.gz" — a "+" in
+    # a filename that then has to survive URLs, shells and mail clients.
+    stamp = stamp.replace("+00:00", "Z").replace(":", "")
     out_path = settings.data_dir / f"diagnostics-{stamp}.tar.gz"
 
     with tarfile.open(out_path, "w:gz") as tar:

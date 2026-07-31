@@ -24,7 +24,49 @@
       </nav>
     </header>
     <main class="container">{% block content %}{% endblock %}</main>
-    <footer class="footer">av3 {{ version }} &middot; local-first &middot; your data never leaves this machine unless you opt in</footer>
+    {# Report-a-problem lives in the SHARED footer, so a tester can reach it from wherever they
+       got stuck — not just the dashboard. It builds the same scrubbed support bundle as
+       `av3 export-diagnostics` and downloads it, because the people who hit the bugs are the
+       ones who don't open a terminal. The raw (PII-bearing) variant stays CLI-only. #}
+    <footer class="footer" x-data="diagnosticsReport()">
+      av3 {{ version }} &middot; local-first &middot; your data never leaves this machine unless you opt in
+      &middot;
+      <button type="button" class="linklike" @click="build()" :disabled="busy"
+              x-text="busy ? 'Preparing…' : 'Report a problem'"></button>
+      <template x-if="result">
+        <span class="diag-note">
+          Saved <strong x-text="result.name"></strong>
+          (<span x-text="Math.max(1, Math.round(result.bytes / 1024))"></span> KB,
+          <span x-text="result.error_rows"></span> errors) — it downloaded to your browser.
+          Send that file along with what you were doing.
+          <a :href="result.download_url">Download again</a>
+        </span>
+      </template>
+      <template x-if="error">
+        <span class="diag-note diag-error" x-text="error"></span>
+      </template>
+    </footer>
+    <script>
+      function diagnosticsReport() {
+        return {
+          busy: false, result: null, error: '',
+          async build() {
+            this.busy = true; this.error = ''; this.result = null;
+            try {
+              const resp = await fetch('/api/diagnostics/export', {method: 'POST'});
+              if (!resp.ok) throw new Error((await resp.json()).detail || resp.statusText);
+              this.result = await resp.json();
+              // Hand the file straight to the browser's downloader — one click total.
+              window.location.assign(this.result.download_url);
+            } catch (e) {
+              this.error = 'Could not build the report: ' + e.message;
+            } finally {
+              this.busy = false;
+            }
+          },
+        };
+      }
+    </script>
     {% block scripts %}{% endblock %}
   </body>
 </html>

@@ -112,6 +112,18 @@ html, body {
 .container { max-width: 1200px; margin: 1.4rem auto; padding: 0 1.4rem; }
 .footer { text-align: center; color: var(--fg-muted); padding: 1rem; font-size: 0.85rem; }
 
+/* Report-a-problem, in the shared footer. A button styled as a link: it's an action, so it
+   must be a real <button> for keyboard + screen-reader users, but it shouldn't shout from
+   the footer. */
+.linklike {
+  background: none; border: none; padding: 0; font: inherit; color: var(--accent, #1f4f8f);
+  text-decoration: underline; cursor: pointer;
+}
+.linklike:disabled { color: var(--fg-muted); cursor: progress; text-decoration: none; }
+.linklike:focus-visible { outline: 2px solid var(--accent, #1f4f8f); outline-offset: 2px; }
+.diag-note { display: block; margin-top: 0.4rem; max-width: 46rem; margin-inline: auto; }
+.diag-error { color: var(--danger, #b3261e); }
+
 .card {
   background: var(--bg-elev);
   border: 1px solid var(--border);
