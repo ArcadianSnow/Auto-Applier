@@ -369,8 +369,9 @@ class TestDashboardHtml:
         assert "startGoalsEdit()" in r.text
         assert "saveGoals()" in r.text
         assert "goalsBoardGroups()" in r.text
-        # Alpine.js + our JS are linked.
-        assert "alpinejs" in r.text
+        # Alpine.js + our JS are linked. Alpine is vendored (see static/vendor/README.md), so
+        # the tag points at our own static dir rather than a CDN.
+        assert "alpine-3.14.1.min.js" in r.text
         assert "app.js" in r.text
 
     def test_job_detail_page_renders(

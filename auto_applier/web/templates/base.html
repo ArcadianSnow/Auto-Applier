@@ -6,7 +6,14 @@
     <title>{% block title %}Auto Applier v3{% endblock %}</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231f4f8f'/%3E%3Cpath d='M9 23 L16 8 L23 23 M12 18.5 H20' stroke='white' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}" />
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+    {# Alpine is VENDORED, not loaded from a public CDN. It drives every interactive element on
+       every page, so a blocked or unreachable CDN host didn't degrade the dashboard — it killed
+       it outright. That's a real failure mode for the audience: a tester on a locked-down work
+       laptop, behind an ad-blocker, or simply offline. Serving it from our own static dir also
+       matches the local-first promise in the footer, and build.py already bundles web/static,
+       so the packaged app carries it. MIT; pinned to the version previously requested remotely.
+       See static/vendor/README.md. #}
+    <script defer src="{{ url_for('static', path='vendor/alpine-3.14.1.min.js') }}"></script>
     {% block head %}{% endblock %}
   </head>
   <body>
