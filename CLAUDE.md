@@ -100,7 +100,9 @@ python scripts/run_smoke.py       # …the cron-friendly runner (logs + non-zero
 pwsh scripts/register-smoke-task.ps1   # schedule it weekly (Windows Task Scheduler)
 
 # Build the standalone executable (PyInstaller; build-host tool, not a runtime dep)
-pip install pyinstaller && python build_v3.py     # → dist/AutoApplierV3
+pip install pyinstaller && python build.py        # → dist/AutoApplier.exe
+python installer/build_installer.py               # → installer/Output/AutoApplier-Setup-*.exe
+                                                  #   (also needs Inno Setup 6 / iscc on PATH)
 ```
 
 `--dry-run` is the dev default everywhere an apply could fire; `--no-dry-run` is the gated path that submits
@@ -194,7 +196,7 @@ lives only in the relay, never in the app.** Toggle with `av3 telemetry on|off|s
 
 ### Distribution (spec §11a)
 
-`build_v3.py` produces a lean PyInstaller executable (`run_v3.py` entry: no-arg → `av3 launch`, args → full
+`build.py` produces a lean PyInstaller executable (`run.py` entry: no-arg → `av3 launch`, args → full
 CLI). **Chromium is fetched on first run** (`av3 install-browser`), not bundled — Playwright resolves browsers
 via its own cache, and most applies use the user's real Chrome via channel anyway. `av3 update` checks the
 GitHub release feed and prompts (no in-place auto-replace in v3.0).

@@ -23,6 +23,7 @@ from pathlib import Path
 
 import httpx
 
+from auto_applier.browser_paths import browser_registry_dirs
 from auto_applier.config import Settings, load_settings
 from auto_applier.db import init_app_db
 from auto_applier.telemetry import EventSink
@@ -143,24 +144,10 @@ def check_llm(settings: Settings) -> CheckResult:
                        f"Ollama up, models '{want}' + '{embed}' available")
 
 
-def _browser_registry_dirs() -> list[Path]:
-    """Candidate Playwright/patchright browser-cache roots for the current OS.
-
-    Honours ``PLAYWRIGHT_BROWSERS_PATH`` (the override pinned by the installer);
-    otherwise the per-OS defaults for both the ``ms-playwright`` and ``patchright``
-    registries (patchright is a fork that keeps its own cache).
-    """
-    override = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    if override and override != "0":
-        return [Path(override)]
-    if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return [base / "ms-playwright", base / "patchright"]
-    if sys.platform == "darwin":
-        base = Path.home() / "Library" / "Caches"
-        return [base / "ms-playwright", base / "patchright"]
-    base = Path.home() / ".cache"
-    return [base / "ms-playwright", base / "patchright"]
+#: Candidate Playwright/patchright browser-cache roots. Defined in ``browser_paths`` so the
+#: doctor, ``install_browser`` and the frozen runtime cannot drift apart about where Chromium
+#: lives — they used to agree only by coincidence. Kept as a private alias for existing callers.
+_browser_registry_dirs = browser_registry_dirs
 
 
 def _bundled_chromium_present() -> bool:

@@ -92,11 +92,24 @@ def test_install_browser_success(monkeypatch):
     assert result.backend_used == "patchright"
 
 
+def _pkg_of(argv) -> str:
+    """Which backend a command belongs to.
+
+    The command is now the node driver (``[<pkg>/driver/node.exe, cli.js, install, chromium]``)
+    rather than ``[python, -m, <pkg>, …]`` — see ``setup_ops._install_cmd``: the ``-m`` form is
+    wrong in a PyInstaller build, where ``sys.executable`` is the app itself. Identify the
+    backend by the package name in the driver path instead of a positional index, so this
+    doesn't re-break the next time the invocation changes shape.
+    """
+    joined = " ".join(str(a) for a in argv)
+    return "playwright" if "patchright" not in joined else "patchright"
+
+
 def test_install_browser_falls_back_to_playwright(monkeypatch):
     calls: list[str] = []
 
     def fake_run(argv, **k):
-        pkg = argv[2]  # [python, -m, <pkg>, install, chromium]
+        pkg = _pkg_of(argv)
         calls.append(pkg)
         return _fake_proc(0 if pkg == "playwright" else 1, stderr="nope")
 
@@ -105,6 +118,41 @@ def test_install_browser_falls_back_to_playwright(monkeypatch):
     assert result.ok is True
     assert result.backend_used == "playwright"
     assert calls == ["patchright", "playwright"]
+
+
+def test_install_cmd_drives_the_node_driver_not_dash_m():
+    """``python -m patchright install`` cannot work in a frozen build (``sys.executable`` is
+    the bundled app), so the install must go through the node driver — the same thing
+    ``patchright/__main__.py`` does internally."""
+    cmd = setup_ops._install_cmd("patchright")
+    assert cmd is not None
+    assert "-m" not in cmd
+    assert cmd[-2:] == ["install", "chromium"]
+    assert "patchright" in " ".join(cmd)
+    assert cmd[0].lower().endswith("node.exe") or "node" in cmd[0].lower()
+
+
+def _break_driver_import(monkeypatch):
+    def boom(name):
+        raise ImportError(f"no {name}")
+
+    monkeypatch.setattr(setup_ops, "import_module", boom)
+
+
+def test_install_cmd_frozen_refuses_the_unusable_dash_m_fallback(monkeypatch):
+    """If the driver API ever disappears, a FROZEN build must report "can't" rather than
+    silently running a command that cannot possibly succeed."""
+    _break_driver_import(monkeypatch)
+    monkeypatch.setattr(setup_ops.sys, "frozen", True, raising=False)
+    assert setup_ops._install_cmd("patchright") is None
+
+
+def test_install_cmd_unfrozen_still_falls_back_to_dash_m(monkeypatch):
+    """A pip install can legitimately use the module form, so keep it as the fallback there."""
+    _break_driver_import(monkeypatch)
+    monkeypatch.delattr(setup_ops.sys, "frozen", raising=False)
+    cmd = setup_ops._install_cmd("patchright")
+    assert cmd is not None and cmd[1:] == ["-m", "patchright", "install", "chromium"]
 
 
 def test_install_browser_both_fail(monkeypatch):

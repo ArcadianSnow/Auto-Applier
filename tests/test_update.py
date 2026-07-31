@@ -164,7 +164,10 @@ def test_install_browser_success_first_backend(monkeypatch):
     res = _run("install-browser")
     assert res.exit_code == 0, res.output
     assert "installed via patchright" in res.output
-    assert calls[0][2] == "patchright"  # [python, -m, patchright, install, chromium]
+    # The invocation is now the node driver ([<pkg>/driver/node.exe, cli.js, install, chromium])
+    # rather than [python, -m, <pkg>, …] — the module form cannot work in a PyInstaller build,
+    # where sys.executable is the app itself. Assert the backend by name, not by position.
+    assert "patchright" in " ".join(str(a) for a in calls[0])
 
 
 def test_install_browser_falls_back_to_playwright(monkeypatch):

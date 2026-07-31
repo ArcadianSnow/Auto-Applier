@@ -1,8 +1,8 @@
-"""Build Auto Applier v3 into a standalone executable using PyInstaller (spec §11a).
+"""Build Auto Applier into a standalone executable using PyInstaller (spec §11a).
 
 Bundles the ``auto_applier`` package + the FastAPI web UI (templates/static) +
 the SQLite schema into a single executable whose no-arg launch is the one-click
-dashboard (``run.py`` → ``av3 launch``).
+dashboard (``run.py`` → ``av3 launch``). Output: ``dist/AutoApplier.exe``.
 
 ## Chromium is NOT bundled — fetched on first run (the lean-installer decision)
 
@@ -16,8 +16,8 @@ user's **real Chrome via channel** (spec §8c) and never touch this Chromium at
 all — it's the stealth driver + the busy-Chrome fallback.
 
 So the install story is two steps, both scriptable by the installer:
-    1.  AutoApplierV3.exe            (this build's output, in dist/)
-    2.  AutoApplierV3.exe install-browser   (first-run; idempotent)
+    1.  AutoApplier.exe            (this build's output, in dist/)
+    2.  AutoApplier.exe install-browser   (first-run; idempotent)
 
 ## Requires PyInstaller (not a default dep)
 
@@ -47,10 +47,19 @@ def _add_data(src: str, dest: str) -> list[str]:
 def build(onefile: bool = True) -> None:
     cmd = [
         sys.executable, "-m", "PyInstaller",
-        "--name", "AutoApplierV3",
+        # Name must match installer/auto_applier.iss, which copies dist/AutoApplier.exe.
+        # It said AutoApplierV3 here while the .iss said AutoApplier, so the installer step
+        # could never find the exe this build produced.
+        "--name", "AutoApplier",
         "--noconfirm",
         "--clean",
         "--onefile" if onefile else "--onedir",
+        # patchright ships its PyInstaller hooks under the UPSTREAM name
+        # (hook-playwright.*), so they never fire for our `patchright.*` imports and the node
+        # driver is silently omitted — a built exe then dies with FileNotFoundError the moment
+        # it tries to open a browser (measured 2026-07-31). Upstream: wontfix. Our own hooks
+        # bundle it. Without this the shipped app cannot apply to anything.
+        "--additional-hooks-dir", str(ROOT / "installer" / "pyinstaller_hooks"),
         # Console kept (NOT --windowed): `av3 launch` streams the server log here;
         # the Windows shortcut/.cmd wrapper hides the window for the non-technical
         # UX (see av3-launcher.cmd). A windowed build would swallow startup errors.
@@ -68,12 +77,12 @@ def build(onefile: bool = True) -> None:
         "--hidden-import", "uvicorn.protocols.websockets.auto",
         str(ROOT / "run.py"),
     ]
-    print("Building AutoApplierV3 ...")
+    print("Building AutoApplier ...")
     print("Command:\n  " + " ".join(cmd) + "\n")
     subprocess.run(cmd, check=True)
     print("\nDone. Executable is in dist/.")
     print("First-run browser fetch (or installer post-step):")
-    print("  dist/AutoApplierV3 install-browser")
+    print("  dist/AutoApplier install-browser")
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from importlib import import_module
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -134,11 +135,12 @@ def install_browser(progress_cb: ProgressCb = None, backend: str = "auto") -> In
     for pkg in order:
         _emit(progress_cb, {"action": "install-browser", "status": "running",
                             "phase": f"installing via {pkg}"})
+        cmd = _install_cmd(pkg)
+        if cmd is None:
+            last_err = f"{pkg}: not importable"
+            continue
         try:
-            proc = subprocess.run(
-                [sys.executable, "-m", pkg, "install", "chromium"],
-                capture_output=True, text=True,
-            )
+            proc = subprocess.run(cmd, capture_output=True, text=True)
         except FileNotFoundError as exc:
             last_err = f"{pkg}: {exc}"
             continue
@@ -146,6 +148,31 @@ def install_browser(progress_cb: ProgressCb = None, backend: str = "auto") -> In
             return InstallResult(ok=True, backend_used=pkg)
         last_err = (proc.stderr or proc.stdout or "").strip()[:300]
     return InstallResult(ok=False, error=last_err or "could not install Chromium")
+
+
+def _install_cmd(pkg: str) -> list[str] | None:
+    """The command that downloads Chromium for ``pkg`` — frozen-safe.
+
+    ``[sys.executable, "-m", pkg, "install", "chromium"]`` is correct for a pip install but
+    **wrong in a PyInstaller build**, where ``sys.executable`` is the bundled app itself: it
+    would re-enter our own Click CLI with ``-m patchright install chromium`` and fail. That
+    breaks the one thing the lean-installer design depends on — "Chromium is NOT bundled,
+    fetched on first run".
+
+    So we drive the node driver directly, which is exactly what ``python -m patchright install``
+    does internally (see ``patchright/__main__.py``): ``compute_driver_executable()`` returns
+    ``(node, cli.js)``, and the driver ships inside the bundle thanks to the PyInstaller hook in
+    ``installer/pyinstaller_hooks/``. Works identically frozen and not, so there's no
+    frozen-only code path to rot. Falls back to the ``-m`` form if the driver API is absent.
+    """
+    try:
+        driver = import_module(f"{pkg}._impl._driver")
+        node, cli_js = driver.compute_driver_executable()
+        return [str(node), str(cli_js), "install", "chromium"]
+    except Exception:  # noqa: BLE001 — any import/API shift falls back to the module form
+        if getattr(sys, "frozen", False):
+            return None          # the -m form cannot work frozen; don't pretend it might
+        return [sys.executable, "-m", pkg, "install", "chromium"]
 
 
 def readiness(settings: Settings) -> list[CheckResult]:

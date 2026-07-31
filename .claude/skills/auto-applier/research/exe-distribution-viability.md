@@ -236,3 +236,67 @@ bigger job.** Packaging only delivers the bytes; the restructure is what makes f
 Phase 2 medium (embedded-Python + pip bootstrap is fiddly but well-trodden; reuses the verified pip
 install). **Owner dependencies:** install Inno Setup 6 (Phase 2); accept the unsigned/SmartScreen
 posture (Phase 3).
+
+---
+
+## ⚠️ VERDICT OVERTURNED — PyInstaller IS viable (measured 2026-07-31)
+
+Everything above was reasoned from upstream issue reports. **Built and ran it instead.** The
+deciding finding ("patchright has no PyInstaller hook, #45 wontfix") is REAL but its consequence
+was overstated: the missing hook is **three lines to supply ourselves**, not a reason to
+re-platform onto embedded-Python + pip.
+
+### The experiment
+
+A probe exe (`--onedir`, built exactly like `build.py`) that imports patchright, reports whether
+the driver is present, and launches Chromium:
+
+| Build | driver dir | node.exe | `chromium.launch()` |
+|---|---|---|---|
+| A — no hook (what `build.py` did) | **False** | **False** | `FileNotFoundError [WinError 2]` |
+| B — `+ hook-patchright.async_api.py` | True | True | `Executable doesn't exist at …\_internal\patchright\driver\package\.local-browsers\chromium-…` |
+| C — B + `PLAYWRIGHT_BROWSERS_PATH` → per-user cache | True | True | **OK** |
+
+So there were **two** problems stacked, and the second was masking how close the first was to solved:
+1. the hook never fires for `patchright.*` (it's named `hook-playwright.*`) → driver omitted;
+2. inside a bundle the driver resolves browsers relative to the extracted package, i.e. *inside*
+   the bundle — where `build.py` deliberately never puts Chromium ("fetched on first run").
+
+### Verified on the REAL artifact, not just the probe
+
+`python build.py --onedir` → `dist/AutoApplier/AutoApplier.exe`, against a throwaway data dir:
+
+```
+AutoApplier.exe doctor            -> 9 checks, 0 fail, 1 warn (backups dir, benign)
+AutoApplier.exe install-browser   -> "Chromium installed via patchright."
+AutoApplier.exe survey --lever matchgroup --max 1
+                                  -> drove a real browser, loaded a live Lever apply form,
+                                     classified hcaptcha, wrote survey_*.json
+```
+
+**The packaged app opens a real browser on a real ATS form.** That is the ship gate, and it passes.
+
+### The three defects fixed (each silently produced a shippable-looking, non-functional exe)
+
+| # | Defect | Fix |
+|---|---|---|
+| 1 | patchright driver not bundled | `installer/pyinstaller_hooks/hook-patchright.{async,sync}_api.py` + `--additional-hooks-dir` in `build.py` |
+| 2 | `build.py` emitted `AutoApplierV3.exe`; `auto_applier.iss` copies `AutoApplier.exe` — the installer step could never find the build output | renamed to `AutoApplier`; `tests/test_packaging.py` asserts the two agree |
+| 3 | `install_browser` ran `sys.executable -m patchright install` — in a frozen app `sys.executable` IS the app, so the first-run fetch the lean-installer design depends on could not work | drive the node driver via `compute_driver_executable()` (what `patchright/__main__.py` does internally); frozen builds refuse the unusable `-m` fallback rather than pretending |
+
+Plus `auto_applier/browser_paths.py` — ONE definition of where Chromium lives, shared by
+`doctor`, `install_browser` and the frozen runtime (they previously agreed by coincidence), and
+`run.py` calls `ensure_browsers_path()` before the CLI import so the fetch and every later launch
+use the same directory.
+
+### What this means for the plan
+
+* **Stay on PyInstaller + Inno.** The embedded-Python path in §"Recommended" above is no longer
+  justified — it was chosen to avoid a blocker that costs three lines. Reassess only if a future
+  dependency has a genuinely unfixable freeze problem.
+* `installer/README.md` claims a real `icon.ico` is required; **it isn't** — `SetupIconFile` is
+  already commented out in `auto_applier.iss`. That's a stale note, not a blocker.
+* Remaining gap to a shippable installer: **Inno Setup 6 (`iscc`) is not installed on the build
+  host**. That's a one-time download, not engineering.
+* `tests/test_packaging.py` (12 tests) guards all of the above structurally, since none of it is
+  visible from the default suite — these bugs only appear in a real build.
