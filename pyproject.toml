@@ -88,8 +88,15 @@ markers = [
     "integration: tests that hit live external services (network required)",
     "eval: scoring quality eval harness against a labeled golden set (live LLM required)",
     "smoke: live ATS smoke tests (real API + form-load, NEVER submits) — for scheduled cron",
+    "browser: real headless Chromium against LOCAL DOM fixtures (no network) — runs the actual fill JS",
 ]
-# Skip integration + eval + smoke by default; opt in via marker.
+# Skip integration + eval + smoke + browser by default; opt in via marker.
 # Smoke tests are scheduled via cron / Task Scheduler to catch real-world selector
 # drift between releases (the #1 v2 bug source).
-addopts = "-m 'not integration and not eval and not smoke'"
+#
+# `browser` is the tier BETWEEN the fake-page unit tests and the live smoke tests. The
+# fake pages stub `evaluate`, so they cannot execute the fill/read-back JS at all — which is
+# precisely how the Round 3 scoping bugs stayed invisible while their unit tests passed. These
+# run the REAL JS in a real engine against local fixtures, so they need a browser but never a
+# network. Run with:  pytest -m browser
+addopts = "-m 'not integration and not eval and not smoke and not browser'"

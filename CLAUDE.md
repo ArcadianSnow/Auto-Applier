@@ -91,8 +91,10 @@ av3 research <company> [--source-file F] [--show]   # grounded briefing from PAS
 
 # Tests
 pip install -e ".[v3,dev]"
-pytest tests/                     # 944 green / 11 deselected (live smoke/eval/integration markers)
+pytest tests/                     # 1554 green / 21 deselected (smoke/eval/integration/browser markers)
 pytest tests/test_apply_worker.py -k name
+pytest -m browser                 # real headless Chromium vs LOCAL DOM fixtures, NO network —
+                                  # runs the actual fill/read-back JS the fake pages can't execute
 
 # Build the standalone executable (PyInstaller; build-host tool, not a runtime dep)
 pip install pyinstaller && python build_v3.py     # → dist/AutoApplierV3

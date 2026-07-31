@@ -296,7 +296,32 @@ or an incomplete application submitted). `q_filled(outcome)` unprefixes the `q:<
 
 ### Verification
 
-`verify_readback.py` (scratchpad) — 8 checks, all PASS in headless Chromium against fixtures
-built from the live contracts: empty demotes, filled kept, Ashby button-group read via class
-divergence, unreadable kept, react-select value read, reformatted phone agrees, and the required
-gate both fires and clears. 1546 tests green (was 1538).
+8 checks, all PASS in headless Chromium against fixtures built from the live contracts: empty
+demotes, filled kept, Ashby button-group read via class divergence, unreadable kept, react-select
+value read, reformatted phone agrees, and the required gate both fires and clears.
+
+---
+
+## Round 3c (2026-07-31) — the `browser` test tier — SHIPPED
+
+The scratchpad harnesses are now a permanent, opt-in tier: `tests/test_fill_mechanics_browser.py`,
+marker `browser`, run with **`pytest -m browser`** (8 tests, ~8s). Deselected by default alongside
+`smoke`/`eval`/`integration`.
+
+**Why it had to exist.** The five Round-3 defects all shipped with green unit tests, because the
+fake pages stub `page.evaluate` — they assert that Python *called* the JS, never that the JS does
+the right thing. Live `smoke` tests would catch these but need the network and a live posting, so
+they can't gate a commit. This tier is the middle: **the real JS, a real engine, zero network**,
+with fixtures mirroring DOM contracts captured read-only from live forms.
+
+**It has teeth — verified by mutation.** Reverting `scope = container` to the original
+`container || document` makes `test_option_click_bails_when_the_container_cannot_be_identified`
+fail immediately (`assert True is False`), then the file was restored from git. Note the
+*other* scoping test still passes under that mutation: the label-matching rung finds the right
+container on its own, so the ghost-question test is the one specifically guarding the fail-open.
+
+**Coverage:** F1 scoping + fail-closed bail, F2 checkbox never typed into, F3 conservative
+dropdown commit, F4 select snapping, plus read-back across all five widget contracts, the
+demote-only asymmetry, and the required-fill gate firing *and* clearing.
+
+Suite after Round 3a+3b+3c: **1554 passed / 21 deselected** (was 1521 / 13 at session start).
