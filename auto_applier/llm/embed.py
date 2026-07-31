@@ -24,6 +24,7 @@ may fall back to REVIEW). The resolver does NOT silently bypass the bank.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import struct
 from typing import Protocol, runtime_checkable
@@ -55,6 +56,8 @@ class OllamaEmbeddings:
         host: str = "http://localhost:11434",
         model: str = "nomic-embed-text",
         timeout_s: float = 60.0,
+        retries: int = 2,
+        backoff_s: float = 0.5,
     ):
         # 60s default, not 10: the FIRST call after Ollama swaps models pays the
         # cold-load (observed live 2026-06-11: >10s while qwen3:8b was resident,
@@ -64,19 +67,48 @@ class OllamaEmbeddings:
         self.host = host.rstrip("/")
         self.model = model
         self.timeout_s = timeout_s
+        # Retry TRANSIENT failures. The owner's 60-day event spine (2026-07-31) showed
+        # `EmbeddingError: Ollama embeddings unreachable: HTTPStatusError("Server error…")`
+        # as the single largest error class (27 of 43) — Ollama 5xx-ing under concurrent
+        # load / mid model-swap. The filter fails open on those, so nothing is lost, but each
+        # one then pays a full JD-scrape + LLM score that the pre-filter exists to AVOID.
+        # A couple of short retries recover them; the cost when Ollama is genuinely down is
+        # ~1.5s per job, bounded.
+        self.retries = max(0, retries)
+        self.backoff_s = backoff_s
+
+    @staticmethod
+    def _is_transient(exc: httpx.HTTPError) -> bool:
+        """Retry timeouts, connection failures, 5xx and 429 — never a plain 4xx.
+
+        A 4xx is a permanent, actionable condition (model not pulled, bad payload); retrying
+        it just delays a clear error the user needs to see.
+        """
+        if isinstance(exc, httpx.HTTPStatusError):
+            code = exc.response.status_code
+            return code == 429 or 500 <= code < 600
+        return isinstance(exc, (httpx.TimeoutException, httpx.TransportError))
 
     async def embed(self, text: str) -> list[float]:
         url = f"{self.host}/api/embeddings"
         payload = {"model": self.model, "prompt": text}
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout_s) as client:
-                resp = await client.post(url, json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-        except httpx.HTTPError as exc:
-            # !r, not str: httpx.ReadTimeout formats as "" — an empty reason in
-            # the fail-open note made this bug needlessly hard to diagnose.
-            raise EmbeddingError(f"Ollama embeddings unreachable: {exc!r}") from exc
+        last: httpx.HTTPError | None = None
+        for attempt in range(self.retries + 1):
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout_s) as client:
+                    resp = await client.post(url, json=payload)
+                    resp.raise_for_status()
+                    data = resp.json()
+                break
+            except httpx.HTTPError as exc:
+                last = exc
+                if attempt >= self.retries or not self._is_transient(exc):
+                    # !r, not str: httpx.ReadTimeout formats as "" — an empty reason in
+                    # the fail-open note made this bug needlessly hard to diagnose.
+                    raise EmbeddingError(f"Ollama embeddings unreachable: {exc!r}") from exc
+                await asyncio.sleep(self.backoff_s * (2 ** attempt))
+        else:  # pragma: no cover — the loop always breaks or raises
+            raise EmbeddingError(f"Ollama embeddings unreachable: {last!r}")
         vec = data.get("embedding")
         if not isinstance(vec, list) or not vec:
             raise EmbeddingError(f"Ollama returned no embedding: {data!r}")
