@@ -645,6 +645,122 @@ def test_fill_resolutions_routes_live_checkbox_away_from_typing():
     assert page.el.typed == ""                   # and never typed into the checkbox
 
 
+# ---- post-fill read-back verification (Round 3 follow-up) ---------------------------------
+
+class _ReadBackPage:
+    """Fake page whose ``evaluate`` answers the read-back batch call with canned DOM state."""
+
+    def __init__(self, state: dict[str, dict]):
+        self._state = state
+
+    async def evaluate(self, js, arg=None):
+        rows = []
+        for field in arg or []:
+            st = self._state.get(field["fid"])
+            if st is None:
+                rows.append({"fid": field["fid"], "known": False, "value": ""})
+            else:
+                rows.append({"fid": field["fid"], "known": st["known"], "value": st["value"]})
+        return rows
+
+
+def _rb_case(state, questions, resolutions, claimed):
+    from auto_applier.sources.browser.apply_base import verify_fills
+    return asyncio.run(verify_fills(_ReadBackPage(state), questions, resolutions, claimed))
+
+
+def test_verify_fills_demotes_a_claim_the_page_contradicts():
+    """The whole point: `filled` was self-reported by the filler and never checked."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion
+    from auto_applier.resume.answer_resolver import Resolution, ResolutionSource
+    q = CustomQuestion("phone", "Phone Number", True, "input")
+    r = Resolution(question=q, value="+16827188130", source=ResolutionSource.FACT_BANK)
+    out = _rb_case({"phone": {"known": True, "value": ""}}, [q], [r], {"phone": True})
+    assert out["phone"] is False
+
+
+def test_verify_fills_keeps_a_claim_it_cannot_read():
+    """An unreadable widget must never produce a false negative (that would push good
+    applies into assisted for no reason)."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion
+    from auto_applier.resume.answer_resolver import Resolution, ResolutionSource
+    q = CustomQuestion("opaque", "Opaque widget", False, "input")
+    r = Resolution(question=q, value="whatever", source=ResolutionSource.FACT_BANK)
+    out = _rb_case({"opaque": {"known": False, "value": ""}}, [q], [r], {"opaque": True})
+    assert out["opaque"] is True
+
+
+def test_verify_fills_never_promotes_a_false_claim():
+    """Read-back is asymmetric — it may only ever demote."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion
+    from auto_applier.resume.answer_resolver import Resolution, ResolutionSource
+    q = CustomQuestion("x", "X", False, "input")
+    r = Resolution(question=q, value="v", source=ResolutionSource.FACT_BANK)
+    out = _rb_case({"x": {"known": True, "value": "v"}}, [q], [r], {"x": False})
+    assert out["x"] is False
+
+
+def test_verify_fills_survives_a_page_that_cannot_answer():
+    """A page/stub whose evaluate raises leaves every claim intact — verification must never
+    break an apply."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion, verify_fills
+    from auto_applier.resume.answer_resolver import Resolution, ResolutionSource
+
+    class _Boom:
+        async def evaluate(self, js, arg=None):
+            raise RuntimeError("page detached")
+
+    q = CustomQuestion("x", "X", True, "input")
+    r = Resolution(question=q, value="v", source=ResolutionSource.FACT_BANK)
+    assert asyncio.run(verify_fills(_Boom(), [q], [r], {"x": True})) == {"x": True}
+
+
+def test_values_agree_tolerates_reformatting_but_not_a_wrong_option():
+    from auto_applier.sources.browser.apply_base import values_agree
+    # widgets legitimately reformat / expand what we typed
+    assert values_agree("Dallas, Texas, United States", "Dallas") is True
+    assert values_agree("6 to 9 years", "6") is True
+    assert values_agree("+1 682 718 8130", "+16827188130") is True
+    # but a different option is a genuine mismatch (substring matching would miss this —
+    # it's the same wrong-option bug read-back exists to catch)
+    assert values_agree("Nope, never used it", "No") is False
+    assert values_agree("", "Yes") is False
+
+
+def test_any_required_unfilled_gates_the_auto_submit():
+    """A REQUIRED question with a confident answer that never landed must downgrade to
+    assisted — auto-submitting would fail validation or submit an incomplete application."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion, any_required_unfilled
+    from auto_applier.resume.answer_resolver import Resolution, ResolutionSource
+    req = CustomQuestion("a", "Required", True, "input")
+    opt = CustomQuestion("b", "Optional", False, "input")
+    res = [
+        Resolution(question=req, value="x", source=ResolutionSource.FACT_BANK),
+        Resolution(question=opt, value="y", source=ResolutionSource.FACT_BANK),
+    ]
+    assert any_required_unfilled([req, opt], res, {"a": False, "b": True}) is True
+    assert any_required_unfilled([req, opt], res, {"a": True, "b": False}) is False   # optional
+    assert any_required_unfilled([req, opt], res, {"a": True, "b": True}) is False
+
+
+def test_any_required_unfilled_ignores_questions_with_no_answer():
+    """A required question the resolver BAILED on is already covered by
+    any_required_unresolved; it must not be double-counted here."""
+    from auto_applier.sources.browser.apply_base import CustomQuestion, any_required_unfilled
+    from auto_applier.resume.answer_resolver import Resolution, ResolutionSource
+    q = CustomQuestion("a", "Essay", True, "textarea")
+    r = Resolution(question=q, value=None, source=ResolutionSource.REVIEW, needs_review=True)
+    assert any_required_unfilled([q], [r], {"a": False}) is False
+
+
+def test_q_filled_unprefixes_the_outcome_map():
+    from auto_applier.sources.browser.apply_base import ApplyOutcome, q_filled
+    from auto_applier.sources.browser.detect import classify_captcha
+    out = ApplyOutcome(job_url="u", captcha=classify_captcha("", []))
+    out.filled = {"resume": True, "q:question_1": True, "q:question_2": False}
+    assert q_filled(out) == {"question_1": True, "question_2": False}
+
+
 def test_fill_option_group_evaluate_error_is_false():
     """A Playwright error during the click JS is an observable False, never fatal."""
     from auto_applier.sources.browser.apply_base import CustomQuestion, fill_option_group

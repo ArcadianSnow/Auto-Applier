@@ -39,13 +39,18 @@ __all__ = [
     "ApplyOutcome",
     "CustomQuestion",
     "any_drafted",
+    "any_required_unfilled",
     "any_required_unresolved",
     "attach_cover_letter",
     "check_auth_wall",
     "fill_option_group",
     "fill_resolutions",
     "human_type",
+    "q_filled",
+    "read_back_fills",
     "snap_to_option",
+    "values_agree",
+    "verify_fills",
 ]
 
 
@@ -473,52 +478,68 @@ async def fill_combobox(page, selector: str, value: str) -> bool:
 # human; a wrong answer submits). So the container is now resolved by name/id → Ashby synthetic
 # index → question-label text → a BOUNDED ancestor walk from the anchor, and a container we
 # cannot identify returns false instead of widening the search.
-_OPTION_GROUP_CLICK_JS = r"""
-([fid, want, label]) => {
+#
+# The container-resolution ladder is shared verbatim with the READ-BACK pass
+# (``_READ_BACK_JS``) via ``_CONTAINER_JS`` — one path, so a scoping fix can't drift between
+# "where we clicked" and "where we check what landed".
+_CONTAINER_JS = r"""
   const norm = s => (s || '').replace(/\s+/g,' ').trim().toLowerCase();
   // Question labels carry required markers ("Location*", "Gender ✱") that the discovered
   // label may or may not include — strip them from both sides before comparing.
   const normLabel = s => norm(s).replace(/[\s*✱]+$/,'');
-  const w = norm(want);
-  if (!w) return false;
   const CONTAINER_SEL = '.application-question, .ashby-application-form-field-entry, fieldset, [role=radiogroup], [role=group]';
   const titleOf = (el) => {
     const t = el.querySelector('.application-label, .ashby-application-form-question-title, legend, h4, label');
     return t ? normLabel(t.innerText || t.textContent) : '';
   };
-  const wantLabel = normLabel(label);
-  let anchor = null;
-  try { anchor = document.querySelector(`[name='${(fid||'').replace(/'/g, "\\'")}']`); } catch(e) {}
-  if (!anchor) { try { anchor = document.getElementById(fid); } catch(e) {} }
-  let container = anchor ? anchor.closest(CONTAINER_SEL) : null;
-  // Ashby synthetic id -> the nth field-entry, CONFIRMED against the question title (the
-  // entry list can grow when answering a question reveals a conditional one, which would
-  // otherwise shift every later index onto the wrong widget).
-  if (!container) {
-    const m = /^ashby_q(\d+)$/.exec(fid || '');
-    if (m) {
-      const entries = [...document.querySelectorAll('.ashby-application-form-field-entry')];
-      const cand = entries[parseInt(m[1], 10) - 1] || null;
-      if (cand && (!wantLabel || titleOf(cand) === wantLabel)) container = cand;
-      else if (wantLabel) container = entries.filter(e => titleOf(e) === wantLabel)[0] || null;
+  const anchorFor = (fid) => {
+    let a = null;
+    try { a = document.querySelector(`[name='${(fid||'').replace(/'/g, "\\'")}']`); } catch(e) {}
+    if (!a) { try { a = document.getElementById(fid); } catch(e) {} }
+    return a;
+  };
+  const containerFor = (fid, label) => {
+    const wantLabel = normLabel(label);
+    const anchor = anchorFor(fid);
+    let container = anchor ? anchor.closest(CONTAINER_SEL) : null;
+    // Ashby synthetic id -> the nth field-entry, CONFIRMED against the question title (the
+    // entry list can grow when answering a question reveals a conditional one, which would
+    // otherwise shift every later index onto the wrong widget).
+    if (!container) {
+      const m = /^ashby_q(\d+)$/.exec(fid || '');
+      if (m) {
+        const entries = [...document.querySelectorAll('.ashby-application-form-field-entry')];
+        const cand = entries[parseInt(m[1], 10) - 1] || null;
+        if (cand && (!wantLabel || titleOf(cand) === wantLabel)) container = cand;
+        else if (wantLabel) container = entries.filter(e => titleOf(e) === wantLabel)[0] || null;
+      }
     }
-  }
-  // Any ATS: a single container whose visible question text matches this question's label.
-  if (!container && wantLabel) {
-    const hits = [...document.querySelectorAll(CONTAINER_SEL)].filter(e => titleOf(e) === wantLabel);
-    if (hits.length === 1) container = hits[0];
-  }
-  // Anchor found but no recognised container class (selector drift): walk up a BOUNDED number
-  // of ancestors to the first that holds more than one option candidate. Still local — never
-  // the whole document.
-  if (!container && anchor) {
-    let el = anchor.parentElement;
-    for (let depth = 0; el && depth < 4; depth++, el = el.parentElement) {
-      const n = el.querySelectorAll('button, label, [role=radio], input[type=radio], input[type=checkbox]').length;
-      if (n > 1) { container = el; break; }
+    // Any ATS: a single container whose visible question text matches this question's label.
+    if (!container && wantLabel) {
+      const hits = [...document.querySelectorAll(CONTAINER_SEL)].filter(e => titleOf(e) === wantLabel);
+      if (hits.length === 1) container = hits[0];
     }
-    if (!container) container = anchor.parentElement;
-  }
+    // Anchor found but no recognised container class (selector drift): walk up a BOUNDED
+    // number of ancestors to the first that holds more than one option candidate. Still
+    // local — never the whole document.
+    if (!container && anchor) {
+      let el = anchor.parentElement;
+      for (let depth = 0; el && depth < 4; depth++, el = el.parentElement) {
+        const n = el.querySelectorAll('button, label, [role=radio], input[type=radio], input[type=checkbox]').length;
+        if (n > 1) { container = el; break; }
+      }
+      if (!container) container = anchor.parentElement;
+    }
+    return container;   // null => cannot prove scope; callers must bail, never widen
+  };
+"""
+
+_OPTION_GROUP_CLICK_JS = r"""
+([fid, want, label]) => {
+""" + _CONTAINER_JS + r"""
+  const w = norm(want);
+  if (!w) return false;
+  const container = containerFor(fid, label);
   if (!container) return false;   // cannot prove scope -> bail to assisted, never guess
   const scope = container;
   const cands = [];
@@ -774,6 +795,223 @@ async def fill_resolutions(
             committed = await settle_open_dropdown(page, value)
             filled[q.field_id] = ok or committed
     return filled
+
+
+# --- post-fill read-back verification (Round 3 follow-up) -----------------------
+#
+# Until now ``filled[q:<id>]`` was SELF-REPORTED by the filler: "I typed / I clicked". It was
+# never checked against the page, which is exactly why the Round-3 scoping bugs were invisible —
+# a fill that landed on the WRONG question still reported True. This pass re-reads each control
+# after filling and compares.
+#
+# Read-back is deliberately ASYMMETRIC: it may only ever DEMOTE a claimed fill, and only on
+# positive evidence (we located the control and it is empty, or holds something that disagrees).
+# A control we cannot read keeps its claim (``known: false``) — a false negative would push
+# perfectly good applies into assisted for no reason.
+#
+# Selected-state contracts, from live DOM probes:
+#   * native input/textarea  -> ``.value``
+#   * native <select>        -> the selected option's TEXT
+#   * radio/checkbox         -> the ``checked`` one's label
+#   * react-select           -> ``.select__single-value`` text
+#   * Ashby geocoder combobox-> ``input[role=combobox].value``
+#   * Ashby Yes/No buttons   -> NO aria-pressed (live Vanta 2026-07-31: both buttons carry an
+#     identical hashed class list at rest, e.g. ``_container_pjyt6_1 _option_1svni_32``). The
+#     selected one gains an extra class, so "the single button whose class list differs from its
+#     siblings" identifies it WITHOUT depending on the hashed names. If no button diverges we
+#     report ``known: false`` rather than guessing "unanswered".
+_READ_BACK_JS = r"""
+(fields) => {
+""" + _CONTAINER_JS + r"""
+  const text = el => (el.innerText || el.textContent || '').replace(/\s+/g,' ').trim();
+  const labelOfInput = (inp) => {
+    let t = (inp.getAttribute('aria-label') || '').trim();
+    if (!t) { const wl = inp.closest('label'); if (wl) t = text(wl); }
+    if (!t && inp.id) { try { const f = document.querySelector(`label[for='${CSS.escape(inp.id)}']`); if (f) t = text(f); } catch(e) {} }
+    return t;
+  };
+  return fields.map(f => {
+    const fid = f.fid;
+    // 1. A directly addressable value-bearing control. `direct` is null when there is no such
+    //    element, '' when we located one and it is EMPTY. An empty one is NOT conclusive: a
+    //    react-select clears its text <input> once an option is committed and shows the value
+    //    in a sibling .select__single-value, so an empty input here would wrongly demote every
+    //    successfully filled Greenhouse combobox. Empty falls through to the container probes;
+    //    "located but empty" is still remembered so the answer stays `known`.
+    let direct = null;
+    const el = anchorFor(fid);
+    if (el) {
+      const tag = (el.tagName || '').toLowerCase();
+      const type = (el.getAttribute('type') || '').toLowerCase();
+      if (tag === 'select') {
+        const o = el.selectedOptions && el.selectedOptions[0];
+        direct = o ? text(o) : '';
+      } else if ((tag === 'input' || tag === 'textarea') && type !== 'checkbox' && type !== 'radio') {
+        direct = (el.value || '').trim();
+      }
+    }
+    if (direct) return {fid, known: true, value: direct};
+    // 2. Container-scoped widgets (option groups, react-select, geocoder comboboxes).
+    const c = containerFor(fid, f.label);
+    if (!c) return {fid, known: direct !== null, value: ''};
+    let checked = '';
+    c.querySelectorAll('input[type=radio], input[type=checkbox]').forEach(i => {
+      if (i.checked && !checked) checked = labelOfInput(i);
+    });
+    if (checked) return {fid, known: true, value: checked};
+    let pressed = '';
+    c.querySelectorAll('[aria-pressed=true], [aria-checked=true], [aria-selected=true]')
+      .forEach(b => { if (!pressed) pressed = text(b); });
+    if (pressed) return {fid, known: true, value: pressed};
+    const single = c.querySelector('.select__single-value, .select__multi-value__label');
+    if (single) return {fid, known: true, value: text(single)};
+    const combo = c.querySelector('input[role=combobox]');
+    if (combo) return {fid, known: true, value: (combo.value || '').trim()};
+    // Button group with no ARIA state: selection is marked by an EXTRA class on the chosen
+    // button. Take the intersection of every button's class list as the "at rest" baseline;
+    // the selected button is the single one carrying classes beyond it. Hash-agnostic (the
+    // live class names are build-hashed) and works for a 2-button Yes/No, where every
+    // signature is unique so an odd-one-out count cannot discriminate.
+    const btns = [...c.querySelectorAll('button')].filter(b => {
+      const t = text(b);
+      return t && t.length < 60 && !/^(upload|add|\+|delete|remove|browse|choose file)/i.test(t);
+    });
+    if (btns.length >= 2) {
+      const sets = btns.map(b => new Set((b.className || '').toString().split(/\s+/).filter(Boolean)));
+      const common = [...sets[0]].filter(cl => sets.every(s => s.has(cl)));
+      const extras = sets.map(s => [...s].filter(cl => !common.includes(cl)).length);
+      const withExtra = extras.reduce((acc, n, i) => (n > 0 ? acc.concat(i) : acc), []);
+      if (withExtra.length === 1) return {fid, known: true, value: text(btns[withExtra[0]])};
+      // Nothing diverged: unanswered, or a layout we can't read. Only call it EMPTY when we
+      // positively located the control (direct !== null); otherwise don't guess.
+      return {fid, known: direct !== null, value: ''};
+    }
+    // A textual control inside the container that we could not address directly.
+    const any = c.querySelector('input:not([type=hidden]):not([type=file]), textarea');
+    if (any) return {fid, known: true, value: (any.value || '').trim()};
+    return {fid, known: direct !== null, value: ''};
+  });
+}
+"""
+
+
+def _loose_key(text: str) -> str:
+    """Normalize for AGREEMENT checks: lowercase, non-alphanumerics collapsed to single spaces."""
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def values_agree(actual: str, want: str) -> bool:
+    """True iff the read-back value is consistent with what we meant to fill.
+
+    Widgets legitimately reformat what we typed, so agreement can't be equality:
+      * WHOLE-WORD containment either direction — a geocoder expands ``Dallas`` to
+        ``Dallas, Texas, United States``; a select renders ``6`` as ``6 to 9 years``.
+        Whole-word (not substring) matters: substring would let ``No`` "agree" with
+        ``Nope, never used it``, which is precisely the wrong-option bug read-back exists
+        to catch.
+      * DIGITS-ONLY containment when both sides carry ≥4 digits — intl-tel-input renders
+        ``+16827188130`` as ``+1 682 718 8130``, and only the digits survive that.
+    """
+    a, w = _loose_key(actual), _loose_key(want)
+    if not a or not w:
+        return False
+    if a == w or _word_in(w, a) or _word_in(a, w):
+        return True
+    a_digits, w_digits = re.sub(r"\D", "", a), re.sub(r"\D", "", w)
+    if len(a_digits) >= 4 and len(w_digits) >= 4:
+        return a_digits == w_digits or a_digits in w_digits or w_digits in a_digits
+    return False
+
+
+async def read_back_fills(page, questions: list[CustomQuestion]) -> dict[str, dict]:
+    """Re-read the on-page state of each question. ``{field_id: {'known': bool, 'value': str}}``.
+
+    One batched ``page.evaluate`` (not one round-trip per field). Fully defensive: any failure —
+    including a page stub whose ``evaluate`` doesn't understand this call — yields ``{}``, which
+    the caller treats as "nothing verified", leaving every claim intact.
+    """
+    payload = [
+        {"fid": q.field_id, "label": getattr(q, "label", "") or ""}
+        for q in questions
+        if getattr(q, "field_id", "")
+    ]
+    if not payload:
+        return {}
+    try:
+        rows = await page.evaluate(_READ_BACK_JS, payload)
+    except Exception:  # noqa: BLE001 — verification must never break an apply
+        return {}
+    if not isinstance(rows, list):
+        return {}
+    out: dict[str, dict] = {}
+    for row in rows:
+        if isinstance(row, dict) and row.get("fid"):
+            out[row["fid"]] = {
+                "known": bool(row.get("known")),
+                "value": str(row.get("value") or ""),
+            }
+    return out
+
+
+async def verify_fills(
+    page,
+    questions: list[CustomQuestion],
+    resolutions: list,
+    filled: dict[str, bool],
+) -> dict[str, bool]:
+    """Return ``filled`` with claims DEMOTED where the page proves the value didn't land.
+
+    Only ever turns True → False, and only on positive evidence (the control was located and is
+    empty or holds something that disagrees). Unreadable controls, absent read-back rows, and
+    already-False entries are untouched. Never raises.
+    """
+    if not filled:
+        return filled
+    readback = await read_back_fills(page, questions)
+    if not readback:
+        return filled
+    verified = dict(filled)
+    for q, r in zip(questions, resolutions):
+        fid = getattr(q, "field_id", "")
+        if not fid or not verified.get(fid):
+            continue
+        row = readback.get(fid)
+        if not row or not row["known"]:
+            continue                      # can't read it — keep the filler's claim
+        if not values_agree(row["value"], str(getattr(r, "value", "") or "")):
+            verified[fid] = False
+    return verified
+
+
+def q_filled(outcome: "ApplyOutcome") -> dict[str, bool]:
+    """The per-question fill map from an outcome, unprefixed.
+
+    Drivers record custom-question results as ``filled["q:<field_id>"]`` alongside the standard
+    fields (``"resume"``, ``"email"``, …); this strips the namespace so the map lines up with
+    ``questions``/``resolutions`` for :func:`any_required_unfilled`."""
+    return {
+        key[2:]: bool(val)
+        for key, val in (getattr(outcome, "filled", None) or {}).items()
+        if key.startswith("q:")
+    }
+
+
+def any_required_unfilled(
+    questions: list[CustomQuestion], resolutions: list, filled: dict[str, bool]
+) -> bool:
+    """True iff a REQUIRED question had a confident answer that did NOT land on the page.
+
+    The §8b downgrade already covers "no confident answer" (:func:`any_required_unresolved`), but
+    a resolved answer that never reached the control is just as fatal on an auto-submit: the form
+    fails validation (→ FAILED) or, worse, submits without a required answer. With read-back
+    verification this is now knowable, so it becomes a downgrade condition too.
+    """
+    for q, r in zip(questions, resolutions):
+        if not q.required or not getattr(r, "fills", False):
+            continue
+        if not filled.get(getattr(q, "field_id", ""), False):
+            return True
+    return False
 
 
 def any_required_unresolved(questions: list[CustomQuestion], resolutions: list) -> bool:

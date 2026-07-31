@@ -227,8 +227,76 @@ QUEUED_APPLY/REVIEW — consistent with the owner's discovery+scoring+manual-app
   knowledge of the allowed choices, so an option-constrained question often produces a value
   that `snap_to_option` can't map. Passing `question.options` into the copilot prompt would
   convert a chunk of the remaining bails into fills.
-* **No read-back verification.** `filled[q:<id>]` is still self-reported by the filler. A
-  post-fill pass that re-reads each control's value/checked state and compares would make
-  coverage measurable rather than asserted — and would let the driver downgrade to assisted
-  when a required field silently didn't take. This is the single highest-value follow-up.
 * **Lever / Ashby live `smoke` tests** — outstanding since Round 1.
+
+---
+
+## Round 3b (2026-07-31) — post-fill READ-BACK verification — SHIPPED
+
+The follow-up flagged above, done. `filled[q:<id>]` is no longer the filler's own word.
+
+### Design
+
+`verify_fills(page, questions, resolutions, filled)` runs after `fill_resolutions` in all three
+drivers and re-reads the page. It is deliberately **asymmetric**:
+
+> Read-back may only ever **demote** a claim, and only on **positive evidence** (we located the
+> control and it is empty, or holds something that disagrees). A control we cannot read keeps
+> its claim.
+
+The asymmetry is the whole safety argument: a false negative would push perfectly good applies
+into assisted for no reason, so "unknown" must never mean "failed".
+
+`read_back_fills` does it in ONE batched `page.evaluate`, and shares the container-resolution
+ladder with the option-group clicker via `_CONTAINER_JS` — one path, so a scoping fix cannot
+drift between *where we clicked* and *where we check what landed*.
+
+### Selected-state contracts (from live DOM probes, read-only)
+
+| Widget | Where the committed value lives |
+|---|---|
+| native `input` / `textarea` | `.value` |
+| native `<select>` | the selected option's TEXT |
+| radio / checkbox | the `checked` one's label |
+| react-select (Greenhouse) | `.select__single-value` — **the text `<input>` is CLEARED on commit** |
+| Ashby geocoder combobox | `input[role=combobox].value` |
+| Ashby Yes/No buttons | no ARIA state at all (live Vanta: both buttons carry identical hashed classes at rest) |
+
+Two traps found while building it, both caught by the harness:
+
+1. **The react-select input is empty after a successful commit.** Reading only the addressable
+   element would have demoted *every* filled Greenhouse combobox — and, with the new required-fill
+   gate, pushed every GH auto-apply to assisted. Fix: an empty direct read is NOT conclusive; it
+   falls through to the container probes, while still remembering "located, so `known`".
+2. **Ashby's Yes/No selection is a class, not an attribute.** The selected button gains an extra
+   (build-hashed) class. Rule: take the INTERSECTION of every button's class list as the at-rest
+   baseline; the selected button is the single one carrying classes beyond it. Hash-agnostic, and
+   it works for a 2-button group where an "odd-one-out by count" rule cannot discriminate (both
+   signatures are unique). Nothing diverging ⇒ `known: false`, never a guess.
+
+Agreement is tolerant of legitimate reformatting — **whole-word** containment either direction
+("Dallas" ↔ "Dallas, Texas, United States"; "6" ↔ "6 to 9 years") plus digits-only containment
+when both sides carry ≥4 digits (intl-tel-input renders `+16827188130` as `+1 682 718 8130`).
+Whole-word, not substring: substring would let "No" agree with "Nope, never used it", which is
+exactly the wrong-option bug read-back exists to catch.
+
+### New auto-submit gate
+
+`any_required_unfilled(questions, resolutions, filled)` joins the §8b downgrade in all three
+drivers. `any_required_unresolved` covers "no confident answer"; this covers **"had an answer,
+didn't land"** — previously unknowable, and just as fatal on an auto-submit (validation failure,
+or an incomplete application submitted). `q_filled(outcome)` unprefixes the `q:<field_id>` map.
+
+### What this fixes beyond the drivers
+
+* **`events.db` `resolution` rows now carry a VERIFIED `filled_on_page`** (`apply_worker` L1031).
+  The Round-1/2 audits used that column as ground truth while it was self-reported; from here it
+  is real, so future coverage audits can trust it.
+* **The E2 "Fill what it can" button's "filled N / M left"** (`routes.py` L850) is now truthful.
+
+### Verification
+
+`verify_readback.py` (scratchpad) — 8 checks, all PASS in headless Chromium against fixtures
+built from the live contracts: empty demotes, filled kept, Ashby button-group read via class
+divergence, unreadable kept, react-select value read, reformatted phone agrees, and the required
+gate both fires and clears. 1546 tests green (was 1538).

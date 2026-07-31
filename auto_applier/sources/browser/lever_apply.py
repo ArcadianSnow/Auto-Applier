@@ -37,11 +37,14 @@ from auto_applier.sources.browser.apply_base import (
     ApplyOutcome,
     CustomQuestion,
     any_drafted,
+    any_required_unfilled,
     any_required_unresolved,
     check_auth_wall,
     fill_phone,
     fill_resolutions,
     human_type,
+    q_filled,
+    verify_fills,
 )
 from auto_applier.sources.browser.detect import (
     ConfirmationOutcome,
@@ -284,6 +287,10 @@ async def prepare_application(
         custom_filled = await fill_resolutions(
             page, outcome.custom_questions, outcome.resolutions,
             selector_for=_lever_selector_for)
+        # Read the page back — `filled` is otherwise the filler's own claim (Round 3).
+        custom_filled = await verify_fills(
+            page, outcome.custom_questions, outcome.resolutions, custom_filled
+        )
         for fid, ok in custom_filled.items():
             outcome.filled[f"q:{fid}"] = ok
 
@@ -297,11 +304,14 @@ async def prepare_application(
     if mode is ApplyMode.BROWSER_AUTO and (
         any_required_unresolved(outcome.custom_questions, outcome.resolutions)
         or any_drafted(outcome.resolutions)
+        or any_required_unfilled(
+            outcome.custom_questions, outcome.resolutions, q_filled(outcome)
+        )
     ):
         outcome.status = ApplicationStatus.ASSISTED_PENDING
         outcome.note = (
-            "required custom question unresolved or freeform draft pre-filled — "
-            "downgraded to assisted (spec §8b)"
+            "required custom question unresolved, unfilled on page, or freeform draft "
+            "pre-filled — downgraded to assisted (spec §8b)"
         )
         return outcome
 
