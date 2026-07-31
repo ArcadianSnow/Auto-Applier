@@ -3,7 +3,7 @@
 > "Scheduled live smoke tests against real sites catch selector drift early
 >  (the #1 v2 bug source)."
 
-Two layers:
+Three layers:
   1. **Discovery smoke**: hits the real public APIs (Greenhouse / Lever /
      Ashby) against a small list of known-stable tokens. Catches "the API
      shape changed" — rare but breaks discovery instantly when it happens.
@@ -11,6 +11,16 @@ Two layers:
      ``BrowserSession`` and asserts the standard selectors resolve in the
      LIVE HTML. Catches "the ATS changed the apply form selectors" — the
      #1 v2 bug class.
+  3. **Custom-question smoke** (added 2026-07-31): runs each driver's REAL
+     ``discover_custom_questions`` against a live form and diffs it against a
+     ground-truth DOM probe. Layer 2 only covers the handful of STANDARD
+     fields; everything Rounds 1–3 rebuilt — the Lever ``urls[*]`` family, the
+     container-anchored labels, widget typing, and the selectors the Round-3
+     read-back pass depends on — had no live guard at all. These are the
+     assertions that actually notice when an ATS reshuffles its form markup.
+     Structural and conditional ("if the page HAS one, discovery must find
+     it"), so a posting that simply has no custom questions skips rather than
+     fails.
 
 **This file NEVER submits.** Every test ends at form load or earlier. Per
 Rule 2.6 (gather vs. act), live smoke tests are gather work — being wrong
@@ -311,3 +321,199 @@ def test_smoke_ashby_form_loads_with_expected_selectors():
     assert _selector_present(html, "_systemfield_resume"), (
         f"Ashby form {url}: #_systemfield_resume missing"
     )
+
+
+# ------------------------------------------------- custom-question + fill-contract smoke
+#
+# Layer 3. Layer 2 above proves the ~4 STANDARD fields still resolve; it says nothing about
+# custom questions, which is where every field-coverage round did its work and where the
+# markup actually churns. Each test below runs the driver's real discovery against a live
+# form and diffs it against a ground-truth DOM probe, then asserts the structural invariants
+# Rounds 1-3 established. Read-only: discovery is a page.evaluate that only READS, and
+# nothing here fills or submits.
+
+#: Ground truth for the diff: every control the page actually renders, plus the
+#: container/label hooks each driver's discovery and the Round-3 read-back depend on.
+_GROUND_TRUTH_JS = r"""
+() => {
+  const txt = el => (el.innerText || el.textContent || '').replace(/\s+/g,' ').trim();
+  const names = [...document.querySelectorAll('input,textarea,select')]
+    .map(el => el.getAttribute('name') || '').filter(Boolean);
+  return {
+    url_fields: names.filter(n => n.startsWith('urls[')),
+    lever_questions: document.querySelectorAll('.application-question').length,
+    lever_labels: [...document.querySelectorAll('.application-question .application-label')]
+      .map(txt).filter(Boolean).length,
+    ashby_entries: document.querySelectorAll('.ashby-application-form-field-entry').length,
+    ashby_titles: [...document.querySelectorAll('.ashby-application-form-question-title')]
+      .map(txt).filter(Boolean).length,
+    ashby_yesno: document.querySelectorAll('[class*="_yesno"]').length,
+    gh_comboboxes: document.querySelectorAll('input[role=combobox], input.select__input').length,
+  };
+}
+"""
+
+
+async def _probe_form(apply_url: str, discover):
+    """Open a live apply form and return ``(ground_truth, discovered_questions)``.
+
+    Uses the production ``BrowserSession`` (the same stack the apply path drives) so drift shows
+    up exactly as the driver would see it. **Never fills, never submits.**
+    """
+    from auto_applier.config import load_settings
+    from auto_applier.sources.browser.session import BrowserSession
+
+    session = BrowserSession(load_settings().browser_profile_dir)
+    await session.start()
+    try:
+        page = await session.new_page()
+        await page.goto(apply_url, wait_until="domcontentloaded")
+        await asyncio.sleep(3.0)          # SPA render + late-hydrating widgets
+        truth = await page.evaluate(_GROUND_TRUTH_JS)
+        questions = await discover(page)
+        return truth, questions
+    finally:
+        await session.stop()
+
+
+def _assert_labels_are_real(questions, ats: str, url: str) -> None:
+    """Every discovered question must carry its QUESTION text.
+
+    The Round-1 audit found Lever and Ashby handing the resolver empty labels — or an OPTION
+    label ("Yes"/"No") instead of the question — which silently sank work-auth, sponsorship and
+    every essay card: the resolver can't classify what it can't read, so it bailed. This is the
+    single highest-value drift assertion, and it has no false-alarm mode.
+    """
+    unlabelled = [q.field_id for q in questions if not (q.label or "").strip()]
+    assert not unlabelled, (
+        f"{ats} form {url}: {len(unlabelled)} discovered question(s) have NO label "
+        f"({unlabelled[:5]}) -> the container/label selector drifted; the resolver will bail "
+        f"on every one of them"
+    )
+    stray = [q.label for q in questions if (q.label or "").strip().lower() in {"yes", "no"}]
+    assert not stray, (
+        f"{ats} form {url}: question(s) labelled with an OPTION instead of the question text "
+        f"({stray[:5]}) -> the label is being read from the wrong element (Round-1 regression)"
+    )
+
+
+@pytest.mark.smoke
+def test_smoke_lever_custom_question_discovery():
+    """Lever: labels come from the question container, and the ``urls[*]`` family is found.
+
+    ``urls[LinkedIn]`` is frequently REQUIRED and the fact bank has it; before Round 1 the
+    driver never looked at that family, so a blank required field forced every Lever apply to
+    assisted."""
+    from auto_applier.sources.browser.lever_apply import discover_custom_questions
+
+    target = _first_live_listing("lever")
+    if target is None:
+        pytest.skip("no Lever discovery succeeded; can't form-load")
+    site, url = target
+
+    truth, questions = asyncio.run(_probe_form(url, discover_custom_questions))
+    if not truth["lever_questions"] and not truth["url_fields"]:
+        pytest.skip(f"Lever posting {url} has no custom questions or URL fields to check")
+
+    _assert_labels_are_real(questions, "Lever", url)
+
+    found = {q.field_id for q in questions}
+    missed_urls = [n for n in truth["url_fields"] if n not in found]
+    assert not missed_urls, (
+        f"Lever form {url}: url field(s) on the page but NOT discovered ({missed_urls}) "
+        f"-> the urls[*] discovery selector regressed (Round-1 fix #1)"
+    )
+    if truth["lever_questions"]:
+        assert truth["lever_labels"] > 0, (
+            f"Lever form {url}: {truth['lever_questions']} .application-question containers but "
+            f"ZERO .application-label inside them -> Lever renamed its label element, which "
+            f"lever_apply.discover_custom_questions reads"
+        )
+        # Non-vacuity: a page that HAS questions must yield questions. Without this the
+        # label assertions above pass trivially on an empty discovery — the exact failure
+        # mode (silently finding nothing) they exist to catch.
+        assert questions, (
+            f"Lever form {url}: page has {truth['lever_questions']} question container(s) but "
+            f"discovery returned NOTHING -> the discovery selector regressed"
+        )
+
+
+@pytest.mark.smoke
+def test_smoke_ashby_custom_question_discovery():
+    """Ashby: the field-entry container + question-title selectors are the load-bearing pair.
+
+    Container-anchored discovery (Round 1) AND the Round-3 read-back both hang off them — if
+    Ashby renames either, custom questions silently vanish and fill verification goes blind."""
+    from auto_applier.sources.browser.ashby_apply import discover_custom_questions
+
+    target = _first_live_listing("ashby")
+    if target is None:
+        pytest.skip("no Ashby discovery succeeded; can't form-load")
+    slug, url = target
+
+    truth, questions = asyncio.run(_probe_form(url, discover_custom_questions))
+    assert truth["ashby_entries"] > 0, (
+        f"Ashby form {url}: no .ashby-application-form-field-entry on the page -> the container "
+        f"class was renamed; discovery AND read-back verification both key off it"
+    )
+    assert truth["ashby_titles"] > 0, (
+        f"Ashby form {url}: {truth['ashby_entries']} field-entries but no non-empty "
+        f".ashby-application-form-question-title -> the label selector was renamed"
+    )
+
+    # Non-vacuity: past the 3 system entries (Name/Email/Resume, which the driver fills
+    # directly and discovery correctly excludes) a form with more entries must produce
+    # questions. Without this the label assertions pass trivially on an empty discovery.
+    _ASHBY_SYSTEM_ENTRIES = 3
+    if truth["ashby_titles"] > _ASHBY_SYSTEM_ENTRIES:
+        assert questions, (
+            f"Ashby form {url}: {truth['ashby_titles']} titled field-entries (>{_ASHBY_SYSTEM_ENTRIES} "
+            f"system fields) but discovery returned NOTHING -> container-anchored discovery regressed"
+        )
+
+    _assert_labels_are_real(questions, "Ashby", url)
+
+    leaked = [q.field_id for q in questions if q.field_id.startswith("_systemfield_")]
+    assert not leaked, (
+        f"Ashby form {url}: system field(s) leaked into custom questions ({leaked}) -> the "
+        f"driver fills those directly; the resolver must never see them"
+    )
+    if truth["ashby_yesno"]:
+        radios = [q for q in questions if q.kind == "radio"]
+        assert radios, (
+            f"Ashby form {url}: page has {truth['ashby_yesno']} Yes/No widget(s) but discovery "
+            f"typed none as kind='radio' -> they'd route to the text path and never land"
+        )
+        assert all(len(q.options) >= 2 for q in radios), (
+            f"Ashby form {url}: a Yes/No question was discovered without its options "
+            f"({[(q.label, q.options) for q in radios if len(q.options) < 2][:3]}) -> the option "
+            f"clicker has nothing to match against"
+        )
+
+
+@pytest.mark.smoke
+def test_smoke_greenhouse_custom_question_discovery():
+    """Greenhouse: react-select comboboxes must be TYPED as comboboxes.
+
+    The current layout renders dropdowns as react-select, not <select> (12 of them on a live
+    Monzo form, 2026-07-31). A combobox mistyped as a plain input gets typed into instead of
+    opened, and nothing commits."""
+    from auto_applier.sources.browser.greenhouse_apply import discover_custom_questions
+
+    target = _first_live_listing("greenhouse")
+    if target is None:
+        pytest.skip("no GH discovery succeeded; can't form-load")
+    token, url = target
+
+    truth, questions = asyncio.run(_probe_form(url, discover_custom_questions))
+    if not questions:
+        pytest.skip(f"GH posting {url} has no custom questions to check")
+
+    _assert_labels_are_real(questions, "Greenhouse", url)
+
+    if truth["gh_comboboxes"]:
+        assert any(q.kind == "combobox" for q in questions), (
+            f"GH form {url}: page has {truth['gh_comboboxes']} react-select combobox(es) but "
+            f"discovery typed none as kind='combobox' -> they'd be typed into instead of "
+            f"opened, and nothing would commit"
+        )

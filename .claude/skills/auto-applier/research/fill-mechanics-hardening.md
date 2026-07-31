@@ -364,3 +364,54 @@ in the same bucket as real failures. Recurring known noise is exactly what hides
 Two pre-existing tests encoded the old behaviour and were updated to the new contract
 (`test_greenhouse.py::test_discover_bad_token_raises`,
 `test_lever_ashby.py::test_lever_discover_bad_site_empty` → `..._raises_board_not_found`).
+
+---
+
+## Lever / Ashby live smoke — the layer-3 gap (2026-07-31) — SHIPPED
+
+Outstanding since Round 1. The smoke suite already had two layers: **discovery smoke** (public
+APIs still return jobs) and **form-load smoke** (the ~4 STANDARD selectors still resolve in live
+HTML). Neither touched **custom questions** — which is where every field-coverage round did its
+work, and where ATS markup actually churns. So the Lever `urls[*]` family, the container-anchored
+labels, widget typing, and the selectors the Round-3 read-back depends on had **no live guard**.
+
+**Layer 3** (`tests/test_live_smoke.py`, marker `smoke`): each test runs the driver's REAL
+`discover_custom_questions` against a live posting and diffs it against a ground-truth DOM probe
+(`_GROUND_TRUTH_JS`) — the apples-to-apples shape the Round-1 audit recommended keeping. Targets
+are resolved from the public API at run time (`_first_live_listing`), so nothing is pinned to a
+posting that will close. Read-only; discovery is a `page.evaluate` that only reads.
+
+| Test | Guards |
+|---|---|
+| Lever | labels come from `.application-question > .application-label` (never an option label); every `urls[*]` on the page is discovered; a page with questions yields questions |
+| Ashby | `.ashby-application-form-field-entry` + `.ashby-application-form-question-title` both still exist (**discovery AND read-back key off this pair**); no `_systemfield_*` leaks into custom questions; Yes/No widgets type as `radio` WITH options |
+| Greenhouse | react-select comboboxes type as `kind='combobox'` (mistyped ⇒ typed into instead of opened, nothing commits) |
+
+Shared `_assert_labels_are_real` is the highest-value assertion and has no false-alarm mode: an
+empty label, or an OPTION label ("Yes"/"No") standing in for the question, is the exact Round-1
+regression that sank work-auth, sponsorship and every essay card.
+
+**Non-vacuity is explicit.** Label assertions pass trivially on an empty discovery — the very
+failure mode (silently finding nothing) they exist to catch — so both Lever and Ashby also assert
+that a page with question containers yields questions.
+
+**Verified live, and mutation-tested.** All 10 smoke tests pass against real postings (44s).
+Renaming the Ashby title selector and the Lever label selector made the new tests fail with
+precise, actionable messages naming the live form:
+
+```
+Lever  …/matchgroup/…/apply: 2 discovered question(s) have NO label
+       (['cards[…][field1]', 'cards[…][field0]']) -> the container/label selector drifted
+Ashby  …/Linear/…/application: page has 1 Yes/No widget(s) but discovery typed none as
+       kind='radio' -> they'd route to the text path and never land
+```
+
+Both drivers were then restored from git. Default suite unaffected: 1568 green, 24 deselected.
+
+### Test tiers, end to end
+
+| Tier | Runs | Catches | Cost |
+|---|---|---|---|
+| unit (fake pages) | always | Python-side logic, wiring, contracts | ms |
+| **`-m browser`** | opt-in | the fill/read-back **JS** against fixed DOM contracts | ~8s, needs Chromium |
+| **`-m smoke`** | cron | **live selector drift** — the #1 v2 bug source | ~44s, needs network |
