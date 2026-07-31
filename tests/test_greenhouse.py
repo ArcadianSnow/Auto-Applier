@@ -86,7 +86,12 @@ def test_describe_fetches_full_text(src):
 
 
 def test_discover_bad_token_raises(src):
-    with pytest.raises(GreenhouseError, match="not found"):
+    """A 404 raises the cross-ATS BoardNotFound, not a generic GreenhouseError: the discover
+    worker branches on it to record a marked `failure - 404` skip instead of an error row
+    (see tests/test_board_404.py). GreenhouseError remains for network/payload faults."""
+    from auto_applier.sources import BoardNotFound
+
+    with pytest.raises(BoardNotFound, match="not found"):
         src.discover("missing")
 
 

@@ -208,8 +208,7 @@ system is healthy, but two are recurring and self-inflicted:
   a short backoff around the per-job embed would recover most of them** — the errors cluster in
   time, which reads as transient Ollama 500s, not a config fault.
 * **13 × `GreenhouseError: board token 'dbtlabsinc' not found (404)`** — the *same dead token*,
-  once per daily discovery run, for weeks. Seed lists should auto-disable a token after N
-  consecutive 404s (a 404 is permanent, unlike a timeout) instead of re-erroring forever.
+  once per daily discovery run, for weeks. **RESOLVED — see "Dead boards" below.**
 
 Pipeline state at the time: `DECIDED 892 / APPLIED 29 / SKIPPED 20`, nothing in
 QUEUED_APPLY/REVIEW — consistent with the owner's discovery+scoring+manual-apply mode
@@ -325,3 +324,43 @@ dropdown commit, F4 select snapping, plus read-back across all five widget contr
 demote-only asymmetry, and the required-fill gate firing *and* clearing.
 
 Suite after Round 3a+3b+3c: **1554 passed / 21 deselected** (was 1521 / 13 at session start).
+
+---
+
+## Dead boards — "keep trying, mark it `failure - 404`" (2026-07-31) — SHIPPED
+
+**Owner decision.** Presented as a fork (auto-disable after N consecutive 404s vs. surface it
+and leave it alone); the owner chose: *"I would not remove it from targeting, we should try and
+if it fails just mark it as a 'failure - 404'."* So a dead board is **never dropped** — it is
+swept every run and self-heals the day the company's board comes back. What changes is the
+BOOKKEEPING.
+
+**Why the bookkeeping mattered.** The owner's spine carried 13 identical
+`GreenhouseError: board token 'dbtlabsinc' not found (404)` rows — one per daily run for weeks —
+in the same bucket as real failures. Recurring known noise is exactly what hides a new problem.
+
+**What shipped**
+
+* `sources/errors.py` → **`BoardNotFound(ats, token)`**, a cross-ATS signal distinct from a
+  generic source error (404 = permanent and specific; a timeout or 5xx = transient).
+* All three sources raise it on 404. This also closed a real hole: **Lever and Ashby returned
+  `[]` on ANY non-200**, so a dead token there was indistinguishable from "this company has no
+  open roles" — completely invisible. Greenhouse was the only ATS that reported one at all.
+  Other non-200s stay tolerant (unchanged).
+* `discover_worker` catches it → `StageSkip("failure - 404: board token '<token>' not found")`,
+  so the event spine records a **skip with the reason** rather than an error. New
+  `summary.boards_missing`, counted separately from `board_errors`. `BOARD_404_REASON` is the
+  one marker constant.
+* `doctor.check_boards` is the other half of the bargain — keeping 404s out of `av3 errors`
+  only works if something still surfaces them. WARN (never FAIL) naming each board, with a fix
+  hint that says they're *still swept* so the behaviour isn't mistaken for a silent drop. It
+  reads **both** the new skip rows and **legacy error rows**, so it works against an existing
+  `events.db` immediately.
+
+**Verified against the owner's real data** (read-only): `check_boards` reports
+`WARN: 1 board token(s) returning 404: greenhouse:dbtlabsinc` at both 14d and 60d.
+14 tests in `tests/test_board_404.py`; 1568 green.
+
+Two pre-existing tests encoded the old behaviour and were updated to the new contract
+(`test_greenhouse.py::test_discover_bad_token_raises`,
+`test_lever_ashby.py::test_lever_discover_bad_site_empty` → `..._raises_board_not_found`).

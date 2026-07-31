@@ -46,10 +46,16 @@ def test_lever_discover():
     assert lst.location == "Remote - US"
 
 
-def test_lever_discover_bad_site_empty():
+def test_lever_discover_bad_site_raises_board_not_found():
+    """Was: a 404 returned []. That made a dead Lever board indistinguishable from "this
+    company has no open roles" — completely invisible. It now raises BoardNotFound so the
+    discover worker can mark it `failure - 404` (see tests/test_board_404.py)."""
+    from auto_applier.sources import BoardNotFound
+
     src = _lever(lambda req: httpx.Response(404))
     try:
-        assert src.discover("missing") == []
+        with pytest.raises(BoardNotFound):
+            src.discover("missing")
     finally:
         src.close()
 

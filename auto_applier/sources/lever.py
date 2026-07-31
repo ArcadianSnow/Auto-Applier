@@ -14,6 +14,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from auto_applier.sources.errors import BoardNotFound
+
 _API = "https://api.lever.co/v0/postings"
 _UA = "auto-applier-v3/3.0 (personal job-search tool; contact via repo)"
 #: Lever apply form: standard fields are name-keyed; this is the form-present tell.
@@ -53,6 +55,13 @@ class LeverSource:
 
     def discover(self, site: str) -> list[LeverListing]:
         resp = self._get(f"{_API}/{site}?mode=json")
+        # A 404 means the site slug itself is gone — surface it as the marked `failure - 404`
+        # signal instead of an empty list, which is indistinguishable from "no open roles" and
+        # made a dead Lever board completely invisible (Greenhouse was the only ATS that
+        # reported one at all). Other non-200s stay tolerant: transient, and a noisy retry
+        # story isn't worth it here.
+        if resp.status_code == 404:
+            raise BoardNotFound("lever", site)
         if resp.status_code != 200:
             return []
         try:

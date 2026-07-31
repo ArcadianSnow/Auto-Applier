@@ -29,8 +29,15 @@ Pipeline ordering of the work (the throughput win):
 
 Observability: each board is one ``@stage("discover")`` unit (platform = the ATS), so
 ``av3 errors --stage discover`` and ``av3 stats`` see per-board start/ok/error rows for
-free — same spine as every other stage. A bad token logs an error and the sweep
-continues to the next board (isolation is the point).
+free — same spine as every other stage. A failing board never stops the sweep (isolation
+is the point), and its outcome is recorded in one of two buckets:
+
+  * **error** — network trouble, malformed payload, unexpected status. Something to chase.
+  * **``failure - 404``** (a marked *skip*) — the board token itself is gone. The board is
+    NOT dropped from targeting: we sweep it again every run so it self-heals the day the
+    company's board comes back. Keeping it out of the error bucket is the point — the same
+    dead token otherwise emits one identical error per daily run forever, and recurring
+    known noise is what hides a genuinely new failure. ``av3 doctor`` names these boards.
 """
 
 from __future__ import annotations
@@ -44,14 +51,26 @@ from auto_applier.db.repositories import JobRepo
 from auto_applier.domain.dedup import canonical_hash
 from auto_applier.domain.models import Job
 from auto_applier.domain.state import JobState
-from auto_applier.pipeline.stage import new_run_id, stage
+from auto_applier.pipeline.stage import StageSkip, new_run_id, stage
 from auto_applier.sources import (
     AshbySource,
+    BoardNotFound,
     GreenhouseSource,
     LeverSource,
 )
 
-__all__ = ["DiscoverRunSummary", "DiscoverWorker", "BoardSpec", "title_matches"]
+__all__ = [
+    "BOARD_404_REASON",
+    "BoardSpec",
+    "DiscoverRunSummary",
+    "DiscoverWorker",
+    "title_matches",
+]
+
+#: The marker recorded for a board whose token 404s. Written to the event spine as the
+#: skip reason and echoed in the run summary, so a dead board is a NAMED outcome rather
+#: than an error row (owner decision 2026-07-31: keep sweeping, just mark it).
+BOARD_404_REASON = "failure - 404"
 
 
 # Map an ATS name to its source class. New slug-keyed ATSes (SmartRecruiters,
@@ -101,7 +120,10 @@ class DiscoverRunSummary:
     title pre-filter. ``inserted`` = newly added DISCOVERED rows. ``duplicates`` =
     listings whose (source, source_job_id) was already in the DB (idempotent re-run).
     ``described`` = Greenhouse JD fetches performed. ``board_errors`` = boards whose
-    discover() raised (bad/dead token, network) — counted, not fatal.
+    discover() raised (network, malformed payload) — counted, not fatal.
+    ``boards_missing`` = boards whose token 404s (``failure - 404``): tracked SEPARATELY from
+    errors because it's a known, permanent, self-healing-if-it-returns condition, not a fault
+    to chase. The board stays in targeting and is swept again next run.
     """
 
     run_id: str
@@ -112,6 +134,7 @@ class DiscoverRunSummary:
     duplicates: int = 0
     described: int = 0
     board_errors: int = 0
+    boards_missing: int = 0
     elapsed_s: float = 0.0
     per_source: dict[str, int] = field(default_factory=dict)  # ats -> inserted
     notes: list[str] = field(default_factory=list)
@@ -209,7 +232,20 @@ class DiscoverWorker:
         summary: DiscoverRunSummary,
         platform: str | None = None,  # picked up by @stage for the event row
     ) -> None:
-        listings = source.discover(spec.token)
+        try:
+            listings = source.discover(spec.token)
+        except BoardNotFound as missing:
+            # Owner decision (2026-07-31): a dead board is NEVER dropped from targeting — we
+            # keep sweeping it every run so it self-heals the day the company's board comes
+            # back. What changes is the BOOKKEEPING: a 404 is a marked `failure - 404` skip,
+            # not a generic error. Before this, the same dead token produced one identical
+            # error row per daily run for weeks, sitting in the same bucket as real failures —
+            # recurring known noise is exactly what hides a new problem. StageSkip records the
+            # reason on the event spine (so `av3 doctor` can name the board and nothing is
+            # silently swallowed) while keeping `av3 errors` for things that are actually wrong.
+            summary.boards_missing += 1
+            summary.notes.append(f"{spec.ats}:{spec.token} {BOARD_404_REASON}")
+            raise StageSkip(f"{BOARD_404_REASON}: board token '{spec.token}' not found") from missing
         summary.seen += len(listings)
 
         matched = [lst for lst in listings if title_matches(lst.title, self._title_filter)]

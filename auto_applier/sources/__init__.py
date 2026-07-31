@@ -5,6 +5,7 @@ now these are concrete per-ATS sources — crudest thing that proves the path (s
 """
 
 from auto_applier.sources.ashby import AshbyListing, AshbySource
+from auto_applier.sources.errors import BoardNotFound
 from auto_applier.sources.greenhouse import (
     GreenhouseError,
     GreenhouseSource,
@@ -16,6 +17,7 @@ from auto_applier.sources.lever import LeverListing, LeverSource
 __all__ = [
     "AshbyListing",
     "AshbySource",
+    "BoardNotFound",
     "GreenhouseError",
     "GreenhouseSource",
     "JobListing",

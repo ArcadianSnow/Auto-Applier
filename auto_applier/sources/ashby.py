@@ -14,6 +14,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from auto_applier.sources.errors import BoardNotFound
+
 _API = "https://api.ashbyhq.com/posting-api/job-board"
 _UA = "auto-applier-v3/3.0 (personal job-search tool; contact via repo)"
 #: Ashby standard fields use stable _systemfield_* ids — the form-present tell.
@@ -53,6 +55,10 @@ class AshbySource:
 
     def discover(self, slug: str) -> list[AshbyListing]:
         resp = self._get(f"{_API}/{slug}?includeCompensation=true")
+        # See lever.discover: a 404 is the board slug being gone, and returning [] made that
+        # indistinguishable from "no open roles". Other non-200s stay tolerant.
+        if resp.status_code == 404:
+            raise BoardNotFound("ashby", slug)
         if resp.status_code != 200:
             return []
         try:

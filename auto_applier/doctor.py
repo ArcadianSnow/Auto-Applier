@@ -12,10 +12,12 @@ their subsystems (Phases 1–5).
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sqlite3
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 
@@ -322,6 +324,68 @@ def check_inbox(settings: Settings) -> CheckResult:
     )
 
 
+def check_boards(settings: Settings, *, days: int = 14) -> CheckResult:
+    """Name the board tokens that came back ``failure - 404`` in the last ``days``.
+
+    Dead boards are deliberately KEPT in targeting and swept every run, so they self-heal if
+    the company's board returns (owner decision 2026-07-31). The trade-off is that nothing
+    forces them to your attention — a 404 is a marked skip, not an error, precisely so it
+    stays out of ``av3 errors``. This check is the other half of that bargain: the skips are
+    already on the event spine with their reason, so we just read them back and say which
+    boards are gone. WARN, never FAIL — a dead board is not a broken install.
+
+    Read-only, and tolerant: no events.db (or an unreadable one) is simply "nothing to report".
+    """
+    from auto_applier.pipeline.discover_worker import BOARD_404_REASON
+
+    path = settings.events_db_path
+    if not Path(path).exists():
+        return CheckResult("boards", Status.PASS, "no events yet")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            # Both shapes: the marked skip (current), and the legacy error row a 404 used to
+            # produce. Reading the old rows too means the check is useful against an existing
+            # events.db immediately, instead of only after the next discovery run.
+            rows = conn.execute(
+                "SELECT platform, status, context_json, error_msg FROM events "
+                "WHERE stage = 'discover' AND status IN ('skip', 'error') AND ts >= ?",
+                (cutoff,),
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return CheckResult("boards", Status.PASS, f"events unreadable ({exc})")
+
+    missing: set[str] = set()
+    for platform, status, context_json, error_msg in rows:
+        if status == "skip":
+            try:
+                text = (json.loads(context_json or "{}") or {}).get("reason", "")
+            except (ValueError, TypeError):
+                continue
+            if BOARD_404_REASON not in text:
+                continue
+        else:
+            text = error_msg or ""
+            if "not found (404)" not in text:
+                continue
+        # Both shapes quote the token: "…board token 'acme' not found (404)".
+        token = text.rsplit("'", 2)[-2] if "'" in text else text
+        missing.add(f"{platform or '?'}:{token}")
+
+    if not missing:
+        return CheckResult("boards", Status.PASS, f"no 404 boards in the last {days}d")
+    listed = ", ".join(sorted(missing))
+    return CheckResult(
+        "boards", Status.WARN,
+        f"{len(missing)} board token(s) returning 404: {listed}",
+        fix="These are still swept every run in case they come back. Remove them from "
+            "targeting (dashboard → Goals, or user_config.json) to stop retrying.",
+    )
+
+
 def run_doctor() -> list[CheckResult]:
     """Run all checks; return results in display order."""
     results: list[CheckResult] = []
@@ -334,6 +398,7 @@ def run_doctor() -> list[CheckResult]:
     results.append(check_llm(settings))
     results.append(check_browser(settings))
     results.append(check_inbox(settings))
+    results.append(check_boards(settings))
     results.append(check_backups(settings))
     results.append(check_relay_reachable(settings))
     return results

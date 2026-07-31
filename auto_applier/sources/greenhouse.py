@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from auto_applier.sources.errors import BoardNotFound
+
 _API_BASE = "https://boards-api.greenhouse.io/v1/boards"
 _USER_AGENT = "auto-applier-v3/3.0 (personal job-search tool; contact via repo)"
 _MIN_INTERVAL_S = 1.0  # ~1 req/s per host (politeness)
@@ -105,14 +107,18 @@ class GreenhouseSource:
 
     # -- discovery ----------------------------------------------------------
     def discover(self, token: str) -> list[JobListing]:
-        """List open postings for ``token`` (lightweight — no content). Raises
-        :class:`GreenhouseError` on a bad token / malformed payload."""
+        """List open postings for ``token`` (lightweight — no content).
+
+        Raises :class:`~auto_applier.sources.errors.BoardNotFound` when the board token itself
+        is gone (404 — permanent, and marked as such by the discover worker rather than logged
+        as a generic error), and :class:`GreenhouseError` for everything else (network, malformed
+        payload, unexpected status)."""
         try:
             resp = self._get(f"{_API_BASE}/{token}/jobs")
         except httpx.HTTPError as exc:
             raise GreenhouseError(f"network error listing {token}: {exc}") from exc
         if resp.status_code == 404:
-            raise GreenhouseError(f"board token '{token}' not found (404)")
+            raise BoardNotFound("greenhouse", token)
         if resp.status_code != 200:
             raise GreenhouseError(f"unexpected {resp.status_code} listing {token}")
         try:
