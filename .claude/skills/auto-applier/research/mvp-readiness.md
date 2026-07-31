@@ -153,3 +153,55 @@ Related: [[project_future_directions]] (Direction 1 onboarding + Direction 4 ema
 at the CLI/wizard-wiring level — this doc is the FIRST-RUN-FRICTION layer on top), [[user_profile]]
 (RTX 3080/16GB → the 8B-class local-LLM target), [[feedback_no_cost]] (local-first, the setup
 helpers must stay zero-egress).
+
+---
+
+## Tester-feedback readiness (2026-07-31) — SHIPPED
+
+Prompted by the owner's goal shift: *"ready to ship soon which will involve quite a bit of
+testing from us."* That reframes the bar — a non-technical tester must be able to (a) run it and
+(b) **tell you what broke**. Two gaps blocked (b), both invisible from the test suite.
+
+### 1. The support bundle was unreachable (`504a507`)
+
+`av3 export-diagnostics` was CLI-only. The people this product is FOR — the friends who will
+actually hit the bugs — had no way to produce one. **A support bundle nobody can produce is not
+a support bundle.**
+
+* `POST /api/diagnostics/export` + `GET /api/diagnostics/download/{name}`.
+* A **"Report a problem"** button in the **shared footer** (`base.html`), so it's reachable from
+  wherever a tester got stuck, not just the dashboard. One click builds, downloads, and says
+  what to send.
+* **Scrubbed only from the web, deliberately.** `--raw` bundles a verbatim `events.db`
+  (PII-bearing) and stays CLI-only: a browser button is the wrong place to make that easy to do
+  by accident. Asserted by a test.
+* The download route serves only diagnostics bundles from the data dir; the name comes off the
+  URL, so traversal is refused (`../`, encoded `..%2F`, subpaths, and real-but-not-a-bundle
+  names like `app.db` all covered).
+
+**Pre-existing bug found by that guard:** the bundle stamp is meant to end in `Z`, but colons
+were stripped *before* the `+00:00`→`Z` replacement, so it never matched and every bundle was
+named `…T203320+0000.tar.gz` — a `+` that then had to survive URLs, shells and mail clients.
+Fixed; the route still accepts `+` so pre-fix bundles remain downloadable.
+
+### 2. The whole UI depended on a CDN (`c010f2e`)
+
+`base.html` loaded Alpine from `cdn.jsdelivr.net`. Alpine drives **every** interactive element on
+**every** page, so a blocked or unreachable CDN didn't degrade the dashboard — it **killed it
+outright**, with no error a non-technical user could act on. Failure modes that matter for this
+audience: a locked-down work laptop, an ad-blocker, or simply being offline. It also contradicted
+the local-first promise the footer prints on every page.
+
+Vendored to `web/static/vendor/alpine-3.14.1.min.js` (MIT, same version the CDN tag requested —
+like-for-like). `build.py` already bundles `web/static`, so the packaged app now carries its own
+UI runtime. `tests/test_web_assets.py` fails if any template loads a script/stylesheet from an
+external origin again; `<a href>` links out are untouched.
+
+### Verified in a real browser (not just TestClient)
+
+Against a running server on a throwaway data dir: Alpine 3.14.1 boots from the vendored file,
+65 `x-text` bindings render, and clicking **Report a problem** produced
+`diagnostics-2026-07-31T204324Z.tar.gz` — Playwright logged the actual download. The bundle
+contains the 7 scrubbed members and **no `events.db`**.
+
+1636 green.
