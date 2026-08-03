@@ -133,3 +133,60 @@ def test_doctor_shares_one_definition_with_the_runtime():
     from auto_applier import doctor
 
     assert doctor._browser_registry_dirs is browser_paths.browser_registry_dirs
+
+
+# --------------------------------------------------------------- installer version wiring
+
+def _iss_directives() -> str:
+    """The .iss with ``;`` comment lines stripped.
+
+    These guards must judge what the script DOES, not what its comments say about the bug they
+    exist to prevent — otherwise documenting the old behaviour trips the very check that
+    forbids it.
+    """
+    lines = ISS.read_text(encoding="utf-8").splitlines()
+    return "\n".join(ln for ln in lines if not ln.lstrip().startswith(";"))
+
+
+def test_installer_has_no_hardcoded_version_fallback():
+    """PyInstaller doesn't stamp version info, so ``GetFileVersion(dist/AutoApplier.exe)``
+    always returned "" and the .iss silently fell through to a hardcoded "2.0.0" — shipping a
+    v3 product labelled v2 in the setup filename, the Add/Remove Programs entry, and every bug
+    report a tester would file. Caught on the first real installer build (2026-08-03)."""
+    directives = _iss_directives()
+    assert '"2.0.0"' not in directives, (
+        "the .iss still carries a hardcoded version fallback; it must read app_version.txt"
+    )
+    assert "GetFileVersion" not in directives, (
+        "GetFileVersion is always empty for a PyInstaller exe — read app_version.txt instead"
+    )
+
+
+def test_installer_reads_the_generated_version_file():
+    directives = _iss_directives()
+    assert "app_version.txt" in directives
+    # A missing/empty version file must FAIL the compile, not fall back to something plausible.
+    assert directives.count("#error") >= 2
+
+
+def test_build_installer_writes_the_package_version():
+    """The installer label and the running app must agree by construction."""
+    from importlib.util import module_from_spec, spec_from_file_location
+
+    import auto_applier
+
+    spec = spec_from_file_location(
+        "build_installer", REPO_ROOT / "installer" / "build_installer.py"
+    )
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    written = module._write_app_version()
+    assert written == auto_applier.__version__.strip()
+    assert module.VERSION_FILE.read_text(encoding="utf-8").strip() == written
+
+
+def test_generated_version_file_is_not_committed():
+    """It's a build artifact derived from __version__, not a source of truth."""
+    ignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "installer/app_version.txt" in ignore

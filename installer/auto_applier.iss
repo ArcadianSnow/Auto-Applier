@@ -30,9 +30,26 @@
 ;     in run logs.
 
 #define MyAppName "Auto Applier"
-#define MyAppVersion GetFileVersion("..\dist\AutoApplier.exe")
+
+; Version comes from app_version.txt, which build_installer.py writes from the PACKAGE's own
+; __version__. PyInstaller doesn't stamp version info into the exe, so GetFileVersion() here
+; always returned "" and the build silently fell through to a hardcoded "2.0.0" — shipping a
+; v3 product labelled with a v2 version number, in the setup filename, the Add/Remove Programs
+; entry, and every bug report a tester would file. Caught on the first real installer build
+; (2026-08-03).
+;
+; No silent fallback now: if the file is missing, FAIL the compile. A mislabelled installer is
+; worse than one that didn't build — run `python installer/build_installer.py`, which generates
+; it, rather than invoking iscc directly.
+#define VersionFile "app_version.txt"
+#if !FileExists(VersionFile)
+  #error app_version.txt not found. Build via: python installer/build_installer.py
+#endif
+#define FileHandle FileOpen(VersionFile)
+#define MyAppVersion Trim(FileRead(FileHandle))
+#expr FileClose(FileHandle)
 #if MyAppVersion == ""
-  #define MyAppVersion "2.0.0"
+  #error app_version.txt is empty. Build via: python installer/build_installer.py
 #endif
 #define MyAppPublisher "ArcadianSnow"
 #define MyAppExeName "AutoApplier.exe"

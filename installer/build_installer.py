@@ -15,12 +15,17 @@ bootstrap (``installer/post_install.ps1``) which:
   - Detects whether Ollama is installed; offers download if not
 
 Friends double-click ``AutoApplier-Setup-<version>.exe``, click
-through the wizard, and have a working install. Install bytes are
-~50 MB (PyInstaller exe + a few support files); Chromium download
-happens during install (~150 MB). The ~9.6 GB Gemma 4 model is
-deferred to first-run-of-the-app on purpose — the wizard surfaces
-download progress, vs. the installer hanging on a 9-minute pull
-with no UI.
+through the wizard, and have a working install.
+
+Sizes, measured on the first real build (2026-08-03) rather than
+estimated: the setup is **~144 MB** and the installed exe ~145 MB.
+The old "~50 MB" estimate predated bundling patchright's node
+driver, which is what makes the app able to open a browser at all
+(see installer/pyinstaller_hooks/). Chromium is still fetched
+separately (~150 MB) since it lives in a per-user cache, not the
+bundle. The ~9.6 GB Gemma 4 model is deferred to
+first-run-of-the-app on purpose — the wizard surfaces download
+progress, vs. the installer hanging on a 9-minute pull with no UI.
 
 Prerequisites on the build machine:
 
@@ -50,6 +55,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -85,14 +91,41 @@ def _find_iscc() -> str | None:
     found = shutil.which("iscc")
     if found:
         return found
-    # Inno Setup 6 default install locations
+    # Inno Setup 6 default install locations. The %LOCALAPPDATA% entry matters: the docstring
+    # above already noted per-user installs don't get PATH, but the guesses only covered the
+    # machine-wide dirs — and `winget install JRSoftware.InnoSetup` (the exact command our own
+    # docs give) installs PER-USER to %LOCALAPPDATA%\Programs\Inno Setup 6. So following our
+    # own instructions produced "iscc.exe not found". Verified 2026-08-03 on this build host.
+    local_programs = Path(
+        os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")
+    ) / "Programs" / "Inno Setup 6" / "ISCC.exe"
     for guess in (
+        local_programs,
         Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
         Path(r"C:\Program Files\Inno Setup 6\ISCC.exe"),
     ):
         if guess.exists():
             return str(guess)
     return None
+
+
+VERSION_FILE = INSTALLER_DIR / "app_version.txt"
+
+
+def _write_app_version() -> str:
+    """Write the PACKAGE version where the .iss can read it, and return it.
+
+    The .iss used ``GetFileVersion(dist/AutoApplier.exe)``, but PyInstaller doesn't stamp
+    version info, so that was always "" and the build fell through to a hardcoded "2.0.0" —
+    a v3 product shipped as v2 in the setup filename, the Add/Remove Programs entry, and
+    every bug report a tester would file. Reading the package's own ``__version__`` keeps the
+    installer label and the running app in agreement by construction.
+    """
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from auto_applier import __version__
+
+    VERSION_FILE.write_text(__version__.strip() + "\n", encoding="utf-8")
+    return __version__.strip()
 
 
 def main() -> int:
@@ -139,6 +172,9 @@ def main() -> int:
         return 0
 
     # 3. Inno Setup compile
+    app_version = _write_app_version()
+    print(f"\n→ installer version: {app_version}  ({VERSION_FILE.name})")
+
     iscc = _find_iscc()
     if not iscc:
         print(
