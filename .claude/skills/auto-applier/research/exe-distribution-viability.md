@@ -300,3 +300,60 @@ use the same directory.
   host**. That's a one-time download, not engineering.
 * `tests/test_packaging.py` (12 tests) guards all of the above structurally, since none of it is
   visible from the default suite — these bugs only appear in a real build.
+
+---
+
+## The installer, actually built (2026-08-03) — SHIPPED
+
+Inno Setup installed and the full chain run. **A double-clickable installer now exists and the
+thing it installs can apply to jobs.** Two more defects surfaced only by doing it.
+
+### 1. The setup shipped as "2.0.0" — a v2 number on a v3 product
+
+`auto_applier.iss` took its version from `GetFileVersion("..\dist\AutoApplier.exe")`. PyInstaller
+doesn't stamp version info, so that expression is **always** `""` and the build fell silently
+through to a hardcoded `"2.0.0"`. That number is not cosmetic: it lands in the setup filename,
+the Add/Remove Programs entry, the uninstall display name, and every bug report a tester files.
+
+Fixed: `build_installer.py` writes `installer/app_version.txt` from the package's own
+`__version__`; the `.iss` reads it. Installer label and running app now agree **by
+construction**. A missing/empty file `#error`s the compile — a mislabelled installer is worse
+than one that didn't build. (`app_version.txt` is gitignored: a build artifact, not a source of
+truth.)
+
+### 2. `_find_iscc()` couldn't find the compiler we told people to install
+
+Its docstring already said per-user installs don't get PATH — but the fallbacks only covered
+`Program Files`. `winget install JRSoftware.InnoSetup` (**the exact command in our own docs**)
+installs per-user to `%LOCALAPPDATA%\Programs\Inno Setup 6`. So following our own instructions
+produced "iscc.exe not found". Added that path.
+
+### End-to-end verification (the whole point)
+
+```
+python installer/build_installer.py   -> AutoApplier-Setup-3.0.0a0.exe (144 MB)
+silent install to an isolated dir     -> exit 0; AutoApplier.exe, uninstaller, VERSION, license
+installed AutoApplier.exe doctor      -> 9 checks, 0 fail, 1 benign warn
+installed AutoApplier.exe survey      -> drove a real browser on a LIVE Lever apply form,
+                                         classified hcaptcha, wrote survey_*.json
+silent uninstall                      -> exit 0, dir gone, no Add/Remove Programs entry
+```
+
+The last two matter most. The shipped artifact is the **onefile** build, which extracts to a
+temp dir at runtime — a different code path from the onedir build used in the earlier
+packaging proof. **Both work**, so the patchright-driver hook + `PLAYWRIGHT_BROWSERS_PATH` fix
+hold in the form testers will actually run.
+
+### Measured sizes (the old estimate was stale)
+
+Setup **~144 MB**, installed exe **~145 MB** — not the "~50 MB" the docstring claimed. That
+estimate predated bundling patchright's node driver, which is precisely what makes the app able
+to open a browser. Chromium (~150 MB) is still fetched separately into the per-user cache, and
+the ~9.6 GB model is still deferred to first run.
+
+### Still not done
+
+* **Install on a CLEAN machine.** Everything above ran on the build host, which cannot reveal
+  "works only because the dev environment is present". A friend's PC or a VM is the real test.
+* **SmartScreen.** The setup is unsigned, so first-run shows "Windows protected your PC" →
+  *More info* → *Run anyway*. Expected; tell testers up front or it reads as malware.
